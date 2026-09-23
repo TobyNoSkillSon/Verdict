@@ -20,4 +20,4 @@ for _ in $(seq 1 360); do
   sleep 5
 done
 [[ "${out:-}" == *"(mlx)"* ]] || { echo "not ready after 30 min; see ~/Library/Application Support/Verdict/worker.log"; exit 1; }
-echo "next: 'verdict skill --install <your agent's skills folder>' (or 'verdict skill' to print it)"
+echo "next: 'verdict skill' prints the agent skill; install it into your harness"

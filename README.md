@@ -45,7 +45,7 @@ These are example workloads, not measured end-to-end results.
 
 ## For your agent
 
-The installer gives your agent its skill (`verdict skill --install`); **Copy Skill for Your Agent** in the menu does the same by hand. The skill teaches the agent when Verdict is worth using, how to call it and how to write questions.
+Your agent installs the skill into its own harness from `verdict skill`; **Copy Skill for Your Agent** in the menu copies the same text by hand. The skill teaches the agent when Verdict is worth using, how to call it and how to write questions.
 
 This is the pattern it uses: ask the same questions of every item, keep the answers in order, and shortlist in code. Here `hits` is a list of search-result strings or dictionaries; the threshold is illustrative, not validated for your task.
 
@@ -155,10 +155,10 @@ A flame marks a hot model. Here English, Multilingual and Gemma are ready; **Unl
 Tell your agent:
 
 ```text
-Install Verdict from https://github.com/TobyNoSkillSon/Verdict — follow its AGENTS.md, then give yourself its skill.
+Install Verdict from https://github.com/TobyNoSkillSon/Verdict — follow its AGENTS.md, then install its skill into your harness.
 ```
 
-It clones the repository, runs the installer, waits until a model is loaded, installs the skill into its own skills folder and reports back. First run downloads about 1 GB (a Python runtime and Laya English). Turn on **Launch at Login** in the menu afterwards if you want Verdict always there.
+It clones the repository, runs the installer, waits until a model is loaded, installs the skill wherever its harness keeps skills, and reports back. First run downloads about 1 GB (a Python runtime and Laya English). Turn on **Launch at Login** in the menu afterwards if you want Verdict always there.
 
 <details>
 <summary>Installing by hand</summary>
@@ -168,7 +168,7 @@ With Apple's Command Line Tools installed (no developer membership needed):
 ```sh
 git clone https://github.com/TobyNoSkillSon/Verdict && cd Verdict
 scripts/install.sh
-verdict skill --install ~/.claude/skills   # or your agent's skills folder; `verdict skill` prints it
+verdict skill                              # prints the skill; hand it to your agent
 ```
 
 `install.sh` builds the app into `/Applications`, installs the `verdict` CLI into `~/.local/bin` and the Python module into `~/.local/share/verdict`, starts Verdict and waits until it is ready. **Copy Skill for Your Agent** in the menu copies the same skill to the clipboard.
