@@ -20,7 +20,9 @@ questions written for Jev work here unchanged. Plain dicts are still accepted.
 
 CLI (JSONL in, JSONL out):
     verdict judge --questions q.json [--field KEY] [--sort NAME] [--min X] [--top N] [--model ID] < items.jsonl
-    verdict status | verdict models | verdict load ID | verdict unload ID | verdict quit
+    verdict status | verdict models [--json] | verdict info MODEL [--json] | verdict load ID | verdict unload ID | verdict quit
+
+Python: models() returns the catalog with state, measured benchmarks and Hugging Face/GitHub links.
 
 Talks to the Verdict worker on loopback; starts the Verdict app if it is not running.
 """
@@ -235,6 +237,36 @@ def status():
     return _call('GET', '/status')
 
 
+def _benchmarks():
+    for p in (APP / 'Contents/Resources/benchmarks.json', Path(__file__).resolve().parents[1] / 'Resources/benchmarks.json'):
+        try:
+            return json.loads(p.read_text())
+        except OSError:
+            continue
+    return {}
+
+
+def models():
+    """Every catalog model with its state, measured benchmark and links, for choosing one.
+
+    [{"id", "name", "family", "inputs", "params", "context", "languages", "license",
+      "state": "hot"|"downloaded"|"available"|"hosted", "loadable": bool,
+      "benchmark": {"accuracy", "ece", "ms", "sets", "source", "n", "note"} | None,
+      "links": {"upstream", "weights", "runtime", ...}, "recommendation"}]
+    Links point at Hugging Face / GitHub model cards so an agent can read the specifics."""
+    s = status(); bench = _benchmarks(); out = []
+    for m in s['catalog']:
+        state = ('hot' if m['id'] in s['models'] else 'downloaded' if m['id'] in s.get('installed', {})
+                 else 'hosted' if not m.get('repository') else 'available')
+        out.append({'id': m['id'], 'name': m['name'], 'family': m.get('links', {}).get('family'),
+                    'inputs': m.get('inputs', ['text']), 'params': m['params'], 'context': m['context'],
+                    'languages': m['languages'], 'license': m['license'], 'state': state,
+                    'loadable': bool(m.get('repository')), 'benchmark': bench.get(m['id']),
+                    'links': {k: v for k, v in m.get('links', {}).items() if k != 'family'},
+                    'recommendation': m['recommendation']})
+    return out
+
+
 # --------------------------------------------------------------------------- judge / gate
 
 def judge(items, questions, model='auto', batch=256, check=True):
@@ -311,23 +343,40 @@ def _main(argv):
     try:
         if cmd == 'status':
             s = status()
-            models = ', '.join(f"{k} ({v['device']})" for k, v in s['models'].items()) or 'none loaded'
+            hot = ', '.join(f"{k} ({v['device']})" for k, v in s['models'].items()) or 'none loaded'
             mem = s.get('memory', {})
-            print(f"port {s['port']}  models: {models}  calls: {s['calls']}  last: {s['last_ms']} ms  memory: {mem.get('rss_mb', 0):.0f} MB rss, {mem.get('mlx_active_mb', 0):.0f} MB weights"
+            print(f"port {s['port']}  models: {hot}  calls: {s['calls']}  last: {s['last_ms']} ms  memory: {mem.get('rss_mb', 0):.0f} MB rss, {mem.get('mlx_active_mb', 0):.0f} MB weights"
                   + (f"  loading: {s['loading']}" if s.get('loading') else '') + (f"  error: {s['error']}" if s.get('error') else ''))
             return 0
         if cmd == 'models':
-            s = status()
-            bench = {}
-            try:
-                bench = json.loads((APP / 'Contents/Resources/benchmarks.json').read_text())
-            except OSError:
-                pass
-            print(f"{'model':22} {'params':>6} {'accuracy':>8} {'ece':>6} {'speed':>7}  state")
-            for m in s['catalog']:
-                b = bench.get(m['id'], {})
-                state = 'hot' if m['id'] in s['models'] else 'downloaded' if m['id'] in s.get('installed', {}) else 'hosted' if not m['repository'] else '—'
-                print(f"{m['id']:22} {m['params']:>6} {b.get('accuracy', 0)*100 if b else 0:>7.1f}% {b.get('ece', 0):>6.3f} {b.get('ms', 0):>4.0f} ms  {state}")
+            ms = models()
+            if '--json' in rest:
+                print(json.dumps(ms, indent=2, ensure_ascii=False)); return 0
+            print(f"{'model':22} {'inputs':24} {'context':>7} {'accuracy':>8} {'ece':>6} {'speed':>7}  {'state':10} weights")
+            for m in sorted(ms, key=lambda m: -(m['benchmark'] or {}).get('accuracy', 0)):
+                b = m['benchmark'] or {}
+                print(f"{m['id']:22} {','.join(m['inputs']):24} {m['context']:>7} {b.get('accuracy', 0)*100:>7.1f}% {b.get('ece', 0):>6.3f} {b.get('ms', 0):>4.0f} ms  {m['state']:10} {m['links'].get('weights') or m['links'].get('upstream', '')}")
+            print("\nverdict info <model> for details and model-card links; verdict models --json for everything.")
+            return 0
+        if cmd == 'info':
+            if not rest:
+                raise VerdictError('verdict info <model>')
+            m = next((x for x in models() if x['id'] == rest[0]), None)
+            if not m:
+                raise VerdictError(f"unknown model {rest[0]!r}; see verdict models")
+            if '--json' in rest:
+                print(json.dumps(m, indent=2, ensure_ascii=False)); return 0
+            b = m['benchmark'] or {}
+            print(f"{m['name']} ({m['id']}) — {m['state']}")
+            print(f"  family      {m['family']}    licence {m['license']}")
+            print(f"  inputs      {', '.join(m['inputs'])}    context {m['context']} tokens    languages {m['languages']}    params {m['params']}")
+            if b:
+                sets = ', '.join(f"{k} {v*100:.1f}%" for k, v in b.get('sets', {}).items())
+                print(f"  benchmark   {b['accuracy']*100:.1f}% ({sets}), calibration error {b['ece']:.3f}, {b['ms']:.0f} ms/item — {b.get('source')}{', n=' + str(b['n']) if b.get('n') else ''}")
+                if b.get('note'): print(f"              {b['note']}")
+            print(f"  use for     {m['recommendation']}")
+            for k, v in m['links'].items():
+                print(f"  {k:11} {v}")
             return 0
         if cmd in ('load', 'unload'):
             ensure_running(); print(_call('POST', '/' + cmd, {'model': rest[0]})['loaded']); return 0

@@ -30,4 +30,13 @@ class ClientTests(unittest.TestCase):
                   'e': Choice('q', {str(i): str(i) for i in range(25)})})
             self.assertEqual(len(w), 6)  # 25 options is two problems: count and no escape option
 
+class CatalogTests(unittest.TestCase):
+    def test_every_model_has_links(self):
+        import json
+        cat = json.loads((Path(__file__).resolve().parents[1] / 'Resources/models.json').read_text())
+        for m in cat:
+            self.assertTrue(m.get('links', {}).get('upstream'), m['id'])
+            if m.get('repository'):
+                self.assertTrue(m['links'].get('weights', '').startswith('https://huggingface.co/'), m['id'])
+
 if __name__ == '__main__': unittest.main()

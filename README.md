@@ -108,6 +108,8 @@ verdict status
 
 Items that exceed a model's context return an error in their original position; they are not silently truncated. An unavailable worker raises `VerdictError`. The client warns about question shapes such as a choice without an “other” option or a request to count.
 
+To choose a model, `verdict models` lists the catalog with measured numbers and weights links, and `verdict info <model>` shows the benchmark breakdown and links to the upstream model card, weights and runtime (`--json` on both, or `models()` in Python), so an agent can read the model cards and decide.
+
 See [the user guide](docs/USAGE.md) for the client, CLI and worker protocol.
 
 </details>

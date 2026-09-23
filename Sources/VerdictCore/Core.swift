@@ -164,6 +164,10 @@ Items are strings or dicts (dicts are shown as JSON — name the fields: `{"cand
 
 Question classes are the TypeSafe/Laya names, so questions written for Jev work unchanged; plain dicts (`{"type": "noul", "instructions": …}`) are accepted too. `judge()` warns at call time when a question breaks the conventions below.
 
+## Choosing a model
+
+`verdict models` lists every model with inputs, context, measured accuracy, calibration error, speed, state and its weights link; `verdict info <model>` adds the benchmark breakdown, what it is good for, and links to the upstream model card, the weights and the runtime (Hugging Face / GitHub) — read those for specifics. `--json` on either, or `models()` in Python, for the same data as objects. Default routing (English → Laya English, non-ASCII → Multilingual, media → Gemma) is right for most work; pass `model=` when the table says another fits better.
+
 ## Three primitives
 
 | | Returns | Use for |

@@ -20,7 +20,8 @@ Quitting Verdict stops the worker; nothing else keeps the models loaded.
 
 ```
 verdict status
-verdict models                      # catalog with benchmark numbers and state
+verdict models [--json]            # catalog: inputs, context, measured numbers, state, weights link
+verdict info MODEL [--json]        # one model: benchmark breakdown, use, upstream/weights/runtime links
 verdict load laya-multilingual | verdict unload ID | verdict quit
 verdict judge --questions q.json [--model ID] [--field KEY] [--sort NAME] [--min X] [--top N] < items.jsonl
 ```

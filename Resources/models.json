@@ -15,7 +15,14 @@
     "runtime": "laya",
     "inputs": [
       "text"
-    ]
+    ],
+    "links": {
+      "upstream": "https://huggingface.co/convaiinnovations/laya",
+      "weights": "https://huggingface.co/aac6fef/laya-mlx",
+      "runtime": "https://github.com/mizorewww/laya-mlx",
+      "paper": "https://github.com/NandhaKishorM/laya",
+      "family": "Laya"
+    }
   },
   {
     "id": "laya-multilingual",
@@ -33,7 +40,14 @@
     "runtime": "laya",
     "inputs": [
       "text"
-    ]
+    ],
+    "links": {
+      "upstream": "https://huggingface.co/convaiinnovations/laya-multilingual",
+      "weights": "https://huggingface.co/aac6fef/laya-multilingual-mlx",
+      "runtime": "https://github.com/mizorewww/laya-mlx",
+      "paper": "https://github.com/NandhaKishorM/laya",
+      "family": "Laya"
+    }
   },
   {
     "id": "laya-typed-decisions",
@@ -51,7 +65,14 @@
     "runtime": "laya",
     "inputs": [
       "text"
-    ]
+    ],
+    "links": {
+      "upstream": "https://huggingface.co/convaiinnovations/laya-typed-decisions",
+      "weights": "https://huggingface.co/aac6fef/laya-typed-decisions-mlx",
+      "runtime": "https://github.com/mizorewww/laya-mlx",
+      "paper": "https://github.com/NandhaKishorM/laya",
+      "family": "Laya"
+    }
   },
   {
     "id": "gemma-e2b-rlcd",
@@ -72,7 +93,13 @@
       "image",
       "audio",
       "video"
-    ]
+    ],
+    "links": {
+      "upstream": "https://huggingface.co/google/gemma-4-E2B-it",
+      "weights": "https://huggingface.co/larkooo/gemma-e2b-rlcd",
+      "runtime": "https://github.com/Larkooo/gemma-e2b-rlcd",
+      "family": "Gemma RLCD"
+    }
   },
   {
     "id": "jev",
@@ -91,6 +118,11 @@
     "runtime": "hosted",
     "inputs": [
       "text"
-    ]
+    ],
+    "links": {
+      "upstream": "https://typesafe.ai/blog/introducing-system-one-models-and-jev",
+      "docs": "https://docs.typesafe.ai",
+      "family": "Jev (hosted)"
+    }
   }
 ]
