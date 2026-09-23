@@ -1,11 +1,11 @@
 ---
 name: verdict
-description: Judge many items with the same typed questions locally in milliseconds using the decision model kept hot by the Verdict menu-bar app (Laya). Use when a script needs to classify, score, filter, rank or gate ≥20 texts on facts stated in them — a very smart if statement.
+description: Judge many items with the same typed questions locally in milliseconds using the System One (decision) models kept hot by the Verdict menu-bar app. Use when a script needs to classify, score, filter, rank or gate ≥20 texts on facts stated in them — a very smart if statement.
 ---
 
 # Verdict
 
-A decision model answers typed questions about one item in a single forward pass (~7 ms), returning probabilities, never text. Verdict keeps it hot; `judge()` is the call. **The model decides, your code executes.**
+A System One model (a decision model: Laya, Gemma-RLCD; Jev is the hosted one) answers typed questions about one item in a single forward pass (~7 ms), returning probabilities, never text. Verdict keeps it hot; `judge()` is the call. **The model decides, your code executes.**
 
 ## When it is the right tool
 

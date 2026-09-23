@@ -4,7 +4,7 @@
 
 <h1 align="center">Verdict</h1>
 
-<p align="center">Local decision models, kept ready for your coding agent.</p>
+<p align="center">A local runtime for System One models, kept ready for your coding agent.</p>
 
 <p align="center">
   <a href="#install"><img src="docs/images/install.svg" alt="Install Verdict" width="152" height="42"></a>
@@ -13,6 +13,7 @@
 </p>
 
 <p align="center">
+  <a href="#system-one-models">System One models</a> ·
   <a href="#the-problem">The problem</a> ·
   <a href="#for-your-agent">For your agent</a> ·
   <a href="#the-app">The app</a> ·
@@ -21,13 +22,23 @@
   <a href="docs/USAGE.md">User guide</a>
 </p>
 
-**Verdict is a macOS menu-bar app for developers who use coding agents.** It keeps small local models in memory so an agent can filter, classify and score a whole collection from a script, then read only the items that matter. You install it once and give your agent the included skill; the app stays out of the way.
+**Verdict is a macOS menu-bar app for developers who use coding agents.** It keeps System One models in memory so an agent can filter, classify and score a whole collection from a script, then read only the items that matter. You install it once and give your agent the included skill; the app stays out of the way.
+
+## System One models
+
+**System One models** — also called *decision models* — are a class of model built to make fast, structured decisions for software rather than to write text. TypeSafe named the class when it released [Jev](https://typesafe.ai/blog/introducing-system-one-models-and-jev) in September 2026, after Kahneman's fast System 1 and slow System 2; [Laya](https://huggingface.co/convaiinnovations/laya) is the first open one, and others are following. They share three traits:
+
+- **Typed questions, defined at request time.** You ask *choice* (pick one of these options), *score* (where on this rubric) or *yes/no* questions about a piece of state. The options are yours, not fixed at training time the way an ordinary classifier's labels are.
+- **Probabilities, not prose.** Every answer comes with a probability, trained to be calibrated. Nothing is generated, so there is nothing to parse and nothing to hallucinate.
+- **One forward pass.** All questions about an item are answered together, in milliseconds.
+
+Verdict is a local runtime for this class: whichever System One models suit your Mac, loaded once, one interface. The models inside are interchangeable; the [Models](#models) table shows what is available today and how each measures up.
 
 ## The problem
 
 Ask a coding agent to work through hundreds of search results or thousands of transcript turns and it either reads everything, filling its context, or samples and guesses.
 
-Decision models are built for this work. Instead of writing prose, they answer typed questions about each item: is this relevant, which category fits, where does it fall on a rubric? Laya English takes about **6 ms per text item** in the recorded benchmark, and about 2 ms per item when a batch shares the same questions. But loading a model takes 5–20 seconds, and a script runs for two — so nobody calls one from a script.
+System One models are built for this work: they answer typed questions about each item — is this relevant, which category fits, where does it fall on a rubric — instead of writing prose. Laya English takes about **6 ms per text item** in the recorded benchmark, and about 2 ms per item when a batch shares the same questions. But loading a model takes 5–20 seconds, and a script runs for two — so nobody calls one from a script.
 
 Verdict keeps the models hot — loaded and ready. The agent sends items and questions over loopback through a Python client or the `verdict` CLI, then sorts or filters the answers in code. Judgements stay on your Mac.
 
@@ -184,7 +195,7 @@ verdict skill                              # prints the skill; hand it to your a
 
 ## Models
 
-Verdict runs the Laya text models on MLX and Gemma E2B RLCD for text, image, audio and video judgements.
+The System One models Verdict runs today: the Laya family for text, on MLX, and Gemma E2B RLCD for text, image, audio and video. Jev is listed for reference only; it is hosted and closed. New open System One models are added to the catalog as they prove out on a Mac.
 
 The recorded text benchmarks compare topic classification on AG News and emotion classification on DAIR Emotion, zero-shot with a `Choice` question. Accuracy is the mean across those sets; calibration is expected calibration error (lower is better); speed is median time per item. The benchmark file records `n = 500` for each Laya model and `n = 200` for Gemma. These results do not establish accuracy on your task. `scripts/benchmark.py` is the reproduction entry point.
 
