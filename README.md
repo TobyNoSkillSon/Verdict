@@ -97,7 +97,7 @@ The CLI reads JSONL and writes JSONL. For example, save a question to `q.json`:
 {"relevant": {"type": "noul", "instructions": "Is this hit about the authentication flow?"}}
 ```
 
-Then sort the results by relevance. Output is one short line per item, so it costs the agent few tokens; `--json` gives every probability:
+Then sort the results by relevance. Output is one short line per item, so it costs the agent few tokens; `--json` gives every probability. Illustrative output:
 
 ```sh
 $ verdict judge --questions q.json --sort relevant --top 3 < hits.jsonl
