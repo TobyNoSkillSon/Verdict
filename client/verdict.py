@@ -19,7 +19,9 @@ Question shapes follow the TypeSafe/Laya convention (same names, same fields), s
 questions written for Jev work here unchanged. Plain dicts are still accepted.
 
 CLI (JSONL in, JSONL out):
-    verdict judge --questions q.json [--field KEY] [--sort NAME] [--min X] [--top N] [--model ID] < items.jsonl
+    verdict judge --questions q.json [--field KEY] [--sort NAME] [--min X] [--top N] [--model ID] [--json] < items.jsonl
+        default output, one line per item:  #index  name=value(conf) …  | first 60 chars of the item
+    verdict skill [--install DIR]      print the agent skill, or write DIR/verdict/SKILL.md
     verdict status | verdict models [--json] | verdict info MODEL [--json] | verdict load ID | verdict unload ID | verdict quit
 
 Python: models() returns the catalog with state, measured benchmarks and Hugging Face/GitHub links.
@@ -336,6 +338,22 @@ def calibrate(cases, question, model='auto'):
 
 # --------------------------------------------------------------------------- CLI
 
+def _fmt(a):
+    if 'choice' in a: return f"{a['choice']}({a.get('confidence', 0):.2f})"
+    if 'noul' in a: return f"{a['noul']:.2f}"
+    return f"{a.get('score', 0):.2f}"
+
+
+def _line(row, field=None):
+    """One short line per item: index, answers, and a snippet so the agent can tell items apart."""
+    if 'error' in row:
+        return f"#{row['index']}  error: {row['error']}"
+    ans = '  '.join(f"{k}={_fmt(v)}" for k, v in row['answers'].items())
+    item = row['item']
+    text = item.get(field) if (field and isinstance(item, dict)) else item
+    snippet = (text if isinstance(text, str) else json.dumps(text, ensure_ascii=False)).replace('\n', ' ')
+    return f"#{row['index']}  {ans}  | {snippet[:60]}" 
+
 def _main(argv):
     if not argv or argv[0] in ('-h', '--help'):
         print(__doc__.strip()); return 0
@@ -384,7 +402,7 @@ def _main(argv):
             if _port(): _call('POST', '/quit')
             return 0
         if cmd == 'judge':
-            qpath = model = sort = None; top = None; minimum = None; field = None
+            qpath = model = sort = None; top = None; minimum = None; field = None; as_json = False
             i = 0
             while i < len(rest):
                 a = rest[i]
@@ -394,6 +412,7 @@ def _main(argv):
                 elif a == '--top': top = int(rest[i + 1]); i += 2
                 elif a == '--min': minimum = float(rest[i + 1]); i += 2
                 elif a == '--field': field = rest[i + 1]; i += 2
+                elif a == '--json': as_json = True; i += 1
                 else: raise VerdictError(f'unknown option {a}')
             if not qpath:
                 raise VerdictError('--questions FILE is required')
@@ -401,7 +420,7 @@ def _main(argv):
             items = [json.loads(l) for l in sys.stdin if l.strip()]
             states = [(it.get(field) if field else it) for it in items]
             results = judge(states, questions, model or 'auto')
-            rows = [{'item': it, **r.raw} for it, r in zip(items, results)]
+            rows = [{'index': n, 'item': it, **r.raw} for n, (it, r) in enumerate(zip(items, results))]
             if sort:
                 key = lambda r: r['answers'][sort].get('score', r['answers'][sort].get('noul', r['answers'][sort].get('confidence', 0))) if 'answers' in r else -1
                 rows.sort(key=key, reverse=True)
@@ -409,8 +428,31 @@ def _main(argv):
                     rows = [r for r in rows if key(r) >= minimum]
             if top:
                 rows = rows[:top]
+            if as_json:
+                for r in rows:
+                    print(json.dumps(r, ensure_ascii=False))
+                return 0
             for r in rows:
-                print(json.dumps(r, ensure_ascii=False))
+                print(_line(r, field))
+            return 0
+        if cmd == 'skill':
+            text = None
+            for p in (APP / 'Contents/Resources/SKILL.md', Path(__file__).resolve().parents[1] / 'Resources/SKILL.md'):
+                try:
+                    text = p.read_text(); break
+                except OSError:
+                    continue
+            if text is None:
+                raise VerdictError('SKILL.md not found; is Verdict installed?')
+            if '--install' in rest:
+                i = rest.index('--install')
+                if i + 1 >= len(rest):
+                    raise VerdictError('verdict skill --install DIR')
+                dest = Path(rest[i + 1]).expanduser() / 'verdict' / 'SKILL.md'
+                dest.parent.mkdir(parents=True, exist_ok=True); dest.write_text(text)
+                print(f'wrote {dest}')
+            else:
+                print(text)
             return 0
         raise VerdictError(f'unknown command {cmd}')
     except VerdictError as e:

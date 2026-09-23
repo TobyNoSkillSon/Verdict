@@ -45,13 +45,13 @@ These are example workloads, not measured end-to-end results.
 
 ## For your agent
 
-After [installing Verdict](#install), open its menu, choose **Copy Skill for Your Agent**, and paste it into your coding agent. The copied `SKILL.md` teaches the agent when to use Verdict, how to call it and how to write questions.
+The installer gives your agent its skill (`verdict skill --install`); **Copy Skill for Your Agent** in the menu does the same by hand. The skill teaches the agent when Verdict is worth using, how to call it and how to write questions.
 
 This is the pattern it uses: ask the same questions of every item, keep the answers in order, and shortlist in code. Here `hits` is a list of search-result strings or dictionaries; the threshold is illustrative, not validated for your task.
 
 ```python
-import sys
-sys.path.insert(0, "/path/to/Verdict/client")  # your cloned repository
+import sys, os
+sys.path.insert(0, os.path.expanduser("~/.local/share/verdict"))  # installed by Verdict
 from verdict import judge, Noul, Choice, Score
 
 questions = {
@@ -97,11 +97,13 @@ The CLI reads JSONL and writes JSONL. For example, save a question to `q.json`:
 {"relevant": {"type": "noul", "instructions": "Is this hit about the authentication flow?"}}
 ```
 
-Then sort the results by relevance:
+Then sort the results by relevance. Output is one short line per item, so it costs the agent few tokens; `--json` gives every probability:
 
 ```sh
-verdict judge --questions q.json --sort relevant < hits.jsonl
-verdict status
+$ verdict judge --questions q.json --sort relevant --top 3 < hits.jsonl
+#412  relevant=0.94  | src/auth/session.ts: refreshToken() retries on 401
+#77   relevant=0.91  | src/auth/login.ts: validates the OAuth state param
+#503  relevant=0.12  | docs/CHANGELOG.md: 1.4.0 auth screen redesign
 ```
 
 `judge()` launches the installed app if necessary. Auto-routing selects the multilingual model for non-ASCII text and Gemma for dictionaries containing local `image`, `audio` or `video` paths. You can also select a model explicitly.
@@ -150,23 +152,33 @@ A flame marks a hot model. Here English, Multilingual and Gemma are ready; **Unl
 
 **Apple Silicon · macOS 14 or newer · Python 3.12–3.14**
 
-With Apple's Command Line Tools installed:
+Tell your agent:
+
+```text
+Install Verdict from https://github.com/TobyNoSkillSon/Verdict — follow its AGENTS.md, then give yourself its skill.
+```
+
+It clones the repository, runs the installer, waits until a model is loaded, installs the skill into its own skills folder and reports back. First run downloads about 1 GB (a Python runtime and Laya English). Turn on **Launch at Login** in the menu afterwards if you want Verdict always there.
+
+<details>
+<summary>Installing by hand</summary>
+
+With Apple's Command Line Tools installed (no developer membership needed):
 
 ```sh
 git clone https://github.com/TobyNoSkillSon/Verdict && cd Verdict
-scripts/build.sh
-cp -R dist/Verdict.app /Applications
-open /Applications/Verdict.app
+scripts/install.sh
+verdict skill --install ~/.claude/skills   # or your agent's skills folder; `verdict skill` prints it
 ```
 
-No Apple developer membership is required. The build also installs the `verdict` CLI into `~/.local/bin`; add that directory to your shell's `PATH` if needed. Python scripts import `client/verdict.py` from the clone, as in the example above.
+`install.sh` builds the app into `/Applications`, installs the `verdict` CLI into `~/.local/bin` and the Python module into `~/.local/share/verdict`, starts Verdict and waits until it is ready. **Copy Skill for Your Agent** in the menu copies the same skill to the clipboard.
 
-On first launch, Verdict installs its own Python runtime and downloads **Laya English (~843 MB)** from Hugging Face. Wait for it to become hot, enable **Launch at Login** if wanted, then choose **Copy Skill for Your Agent**. Models hot when you quit are remembered for the next launch.
+</details>
 
 <details>
 <summary>Updating an existing installation</summary>
 
-Pull the repository, rerun `scripts/build.sh`, and copy the app again. Downloaded models, settings and the runtime are retained. The build refuses to replace the app while a model is loading. Rerun `scripts/setup-backend.sh` only when the pinned runtime changes.
+`git pull && scripts/install.sh` — or tell your agent to. Downloaded models, settings and the runtime are kept; the installer refuses to replace the app while a model is loading.
 
 </details>
 

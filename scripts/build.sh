@@ -19,7 +19,7 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/release/Verdict "$APP/Contents/MacOS/Verdict"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
-cp Resources/worker.py Resources/models.json Resources/benchmarks.json Resources/runtime-requirements.txt "$APP/Contents/Resources/"
+cp Resources/worker.py Resources/models.json Resources/benchmarks.json Resources/runtime-requirements.txt Resources/SKILL.md "$APP/Contents/Resources/"
 cp scripts/setup-backend.sh "$APP/Contents/Resources/"
 ICONSET="$(mktemp -d)/Verdict.iconset"; mkdir -p "$ICONSET"
 xcrun swift scripts/icon.swift "$ICONSET/icon_512x512@2x.png"
@@ -32,4 +32,9 @@ cp "$ICONSET/icon_512x512@2x.png" docs/images/icon-1024.png
 codesign --force --sign "$IDENTITY" "$APP" >/dev/null
 mkdir -p "$HOME/.local/bin"
 install -m 755 client/verdict.py "$HOME/.local/bin/verdict"
-echo "Built $APP; CLI at ~/.local/bin/verdict"
+# Python module at a fixed path any interpreter (including virtualenvs) can add with one line.
+mkdir -p "$HOME/.local/share/verdict" && install -m 644 client/verdict.py "$HOME/.local/share/verdict/verdict.py"
+# Also user site-packages, so plain `import verdict` works where user sites are enabled.
+SITE="$(python3 -c 'import site; print(site.getusersitepackages() if site.ENABLE_USER_SITE else "")' 2>/dev/null || true)"
+if [[ -n "$SITE" ]]; then mkdir -p "$SITE" && install -m 644 client/verdict.py "$SITE/verdict.py"; fi
+echo "Built $APP; CLI ~/.local/bin/verdict; module ~/.local/share/verdict/verdict.py"

@@ -99,7 +99,7 @@ import VerdictCore
     }
     @objc private func copyInstructions() {
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(agentSkill, forType: .string)
+        NSPasteboard.general.setString(skillText(), forType: .string)
     }
     @objc private func files() {
         try? FileManager.default.createDirectory(at: Backend.support, withIntermediateDirectories: true)
@@ -252,4 +252,12 @@ final class MenuMock: NSView {
             if !item.keyEquivalent.isEmpty { NSAttributedString(string: "⌘" + item.keyEquivalent.uppercased(), attributes: attrs(NSColor.white.withAlphaComponent(0.5), 13)).draw(at: NSPoint(x: bounds.width - 44, y: y + 5)) }
         }
     }
+}
+
+
+func skillText() -> String {
+    guard let url = Bundle.main.url(forResource: "SKILL", withExtension: "md"), let text = try? String(contentsOf: url, encoding: .utf8) else {
+        return "Verdict skill file is missing from the app bundle; run `verdict skill` or see the repository's Resources/SKILL.md."
+    }
+    return text
 }
