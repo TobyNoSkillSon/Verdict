@@ -4,7 +4,7 @@
 
 <h1 align="center">Verdict</h1>
 
-<p align="center">A judgement service for your coding agents. Bulk classify, filter, rank and gate — thousands of items in seconds, locally, without spending the LLM's context or your money on it.</p>
+<p align="center">Local decision models, kept ready for your coding agent.</p>
 
 <p align="center">
   <a href="#install"><img src="docs/images/install.svg" alt="Install Verdict" width="152" height="42"></a>
@@ -15,93 +15,164 @@
 <p align="center">
   <a href="#the-problem">The problem</a> ·
   <a href="#for-your-agent">For your agent</a> ·
+  <a href="#the-app">The app</a> ·
   <a href="#models">Models</a> ·
   <a href="#questions">Questions</a> ·
   <a href="docs/USAGE.md">User guide</a>
 </p>
 
-**Verdict is agent-first.** You install it once and forget it; your agents use it. There is nothing to click except the menu that shows what is loaded. Its sibling [Vella](https://github.com/TobyNoSkillSon/Vella) is the opposite kind of tool — something you use.
+**Verdict is a macOS menu-bar app for developers who use coding agents.** It keeps small local models in memory so an agent can filter, classify and score a whole collection from a script, then read only the items that matter. You install it once and give your agent the included skill; the app stays out of the way.
 
 ## The problem
 
-Coding agents are bad at bulk work. Ask one to go through 300 job ads, 2,000 log lines, 800 grep hits or a month of transcripts and it either reads everything — slow, expensive, and the context fills with garbage — or it samples and guesses. Small **decision models** (Laya, and now several like it) answer typed questions about a piece of text in ~6 ms with a calibrated probability: *which bucket, is this true, how urgent.* They never generate text. They are exactly the right tool for "look at all of this and tell me which ones matter", and no agent uses them, because loading one takes 20 seconds and a script runs for two.
+Ask a coding agent to work through hundreds of search results or thousands of transcript turns and it either reads everything, filling its context, or samples and guesses.
 
-Verdict keeps them loaded. It lives in the menu bar, holds the models resident, and answers on loopback. Your agent writes the questions in code, sends thousands of items, and only reads what came back marked worth reading. **The agent stops reading garbage, because deciding what to read is free now.** Nothing leaves your Mac.
+Decision models are built for this work. Instead of writing prose, they answer typed questions about each item: is this relevant, which category fits, where does it fall on a rubric? Laya English takes about **6 ms per text item** in the recorded benchmark, and about 2 ms per item when a batch shares the same questions. But loading a model takes 5–20 seconds, and a script runs for two — so nobody calls one from a script.
 
-<p align="center">
-  <img src="docs/images/menu-current.png" alt="Verdict menu: models hot, memory in use, judgement count" width="322">
-</p>
+Verdict keeps the models hot — loaded and ready. The agent sends items and questions over loopback through a Python client or the `verdict` CLI, then sorts or filters the answers in code. Judgements stay on your Mac.
 
-What it looks like in practice, from the agent's side:
+**The agent stops reading garbage, because deciding what to read is free now.** No hosted inference bill; local compute, memory and mistakes still have a cost.
 
-- *"Here are 812 grep hits; which are about the task?"* — 812 → 14 in 2 s, then it reads 14.
-- *"Is this shell command destructive or outside the project?"* — a 5 ms gate before every tool call.
-- *"Which of these 40,000 transcript turns is the user correcting me, and how?"* — a table in four minutes.
-- *"Sort these 300 screenshots: broken layout, empty state, or fine?"* — via the multimodal model, 0.2 s each.
-- *"Of 5,000 feed items today, which 30 are worth my human's time?"* — a daily automation that mostly stays quiet.
+For example, an agent can:
+
+- Filter 800 grep hits for relevance before opening files.
+- Flag shell commands for review before execution — not replace permissions or a sandbox.
+- Mine 40,000 transcript turns for user corrections.
+- Sort 300 screenshots into broken layouts, empty states and other screens.
+- Triage 5,000 feed items before preparing a shortlist.
+
+These are example workloads, not measured end-to-end results.
 
 ## For your agent
 
-Give the agent the skill — **Copy Skill for Your Agent** in the menu puts a complete `SKILL.md` on the clipboard — and it knows when to reach for Verdict, how to write questions, and how to read the answers. From then on:
+After [installing Verdict](#install), open its menu, choose **Copy Skill for Your Agent**, and paste it into your coding agent. The copied `SKILL.md` teaches the agent when to use Verdict, how to call it and how to write questions.
+
+This is the pattern it uses: ask the same questions of every item, keep the answers in order, and shortlist in code. Here `hits` is a list of search-result strings or dictionaries; the threshold is illustrative, not validated for your task.
 
 ```python
-from verdict import judge, Choice, Score, Noul
+import sys
+sys.path.insert(0, "/path/to/Verdict/client")  # your cloned repository
+from verdict import judge, Noul, Choice, Score
 
 questions = {
     "relevant": Noul("Is this hit about the authentication flow?"),
-    "kind":     Choice("What is this file?", source="application code", test="tests or fixtures", vendored="third-party or generated", other="none of these"),
-    "risk":     Score("How likely is a change here to break something?", ["isolated helper", "shared module", "public interface or migration"]),
+    "kind": Choice(
+        "What kind of file is this?",
+        source="application code",
+        test="tests or fixtures",
+        other="anything else or unclear",
+    ),
+    "risk": Score("What would a change here affect?", [
+        "an isolated helper",
+        "a shared module",
+        "a public interface or migration",
+    ]),
 }
-for hit, r in zip(hits, judge(hits, questions)):         # 812 items, one pass each, ~2 s
-    if r.relevant > 0.6 and r.kind == "source":         # answers compare like values
-        read(hit)                                        # the LLM reads 14 files instead of 812
+
+shortlist = []
+for hit, result in zip(hits, judge(hits, questions)):
+    if result.error:
+        raise RuntimeError(result.error)  # do not silently discard failed items
+    if result.relevant > 0.6 and result.kind == "source":
+        shortlist.append((hit, float(result.risk)))
+
+shortlist.sort(key=lambda item: item[1], reverse=True)
+# The agent reads the shortlisted hits, rather than every search result.
 ```
 
-Or from the shell, JSONL in and JSONL out:
+| Question | Answer |
+|---|---|
+| `Noul` | Probability that a yes/no proposition is true |
+| `Choice` | A label, with probabilities for the options |
+| `Score` | Expected level on an ordered rubric, starting at zero |
+
+Answers compare like values; `.confidence` and `.probabilities` expose the detail. Confidence is not a guarantee. Check thresholds on labelled examples from your own task, especially before using a result to gate an action.
+
+<details>
+<summary>CLI, routing and errors</summary>
+
+The CLI reads JSONL and writes JSONL. For example, save a question to `q.json`:
+
+```json
+{"relevant": {"type": "noul", "instructions": "Is this hit about the authentication flow?"}}
+```
+
+Then sort the results by relevance:
 
 ```sh
-verdict judge --questions q.json --sort risk --top 20 < hits.jsonl
+verdict judge --questions q.json --sort relevant < hits.jsonl
 verdict status
 ```
 
-Question classes use the same names and fields as TypeSafe's Jev SDK, so questions written for Jev work unchanged (plain dicts work too). Three types, answered together in one pass per item:
+`judge()` launches the installed app if necessary. Auto-routing selects the multilingual model for non-ASCII text and Gemma for dictionaries containing local `image`, `audio` or `video` paths. You can also select a model explicitly.
 
-| Type | Criteria | Returns | Notes |
-|---|---|---|---|
-| `Noul` | none | probability the statement is true | most reliable |
-| `Choice` | `{"label": "description"}` | label + probability per option | keep to ≤ 20; always include an escape option |
-| `Score` | `["low", "mid", "high"]` | expected level 0…n-1 | ordinal; the fuzziest |
+Items that exceed a model's context return an error in their original position; they are not silently truncated. An unavailable worker raises `VerdictError`. The client warns about question shapes such as a choice without an “other” option or a request to count.
 
-Every answer carries a **confidence** — a calibrated probability, not a verdict. Agents sort and shortlist by it and gate destructive actions on a high threshold; a threshold that matters gets checked on ~30 labelled examples first. `judge()` warns when a question breaks the conventions the field has settled on (no escape option, "and" in a yes/no, counting).
+See [the user guide](docs/USAGE.md) for the client, CLI and worker protocol.
 
-If Verdict is not running, `judge()` launches it and waits. Non-ASCII text routes to the multilingual model; items with `image`, `audio` or `video` paths route to Gemma. An item over a model's context comes back as an error in its position — nothing is truncated silently.
+</details>
+
+## The app
+
+The menu shows which models are hot, memory use and judgement count. **Copy Skill for Your Agent** is the handoff; **Launch at Login** keeps Verdict available without opening it yourself.
 
 <p align="center">
-  <img src="docs/images/models-current.png" alt="Verdict model table: inputs, context, bits, accuracy, calibration, speed" width="780">
+  <img src="docs/images/menu-current.png" alt="Verdict menu with model status, memory use and Copy Skill for Your Agent" width="322">
+</p>
+
+**Models…** opens the catalog. With nothing downloaded, local models show **Get**. First launch downloads Laya English automatically; use **Get** for additional models. The grey hosted row is a reference, not a service Verdict calls.
+
+<p align="center">
+  <img src="docs/images/models-fresh.png" alt="Model catalog before any weights are downloaded, with Get buttons" width="900">
+</p>
+
+Downloading and loading happen before a model can answer. The table shows the operation in progress; this capture shows Laya English loading after its weights are present on disk.
+
+<p align="center">
+  <img src="docs/images/models-downloading.png" alt="Laya English loading, with a progress indicator in the table footer" width="900">
+</p>
+
+A flame marks a hot model. Here English, Multilingual and Gemma are ready; **Unload** frees a model's memory without deleting its weights. The table also exposes per-model precision: Laya supports 16-, 8- and 4-bit settings; Gemma uses 4-bit weights. Changing a hot Laya model's precision reloads it.
+
+<p align="center">
+  <img src="docs/images/models-current.png" alt="English, Multilingual and Gemma hot, with precision controls and benchmark columns" width="900">
+</p>
+
+**Keep Hot** chooses between staying resident and unloading after an idle window. Unloaded models load again on the next judgement. Under memory pressure, Verdict drops its cache first, then sheds models rather than keeping them all resident.
+
+<p align="center">
+  <img src="docs/images/keep-hot.png" alt="Keep Hot menu: Always or unload after an idle window" width="360">
 </p>
 
 ## Install
 
 **Apple Silicon · macOS 14 or newer · Python 3.12–3.14**
 
+With Apple's Command Line Tools installed:
+
 ```sh
 git clone https://github.com/TobyNoSkillSon/Verdict && cd Verdict
 scripts/build.sh
-cp -R dist/Verdict.app /Applications && open /Applications/Verdict.app
+cp -R dist/Verdict.app /Applications
+open /Applications/Verdict.app
 ```
 
-Builds with Apple's free Command Line Tools; no developer membership. `build.sh` also installs the `verdict` command into `~/.local/bin`. On first launch Verdict sets up its own Python runtime (MLX, ~285 MB, no PyTorch) and downloads **Laya English (~843 MB)** from Hugging Face, then keeps it hot. Turn on **Launch at Login**, copy the skill to your agent, and that is the last time you need to think about it. Whatever is hot when you quit is loaded again next time.
+No Apple developer membership is required. The build also installs the `verdict` CLI into `~/.local/bin`; add that directory to your shell's `PATH` if needed. Python scripts import `client/verdict.py` from the clone, as in the example above.
+
+On first launch, Verdict installs its own Python runtime and downloads **Laya English (~843 MB)** from Hugging Face. Wait for it to become hot, enable **Launch at Login** if wanted, then choose **Copy Skill for Your Agent**. Models hot when you quit are remembered for the next launch.
 
 <details>
 <summary>Updating an existing installation</summary>
 
-Pull, rerun `scripts/build.sh`, copy the app again. Downloaded models, settings and the runtime are kept under `~/Library/Application Support/Verdict`; `build.sh` refuses to replace the app while a model is loading. Rerun `scripts/setup-backend.sh` only when the pinned runtime changes.
+Pull the repository, rerun `scripts/build.sh`, and copy the app again. Downloaded models, settings and the runtime are retained. The build refuses to replace the app while a model is loading. Rerun `scripts/setup-backend.sh` only when the pinned runtime changes.
 
 </details>
 
 ## Models
 
-Measured here, on an Apple M-series Mac, through Verdict itself: accuracy is the mean over two public sets (AG News, 4 topics; DAIR Emotion, 6 labels; 500 test items each, zero-shot, one `Choice` question), calibration is expected calibration error over both (lower is better), speed is the median per item. `scripts/benchmark.py` reproduces the table.
+Verdict runs the Laya text models on MLX and Gemma E2B RLCD for text, image, audio and video judgements.
+
+The recorded text benchmarks compare topic classification on AG News and emotion classification on DAIR Emotion, zero-shot with a `Choice` question. Accuracy is the mean across those sets; calibration is expected calibration error (lower is better); speed is median time per item. The benchmark file records `n = 500` for each Laya model and `n = 200` for Gemma. These results do not establish accuracy on your task. `scripts/benchmark.py` is the reproduction entry point.
 
 | Model | Inputs | Params | Context | Languages | Accuracy | Calibration | Speed |
 |---|---|---|---|---|---|---|---|
@@ -111,18 +182,19 @@ Measured here, on an Apple M-series Mac, through Verdict itself: accuracy is the
 | **Gemma E2B · RLCD** | text, image, audio, video | 5B (4-bit) | 128k | 140+ | 65.7% | 0.315 ⚠ | 37 ms text · ~0.2 s image · ~2 s audio |
 | Jev · TypeSafe (hosted, reference) | text | — | 64k | English | 69.5%† | 0.246† | 256 ms† |
 
-⚠ Confidence is not trustworthy for these: use the answers, not the probabilities, until a temperature is fitted on your data. † Published figures for Jev 1.13.0, not measured here; shown so you can see what the local models give up or gain. Our AG News number reproduces Laya's published 0.950 exactly.
+
+⚠ Laya Typed decisions and Gemma have poorly calibrated confidence in these results. Do not treat their probabilities as reliable thresholds without validation on your data. † Jev figures are published reference results, not measured here; Verdict cannot load or call it. The image and audio timings are approximate, not part of the recorded text benchmark.
 
 <details>
-<summary>Context, precision and honest limits</summary>
+<summary>Context, precision and limits</summary>
 
-**Context.** Laya ships with a 512-token budget in its config; its encoder takes 8,192 and measured accuracy holds all the way (300 long BBC articles with the decisive text after 800 tokens of filler: 26% at 512 — truncation — vs 91% at 1,024 and up). Verdict runs every model at its real limit and never truncates.
+**Context.** Laya runs at its encoder's real limit of 8,192 tokens (its shipped config says 512; on 300 long BBC articles with the decisive text after 800 tokens of filler, accuracy was 26% at 512 and 91% at 1,024 and above). Gemma takes 131,072. Questions count toward the budget. Over-limit items return errors rather than truncated judgements.
 
-**Precision.** fp16 is the default and the fastest; fp32 is identical in accuracy; 8-bit loses 0.2 points and saves ~350 MB per model; 4-bit loses a point and saves ~530 MB. Switch per model in the table; a hot model reloads in place.
+**Precision.** Laya defaults to 16-bit (fp32 measured identical; 8-bit costs 0.2 points and saves ~350 MB per model, 4-bit costs a point and saves ~530 MB; neither is faster). Change it per model in the table. Gemma is published only as 4-bit weights.
 
-**Limits, from Laya's model card and our tests.** Strong on general classification, weak on niche zero-shot rules (an ad in Polish saying *praca zdalna* still got `remote = 0.02`); choice questions collapse past ~20 options; it does not count, do arithmetic or dates, reason across items, or know anything outside the text. For a rule that matters, label 50–500 examples and fine-tune — that is the intended path.
+**Limits.** Each judgement sees one item, not the whole collection. Sort scores in code; do not expect cross-item reasoning. Use ordinary code for counting, arithmetic and date comparisons. Keep choice labels distinct, include an escape option, and write rubric levels as checkable situations. Test domain-specific rules on labelled examples before relying on them.
 
-**More models.** The catalog is `Resources/models.json`; candidates need open weights, a typed-question interface with per-answer probabilities, and an Apple-Silicon runtime that loads in seconds. Watched: [Von 1.0](https://huggingface.co/wfzyx/von-1.0) (no MLX port yet, licence unconfirmed), [OpenJev Verdict](https://huggingface.co/heman10x/rlcd-modernbert-151m) (ONNX only), [GLiClass v3](https://github.com/Knowledgator/GLiClass) (uncalibrated). See [docs/USAGE.md](docs/USAGE.md#adding-models).
+**Catalog.** Models and recorded text measurements live in [`Resources/models.json`](Resources/models.json) and [`Resources/benchmarks.json`](Resources/benchmarks.json). See [adding models](docs/USAGE.md#adding-models) for the runtime and interface requirements.
 
 </details>
 
@@ -131,28 +203,30 @@ Measured here, on an Apple M-series Mac, through Verdict itself: accuracy is the
 <details>
 <summary>Does anything leave my Mac?</summary>
 
-No. The worker binds to `127.0.0.1` on a random port; model weights are downloaded once from Hugging Face into its cache. There is no telemetry.
+Judgement inputs stay local. The worker listens on `127.0.0.1`; setup downloads runtime dependencies and model weights. There is no telemetry or hosted inference fallback.
 
 </details>
 
 <details>
-<summary>How much memory does it use?</summary>
+<summary>Does it keep using memory when I am not working?</summary>
 
-About 0.9 GB per hot English model, 0.7 GB multilingual, 3.6 GB for Gemma; the menu shows the live figure. Under **Keep Hot** choose Always or an idle window (15 min, 1 h, 4 h) after which models are freed and reloaded on the next call. When the Mac runs low on memory Verdict drops its cache first, then keeps one model and sheds the rest.
+With **Keep Hot → Always**, loaded models stay resident. Choose an idle window to release their memory between tasks; the next request pays the load time again. The menu shows live memory use. Quitting Verdict stops the worker.
 
 </details>
 
 <details>
 <summary>Can it judge screenshots?</summary>
 
-Yes, through Gemma E2B: pass `{"image": path}` as the item and ask coarse questions — is the layout broken, which screen is this, is an error shown. It cannot read small text or count elements. Its answers are usable; its confidence is not calibrated.
+Yes. Pass `{"image": "/path/to/screenshot.png"}` to `judge()` with your questions; auto-routing selects Gemma E2B RLCD. Use it for coarse classification, such as identifying an error screen, not precise small-text reading or element counting. Validate its answers and do not assume its confidence is calibrated.
 
 </details>
 
 <details>
 <summary>Where are the files, and how do I uninstall?</summary>
 
-`~/Library/Application Support/Verdict` holds `config.json`, `status.json`, `worker.log` and the Python runtime; weights live in `~/.cache/huggingface`. Quit Verdict, delete the app, that folder and `~/.local/bin/verdict`; delete downloaded models from the table first if you want the cache gone.
+`~/Library/Application Support/Verdict` holds settings, status, logs and the Python runtime. Model weights live in `~/.cache/huggingface`.
+
+To remove downloaded weights, delete the models from the table first. Then quit Verdict and remove `/Applications/Verdict.app`, its Application Support folder and `~/.local/bin/verdict`. Do not delete the whole Hugging Face cache if other tools use it.
 
 </details>
 
