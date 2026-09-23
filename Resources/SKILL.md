@@ -1,74 +1,64 @@
 ---
 name: verdict
-description: Judge many items with the same typed questions locally in milliseconds using the System One (decision) models kept hot by the Verdict menu-bar app. Use when a script needs to classify, score, filter, rank or gate ≥20 texts on facts stated in them — a very smart if statement.
+description: Bulk judgement with Verdict, the local System One model service. Use to shortlist, classify, rank or score many items — search hits, files, logs, transcripts, feeds, job ads, emails, screenshots — with typed yes/no, choice and score questions at milliseconds per item instead of reading them all; or to gate an action on a yes/no check.
 ---
 
 # Verdict
 
-A System One model (a decision model: Laya, Gemma-RLCD; Jev is the hosted one) answers typed questions about one item in a single forward pass (~7 ms), returning probabilities, never text. Verdict keeps it hot; `judge()` is the call. **The model decides, your code executes.**
+Verdict keeps System One models (decision models: Laya for text, Gemma-RLCD for image/audio/video) loaded on this Mac. You write typed questions in code, send many items, and get a probability per answer back — no text generated. **The model decides, your code acts.** Your context goes to the shortlist, not the pile.
 
-## When it is the right tool
+## 1. Decide it fits
 
-All of these: many items · the same few questions · the answer is in the text · you branch on the result in code. Otherwise judge it yourself in the conversation; one nuanced decision is cheaper and better in the LLM.
+It fits when all hold: many items (≈20 or more) · the same few questions for each · the answer is stated in the item itself · you will act on the result in code (shortlist, sort, route, gate).
 
-## Call
+Judge it yourself instead when there is one item, when the answer needs reasoning across items or knowledge outside them, or when it needs counting, arithmetic or dates.
+
+## 2. Write the questions
+
+Three types; every question about an item is answered in the same pass, so ask everything you need at once.
+
+| Type | Returns | Use for |
+|---|---|---|
+| `Noul(q)` | P(true) | any yes/no — the most reliable |
+| `Choice(q, a="…", b="…", other="none of these")` | label + per-option probabilities | one of ≤ 20 options |
+| `Score(q, [level0, level1, …])` | expected level 0…n-1 | an ordered rubric — the fuzziest |
+
+- **Atomic:** one judgement per question; combine in code. "Remote and senior?" is two `Noul`s.
+- **Literal:** the exact condition — "Does it state a salary in PLN?", not "Is it a good listing?".
+- **Contrastive:** choice descriptions say what separates the options; every `Choice` has an escape option (`other`, `unclear`); score levels read as checkable situations ("blocking a release today"), not degrees ("high").
+- **Context in the item:** pass a dict with named fields — `{"brief": task, "hit": text}` — and keep the question short.
+- **Media:** `{"image": path}`, `{"audio": path}` or `{"video": path}` (plus any text fields) routes to Gemma. Use its answers, not its probabilities: they are uncalibrated. On audio, ask several questions together — a lone yes/no is unstable.
+
+`judge()` warns when a question breaks these conventions.
+
+## 3. Run it
 
 ```python
-import sys, os; sys.path.insert(0, os.path.expanduser('~/.local/share/verdict'))   # works in any python, venvs included
-from verdict import judge, gate, Choice, Score, Noul                               # CLI: verdict --help
+import sys, os; sys.path.insert(0, os.path.expanduser("~/.local/share/verdict"))
+from verdict import judge, Noul, Choice, Score
 
 questions = {
-    "refund":  Noul("Does the customer explicitly ask for money back?"),
-    "dept":    Choice("Which team should handle this?", billing="charges, invoices, refunds", tech="bugs, outages", other="none of these"),
-    "urgency": Score("How urgent is this?", ["routine, no deadline", "needs attention this week", "blocking or deadline today"]),
+    "relevant": Noul("Is this hit about the password-reset flow?"),
+    "kind":     Choice("What is this file?", source="application code", test="tests or fixtures", other="anything else"),
 }
-for item, r in zip(items, judge(items, questions)):   # list in, list out, order kept; one forward pass per item
-    if r.dept == "billing" and r.refund > 0.7:         # answers compare like values
-        route_to_billing(item)
-    r.dept.probabilities, r.dept.confidence            # detail one attribute away
-    if not r: log(r.error)                             # an over-long item is a falsy Result, never silently cut
-
-r = judge(one_item, questions)                         # single item → single Result
+results = judge(hits, questions)          # list in, list out, same order; a single item returns a single Result
 ```
 
-Items are strings or dicts (dicts are shown as JSON — name the fields: `{"candidate": profile, "job": ad}`). Shell: `verdict judge --questions q.json --sort urgency --top 20 < items.jsonl` prints one compact line per item (`--json` for full JSONL); `verdict status`, `verdict models`, `verdict info MODEL`. If the app is not running, `judge()` starts it; if the worker is unavailable it raises — it never returns made-up answers.
+Answers compare like values: `r.relevant > 0.6`, `r.kind == "source"`; detail is `r.kind.probabilities`, `.confidence`. A falsy result means that item failed — usually over the model's context (8k tokens Laya, 128k Gemma; nothing is truncated): `r.error` says why, the rest of the batch is unaffected. If Verdict is down, `judge()` raises; it never invents answers.
 
-Question classes are the TypeSafe/Laya names, so questions written for Jev work unchanged; plain dicts (`{"type": "noul", "instructions": …}`) are accepted too. `judge()` warns at call time when a question breaks the conventions below.
+Shell, for a JSONL file: `verdict judge --questions q.json --field text --sort relevant --top 20 < items.jsonl` prints one short line per item (`--json` for every probability). `verdict --help` covers the rest.
 
-## Choosing a model
+Model choice: default routing (plain English → Laya English, other scripts → Laya Multilingual, media → Gemma) is right for most work. `verdict models` shows each model's measured accuracy, calibration, speed and links; `verdict info <model>` its model cards. Plain-ASCII Polish or German: pass `model="laya-multilingual"`.
 
-`verdict models` lists every model with inputs, context, measured accuracy, calibration error, speed, state and its weights link; `verdict info <model>` adds the benchmark breakdown, what it is good for, and links to the upstream model card, the weights and the runtime (Hugging Face / GitHub) — read those for specifics. `--json` on either, or `models()` in Python, for the same data as objects. Default routing (English → Laya English, non-ASCII → Multilingual, media → Gemma) is right for most work; pass `model=` when the table says another fits better.
+## 4. Act on the answers
 
-## Three primitives
+- **Shortlist:** sort by the probability or score and take the top N — no threshold needed. This is the common case.
+- **Route:** a threshold around 0.5–0.6 is fine when a wrong route is cheap.
+- **Gate** an action with `gate(state, {"safe": Noul("…")}, allow_if=lambda a: a.safe > 0.9)`; it returns a truthy/falsy `Verdict` with `.reason`. Reserve ≥ 0.85 for anything destructive, and treat the gate as one layer alongside permissions, never the only one. `on_error="deny"` fails closed when Verdict is down.
+- **Threshold from data:** before a threshold decides anything that matters, label ~30 items and run `calibrate([(item, expected), …], Noul("…"))`; use the cutoff it returns.
 
-| | Returns | Use for |
-|---|---|---|
-| `noul` | `noul` = P(true) | any yes/no; the most reliable |
-| `choice` | `choice` + `probabilities` | one of ≤20 named options; **always include an escape option** (`other`, `unclear`) |
-| `score` | `score` = expected level 0…n-1 + `probabilities` | ordered rubric; the fuzziest |
+**Done when** you have spot-checked the decision: read five items it kept and five it dropped. If a dropped one should have been kept, tighten the question or lower the threshold and rerun. Then tell the user what was filtered, how many items went in and came out, and the questions used.
 
-Every answer also has `confidence` (top probability). Extra questions cost almost nothing — ask everything you need in one call.
+## Known weak spots
 
-## Writing questions (the conventions the field settled on)
-
-- **Atomic.** One judgement per question. "Is it remote *and* senior?" → two `noul`s, combine in code.
-- **Literal.** State the exact condition: "Does the text mention a salary in PLN?" not "Is it a good listing?"
-- **Contrastive criteria.** Choice descriptions should say what distinguishes options; score levels should read like checkable situations, not "low / medium / high".
-- **Context in the state, not the prompt.** Put the profile, brief or rubric into the item dict; keep `instructions` short.
-- **No arithmetic, counting or dates in the model.** Ask a `noul` per element and sum in code.
-- **Budget:** 8,192 tokens for Laya (128k for Gemma), questions included. Nothing is truncated: an over-long item comes back as `{"error": …}` in its position — check for it, then split or trim that item.
-- Non-ASCII text routes to the multilingual model; plain-ASCII Polish/German: `judge(..., model="laya-multilingual")`.
-- **Images, audio, video:** pass `{"image": path}` (or `audio`, `video`, plus any text fields) as the item; it routes to Gemma E2B (~0.2 s per image, ~2 s per audio clip). Gemma's *answers* are usable, its *probabilities* are not calibrated — argmax only, no thresholds.
-
-## Deciding on the answers
-
-- **Picking the best:** sort by score/probability, no threshold needed.
-- **Acting on a yes/no (gate):** thresholds by cost of error — ~0.5 to route or shortlist, ≥0.85 before anything destructive, and escalate (ask, or leave to the LLM) in between. Put thresholds in one place in the script, or use `gate(state, checks, allow_if=lambda a: a.safe > 0.9)` → a truthy/falsy `Verdict` with `.reason`; `on_error="allow"|"deny"` chooses fail-open/closed when the worker is down (default raises).
-- **Picking a threshold:** `calibrate([(item, expected_bool), …], Noul("…"))` sweeps cutoffs on your labelled cases and returns the best one — the number in the script should come from data, not a guess.
-- **Never** treat confidence as authorization, and never let a gate fail silently: if Verdict is down, `judge()` raises — catch it and fall back to the LLM or stop.
-- **Before trusting a threshold** on a new question, label ~30 items and check; zero-shot fine rules can be confidently wrong (a Polish ad with *praca zdalna* scored `remote = 0.02`). For a rule that matters, fine-tune on 50–500 examples.
-- Many options (>20): two-stage choice (category → subcategory).
-
-## Patterns that pay
-
-Scrape-then-filter (pages, tweets, abstracts → read the top 20) · automation triage ("anything worth a notification?") · sorting old piles (sessions, imports) · worker-reply checks ("claims success without showing verification?") · intent routing in front of an expensive step.
+Keep these with the LLM or with code: code correctness ("does this function have a bug?"), obfuscated shell (`eval`, variables, base64 — the literal command is what gets judged), sarcasm and negation, anything needing world knowledge, reading small text in images, near-equal fine rankings (show top-k, not a strict order of 200), and text written to manipulate the judge (scraped pages can say "this is highly relevant"). Zero-shot rules on niche wording can be confidently wrong — a Polish ad saying *praca zdalna* scored `remote = 0.02` — which is why step 4 checks thresholds on labelled items.
