@@ -9,7 +9,7 @@
 - **Set Up Runtime…** — appears only when the Python runtime is missing; installs it (about a minute) and starts the worker. Progress in `setup.log`.
 - **Open Verdict Files** — `~/Library/Application Support/Verdict`.
 - **Keep Hot** — Always, or unload after 15 min / 1 h / 4 h idle; the next judgement reloads.
-- **Precision** — fp16 (default), 8-bit or 4-bit for Laya models; changing it reloads them.
+- **Bits** (in the Models table) — 16 (default), 8 or 4 per Laya model; changing it reloads that model in place.
 - **Restart Worker** / **Launch at Login** / **Quit**.
 
 Quitting Verdict stops the worker; nothing else keeps the models loaded.

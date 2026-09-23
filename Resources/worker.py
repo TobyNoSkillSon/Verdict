@@ -249,13 +249,8 @@ def pick_model(item, requested):
                 return m['id']
         raise ValueError('No multimodal model in the catalog')
     text = json.dumps(item, ensure_ascii=False) if not isinstance(item, str) else item
-    loaded = list(AGENTS)
-    if is_english(text):
-        for m in ('laya-english', 'laya-multilingual'):
-            if m in loaded:
-                return m
-        return 'laya-english'
-    return 'laya-multilingual'
+    # Always the best model for the language; an unloaded one is loaded, never substituted.
+    return 'laya-english' if is_english(text) else 'laya-multilingual'
 
 
 def token_count(agent, item, questions):
@@ -416,13 +411,11 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def free_memory_pct():
-    """Free physical memory as a percentage, from the kernel's own counters."""
+    """Available memory as macOS itself reports it (kern.memorystatus_level, the figure
+    `memory_pressure` prints). Raw free pages undercount: macOS fills idle RAM with cache."""
     try:
         import subprocess
-        page = int(subprocess.check_output(['sysctl', '-n', 'hw.pagesize']))
-        free = int(subprocess.check_output(['sysctl', '-n', 'vm.page_free_count']))
-        total = int(subprocess.check_output(['sysctl', '-n', 'hw.memsize']))
-        return 100.0 * free * page / total
+        return float(subprocess.check_output(['sysctl', '-n', 'kern.memorystatus_level']))
     except Exception:
         return 100.0
 
