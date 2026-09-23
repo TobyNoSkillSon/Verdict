@@ -1,9 +1,9 @@
 ---
-name: verdict
-description: Bulk judgement with Verdict, the local System One model service. Use to shortlist, classify, rank or score many items — search hits, files, logs, transcripts, feeds, job ads, emails, screenshots — with typed yes/no, choice and score questions at milliseconds per item instead of reading them all; or to gate an action on a yes/no check.
+name: triage
+description: Triage many items with Verdict, the local System One model service. Use to shortlist, classify, rank or score many items — search hits, files, logs, transcripts, feeds, job ads, emails, screenshots — with typed yes/no, choice and score questions at milliseconds per item instead of reading them all; or to gate an action on a yes/no check.
 ---
 
-# Verdict
+# Triage with Verdict
 
 Verdict keeps System One models (decision models: Laya for text, Gemma-RLCD for image/audio/video) loaded on this Mac. You write typed questions in code, send many items, and get a probability per answer back — no text generated. **The model decides, your code acts.** Your context goes to the shortlist, not the pile.
 

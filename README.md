@@ -56,7 +56,7 @@ These are example workloads, not measured end-to-end results.
 
 ## For your agent
 
-Your agent installs the skill into its own harness from `verdict skill`; **Copy Skill for Your Agent** in the menu copies the same text by hand. The skill teaches the agent when Verdict is worth using, how to call it and how to write questions.
+Your agent installs the skill into its own harness from `verdict skill`; **Copy Skill for Your Agent** in the menu copies the same text by hand. The skill, called `triage`, teaches the agent when Verdict is worth using, how to call it and how to write questions.
 
 This is the pattern it uses: ask the same questions of every item, keep the answers in order, and shortlist in code. Here `hits` is a list of search-result strings or dictionaries; the threshold is illustrative, not validated for your task.
 

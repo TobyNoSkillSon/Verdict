@@ -21,7 +21,7 @@ questions written for Jev work here unchanged. Plain dicts are still accepted.
 CLI (JSONL in, JSONL out):
     verdict judge --questions q.json [--field KEY] [--sort NAME] [--min X] [--top N] [--model ID] [--json] < items.jsonl
         default output, one line per item:  #index  name=value(conf) …  | first 60 chars of the item
-    verdict skill [--install DIR]      print the agent skill, or write DIR/verdict/SKILL.md
+    verdict skill [--install DIR]      print the agent skill (named triage), or write DIR/triage/SKILL.md
     verdict status | verdict models [--json] | verdict info MODEL [--json] | verdict load ID | verdict unload ID | verdict quit
 
 Python: models() returns the catalog with state, measured benchmarks and Hugging Face/GitHub links.
@@ -448,7 +448,7 @@ def _main(argv):
                 i = rest.index('--install')
                 if i + 1 >= len(rest):
                     raise VerdictError('verdict skill --install DIR')
-                dest = Path(rest[i + 1]).expanduser() / 'verdict' / 'SKILL.md'
+                dest = Path(rest[i + 1]).expanduser() / 'triage' / 'SKILL.md'
                 dest.parent.mkdir(parents=True, exist_ok=True); dest.write_text(text)
                 print(f'wrote {dest}')
             else:
