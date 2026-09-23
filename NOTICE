@@ -1,0 +1,6 @@
+Anubis — Copyright 2026 Toby NoSkillSon. Apache License 2.0.
+
+Bundles no model weights. At runtime it downloads community MLX conversions
+(aac6fef/laya-mlx, aac6fef/laya-multilingual-mlx, aac6fef/laya-typed-decisions-mlx)
+of Laya by Convai Innovations (Apache-2.0), using the laya-mlx runtime by
+mizorewww (https://github.com/mizorewww/laya-mlx) and MLX by Apple.

@@ -1,0 +1,96 @@
+[
+  {
+    "id": "laya-english",
+    "name": "Laya \u00b7 English",
+    "backbone": "ModernBERT-large",
+    "params": "421M",
+    "repository": "aac6fef/laya-mlx",
+    "subfolder": "",
+    "downloadBytes": 843000000,
+    "context": 8192,
+    "languages": "English",
+    "license": "apache-2.0",
+    "recommendation": "Best English accuracy. MLX port of convaiinnovations/laya.",
+    "recommended": true,
+    "runtime": "laya",
+    "inputs": [
+      "text"
+    ]
+  },
+  {
+    "id": "laya-multilingual",
+    "name": "Laya \u00b7 Multilingual",
+    "backbone": "mmBERT-base",
+    "params": "322M",
+    "repository": "aac6fef/laya-multilingual-mlx",
+    "subfolder": "",
+    "downloadBytes": 644000000,
+    "context": 8192,
+    "languages": "100+ languages",
+    "license": "apache-2.0",
+    "recommendation": "Non-English or longer inputs; fastest. MLX port of convaiinnovations/laya-multilingual.",
+    "recommended": true,
+    "runtime": "laya",
+    "inputs": [
+      "text"
+    ]
+  },
+  {
+    "id": "laya-typed-decisions",
+    "name": "Laya \u00b7 Typed decisions",
+    "backbone": "ModernBERT-large",
+    "params": "421M",
+    "repository": "aac6fef/laya-typed-decisions-mlx",
+    "subfolder": "",
+    "downloadBytes": 847000000,
+    "context": 8192,
+    "languages": "English",
+    "license": "apache-2.0",
+    "recommendation": "Fine-tuned example: invoices, incidents, support tickets. MLX port of convaiinnovations/laya-typed-decisions.",
+    "recommended": false,
+    "runtime": "laya",
+    "inputs": [
+      "text"
+    ]
+  },
+  {
+    "id": "gemma-e2b-rlcd",
+    "name": "Gemma E2B \u00b7 RLCD",
+    "backbone": "Gemma 4 E2B (4-bit)",
+    "params": "5B",
+    "repository": "larkooo/gemma-e2b-rlcd",
+    "subfolder": "",
+    "downloadBytes": 3600000000,
+    "context": 131072,
+    "languages": "140+ languages",
+    "license": "apache-2.0",
+    "recommendation": "Multimodal: text, image, audio, video. Scores allowed answers with a generative model; probabilities are uncalibrated until fitted.",
+    "recommended": false,
+    "runtime": "gemma_rlcd",
+    "inputs": [
+      "text",
+      "image",
+      "audio",
+      "video"
+    ]
+  },
+  {
+    "id": "jev",
+    "name": "Jev \u00b7 TypeSafe",
+    "backbone": "closed",
+    "params": "\u2014",
+    "repository": "",
+    "subfolder": "",
+    "downloadBytes": 0,
+    "context": 65536,
+    "languages": "English",
+    "license": "proprietary API",
+    "recommendation": "Hosted reference. Cannot run locally; shown for comparison only.",
+    "recommended": false,
+    "reference": true,
+    "runtime": "hosted",
+    "inputs": [
+      "text"
+    ]
+  }
+]
