@@ -69,7 +69,7 @@ import VerdictCore
         guard setup == nil, let script = Bundle.main.url(forResource: "setup-backend", withExtension: "sh") else { return }
         let proc = Process(); proc.executableURL = URL(fileURLWithPath: "/bin/bash"); proc.arguments = [script.path]
         var env = ProcessInfo.processInfo.environment; env["VERDICT_SUPPORT_DIR"] = Self.support.path
-        env["PATH"] = (env["PATH"] ?? "") + ":/opt/homebrew/bin:/usr/local/bin"
+        env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + (env["PATH"] ?? "/usr/bin:/bin")
         proc.environment = env
         try? FileManager.default.createDirectory(at: Self.support, withIntermediateDirectories: true)
         let logURL = Self.support.appendingPathComponent("setup.log")

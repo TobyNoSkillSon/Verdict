@@ -4,9 +4,11 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 command -v xcrun >/dev/null || { echo "Need Apple Command Line Tools: run 'xcode-select --install', then rerun."; exit 1; }
-python3 -c 'import sys; assert (3,12) <= sys.version_info[:2] < (3,15)' 2>/dev/null || { echo "Need Python 3.12–3.14 as python3 (e.g. 'brew install python@3.12'), then rerun."; exit 1; }
 [[ "$(uname -m)" == arm64 ]] || { echo "Verdict needs an Apple Silicon Mac."; exit 1; }
 DEST="/Applications"; [[ -w "$DEST" ]] || DEST="$HOME/Applications"; mkdir -p "$DEST"
+sw="$(sw_vers -productVersion)"; [[ "${sw%%.*}" -ge 14 ]] || { echo "Verdict needs macOS 14 or newer (this is $sw)."; exit 1; }
+echo "preparing Python runtime (first run downloads ~600 MB of packages)…"
+scripts/setup-backend.sh >/tmp/verdict-setup.log 2>&1 || { tail -3 /tmp/verdict-setup.log; exit 1; }
 echo "building…"
 scripts/build.sh >/tmp/verdict-build.log 2>&1 || { tail -5 /tmp/verdict-build.log; exit 1; }
 rm -rf "$DEST/Verdict.app" && cp -R dist/Verdict.app "$DEST/"

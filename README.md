@@ -161,7 +161,23 @@ A flame marks a hot model. Here English, Multilingual and Gemma are ready; **Unl
 
 ## Install
 
-**Apple Silicon · macOS 14 or newer · Python 3.12–3.14**
+**Apple Silicon · macOS 14 or newer · Python 3.12–3.14 · Command Line Tools**
+
+<details>
+<summary>What a Mac needs, exactly</summary>
+
+| | Why | If missing |
+|---|---|---|
+| Apple Silicon, macOS 14+ | MLX runs on the Apple GPU | — |
+| Command Line Tools | Swift build, `git`, code signing | `xcode-select --install` |
+| Python 3.12, 3.13 or 3.14 | the worker's private runtime (macOS's own `/usr/bin/python3` is 3.9 and is skipped) | `brew install python@3.12`; with `uv` installed the setup fetches one itself |
+| Internet, first run only | ~600 MB of Python packages, ~0.8 GB for Laya English | — |
+| Disk | ~1.5 GB; +0.6 GB per extra Laya model, +3.6 GB for Gemma | — |
+| `ffmpeg` (optional) | Gemma audio/video in formats other than WAV | `brew install ffmpeg` |
+
+Tested from scratch with Python 3.12, 3.13 and 3.14, a bare system `PATH` and empty caches: 91 s from nothing to the first answer. No PyTorch, no Xcode app, no Apple developer account.
+
+</details>
 
 Tell your agent:
 
@@ -169,7 +185,7 @@ Tell your agent:
 Install Verdict from https://github.com/TobyNoSkillSon/Verdict — follow its AGENTS.md, then install its skill into your harness.
 ```
 
-It clones the repository, runs the installer, waits until a model is loaded, installs the skill wherever its harness keeps skills, and reports back. First run downloads about 1 GB (a Python runtime and Laya English). Turn on **Launch at Login** in the menu afterwards if you want Verdict always there.
+It clones the repository, runs the installer, waits until a model is loaded, installs the skill wherever its harness keeps skills, and reports back. First run downloads about 1.4 GB (Python packages and Laya English). Turn on **Launch at Login** in the menu afterwards if you want Verdict always there.
 
 <details>
 <summary>Installing by hand</summary>
@@ -182,7 +198,7 @@ scripts/install.sh
 verdict skill                              # prints the skill; hand it to your agent
 ```
 
-`install.sh` builds the app into `/Applications`, installs the `verdict` CLI into `~/.local/bin` and the Python module into `~/.local/share/verdict`, starts Verdict and waits until it is ready. **Copy Skill for Your Agent** in the menu copies the same skill to the clipboard.
+`install.sh` checks the Mac, builds the Python runtime, builds the app into `/Applications`, installs the `verdict` CLI into `~/.local/bin` and the Python module into `~/.local/share/verdict`, starts Verdict and waits until it is ready. **Copy Skill for Your Agent** in the menu copies the same skill to the clipboard.
 
 </details>
 
@@ -216,6 +232,8 @@ The recorded text benchmarks compare topic classification on AG News and emotion
 **Context.** Laya runs at its encoder's real limit of 8,192 tokens (its shipped config says 512; on 300 long BBC articles with the decisive text after 800 tokens of filler, accuracy was 26% at 512 and 91% at 1,024 and above). Gemma takes 131,072. Questions count toward the budget. Over-limit items return errors rather than truncated judgements.
 
 **Precision.** Laya defaults to 16-bit (fp32 measured identical; 8-bit costs 0.2 points and saves ~350 MB per model, 4-bit costs a point and saves ~530 MB; neither is faster). Change it per model in the table. Gemma is published only as 4-bit weights.
+
+**Gemma on audio.** Its scores are raw likelihoods and can swing with the question set: on the same clip, a lone yes/no scored 0.04 while the same question asked alongside a choice and a second yes/no scored 0.98 (0.87 as text). Ask several questions together and treat single audio yes/no answers with suspicion.
 
 **Limits.** Each judgement sees one item, not the whole collection. Sort scores in code; do not expect cross-item reasoning. Use ordinary code for counting, arithmetic and date comparisons. Keep choice labels distinct, include an escape option, and write rubric levels as checkable situations. Test domain-specific rules on labelled examples before relying on them.
 
