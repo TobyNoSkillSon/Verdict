@@ -167,7 +167,19 @@ import VerdictCore
                         try? rep.representation(using: .png, properties: [:])?.write(to: directory.appendingPathComponent("menu.png"))
                     }
                     window.orderOut(nil)
-                    NSApp.terminate(nil)
+                    if let keep = delegate.menu.items.first(where: { $0.title == "Keep Hot" })?.submenu {
+                        let sub = MenuMock(items: keep.items, width: 300)
+                        let w2 = NSWindow(contentRect: sub.frame, styleMask: .borderless, backing: .buffered, defer: false)
+                        w2.backgroundColor = .clear; w2.contentView = sub; w2.appearance = NSAppearance(named: .darkAqua)
+                        w2.orderFrontRegardless(); w2.setFrameOrigin(NSPoint(x: -5000, y: -5000))
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                            if let rep = sub.bitmapImageRepForCachingDisplay(in: sub.bounds) {
+                                sub.cacheDisplay(in: sub.bounds, to: rep)
+                                try? rep.representation(using: .png, properties: [:])?.write(to: directory.appendingPathComponent("keep-hot.png"))
+                            }
+                            w2.orderOut(nil); NSApp.terminate(nil)
+                        }
+                    } else { NSApp.terminate(nil) }
                 }
                 return
             }
