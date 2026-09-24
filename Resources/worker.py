@@ -334,7 +334,14 @@ def judge(items, questions, requested='auto'):
             else:
                 for i in idxs:
                     t = time.time()
-                    res = agent.predict(items[i], questions)
+                    try:
+                        res = agent.predict(items[i], questions)
+                    except ValueError as e:
+                        if 'token limit' not in str(e):
+                            raise
+                        # Over-context: a per-item error like Laya's, never a failed batch or a truncation.
+                        out[i] = {'error': f'Item exceeds {model_id} context ({spec["context"]} tokens). Shorten it or split it.', 'model': model_id, 'ms': 0}
+                        continue
                     ms = (time.time() - t) * 1000
                     answers = {k: {kk: vv for kk, vv in v.items() if kk in ('choice', 'score', 'noul', 'confidence', 'probabilities', 'probs', 'calibrated')} for k, v in res['answers'].items()}
                     out[i] = {'answers': answers, 'model': model_id, 'ms': round(ms, 1)}
