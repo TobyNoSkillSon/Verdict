@@ -58,11 +58,24 @@ chmod 755 "$HOME/.local/bin/verdict"
 echo "Installed $DEST/Verdict.app and CLI ~/.local/bin/verdict"
 open -g "$DEST/Verdict.app"
 export VERDICT_APP="$DEST/Verdict.app"
+ready_check() {  # helper answering and not loading; a model loaded, or none configured hot
+  python3 - "$HOME/Library/Application Support/Verdict" <<'PYEOF' 2>/dev/null
+import json, sys, urllib.request
+d = sys.argv[1]
+try:
+    s = json.load(open(d + '/status.json'))
+    with urllib.request.urlopen(f"http://127.0.0.1:{s['port']}/status", timeout=5) as r: s = json.load(r)
+    hot = json.load(open(d + '/config.json')).get('hotModels', ['laya-english'])
+except Exception:
+    sys.exit(1)
+sys.exit(0 if not s.get('loading') and (s.get('models') or not hot) else 1)
+PYEOF
+}
+ready=0
 for _ in $(seq 1 360); do
-  out="$("$HOME/.local/bin/verdict" status 2>/dev/null || true)"
-  if [[ "$out" == *"(mlx)"* ]]; then echo "ready: $out" | cut -c1-120; break; fi
+  if ready_check; then ready=1; echo "ready: $("$HOME/.local/bin/verdict" status 2>/dev/null)" | cut -c1-120; break; fi
   sleep 5
 done
-[[ "${out:-}" == *"(mlx)"* ]] || { echo "Not ready after 30 min; see ~/Library/Application Support/Verdict/worker.log. Previous app kept at ${PREVIOUS:-none}" >&2; exit 1; }
+[[ "$ready" == 1 ]] || { echo "Not ready after 30 min; see ~/Library/Application Support/Verdict/worker.log. Previous app kept at ${PREVIOUS:-none}" >&2; exit 1; }
 # Ready: the previous app is no longer needed as a rollback.
 [[ -z "$PREVIOUS" ]] || rm -rf "$PREVIOUS"
