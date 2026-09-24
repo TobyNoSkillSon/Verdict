@@ -3,3 +3,8 @@ dist/
 *.pyc
 __pycache__/
 .DS_Store
+
+# native build QA outputs
+native/.build*/
+native/.build*.log
+native/.swiftpm/
