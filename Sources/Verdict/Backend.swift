@@ -52,7 +52,7 @@ import VerdictCore
         if FileManager.default.fileExists(atPath: Self.configURL.path) {
             return try JSONDecoder().decode(Configuration.self, from: Data(contentsOf: Self.configURL))
         }
-        return Configuration(executable: Self.support.appendingPathComponent("runtime/bin/python").path)
+        return Configuration(executable: bundledHelper?.path ?? Self.support.appendingPathComponent("runtime/bin/python").path)
     }
     func save(_ config: Configuration) throws {
         try FileManager.default.createDirectory(at: Self.support, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
@@ -62,7 +62,17 @@ import VerdictCore
 
     var processRunning: Bool { process?.isRunning == true }
 
-    var runtimeReady: Bool { (try? configuration().validate()) != nil && FileManager.default.isExecutableFile(atPath: (try? configuration())?.executable ?? "") }
+    /// Prefer the bundled native helper; legacy Python installations still work until the switch.
+    private var bundledHelper: URL? {
+        guard let executable = Bundle.main.executableURL else { return nil }
+        let helper = executable.deletingLastPathComponent().appendingPathComponent("verdict-helper")
+        return FileManager.default.isExecutableFile(atPath: helper.path) ? helper : nil
+    }
+
+    var runtimeReady: Bool {
+        if bundledHelper != nil { return true }
+        return (try? configuration().validate()) != nil && FileManager.default.isExecutableFile(atPath: (try? configuration())?.executable ?? "")
+    }
     private var setup: Process?
 
     /// Runs the bundled setup-backend.sh once; output goes to setup.log. Never runs twice at once.
@@ -94,12 +104,16 @@ import VerdictCore
     /// Workers from earlier app instances (crash, force-quit) must not linger.
     private func sweepStrayWorkers() {
         let mine = process?.processIdentifier
-        let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep"); p.arguments = ["-f", "Verdict.app/Contents/Resources/worker.py"]
-        let pipe = Pipe(); p.standardOutput = pipe
-        try? p.run(); p.waitUntilExit()
-        let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        for line in out.split(separator: "\n") {
-            if let pid = Int32(line.trimmingCharacters(in: .whitespaces)), pid != mine { kill(pid, SIGTERM) }
+        // Sweep both generations: an orphaned Python worker must not race the native helper
+        // for status.json after an update.
+        for pattern in ["Verdict.app/Contents/MacOS/verdict-helper", "Verdict.app/Contents/Resources/worker.py"] {
+            let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep"); p.arguments = ["-f", pattern]
+            let pipe = Pipe(); p.standardOutput = pipe
+            try? p.run(); p.waitUntilExit()
+            let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            for line in out.split(separator: "\n") {
+                if let pid = Int32(line.trimmingCharacters(in: .whitespaces)), pid != mine { kill(pid, SIGTERM) }
+            }
         }
     }
 
@@ -108,11 +122,13 @@ import VerdictCore
         sweepStrayWorkers()
         stopping = false
         do {
-            let config = try configuration(); try config.validate()
+            let config = try configuration()
+            let helper = bundledHelper
+            if helper == nil { try config.validate() }
             let script = Bundle.main.url(forResource: "worker", withExtension: "py") ?? URL(fileURLWithPath: "Resources/worker.py")
             let proc = Process()
-            proc.executableURL = URL(fileURLWithPath: config.executable)
-            proc.arguments = [script.path]
+            proc.executableURL = helper ?? URL(fileURLWithPath: config.executable)
+            proc.arguments = helper == nil ? [script.path] : []
             var env = ProcessInfo.processInfo.environment
             env["VERDICT_SUPPORT_DIR"] = Self.support.path
             env["VERDICT_PRELOAD"] = config.hotModels.joined(separator: ",")
@@ -134,7 +150,7 @@ import VerdictCore
             phase = .starting
             startPolling()
         } catch {
-            if !runtimeReady { setUpRuntime(); return }
+            if bundledHelper == nil && !runtimeReady { setUpRuntime(); return }
             lastError = error.localizedDescription
             phase = .failed(error.localizedDescription)
         }

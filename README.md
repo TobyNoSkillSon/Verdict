@@ -49,7 +49,6 @@ For example, an agent can:
 - Filter 800 grep hits for relevance before opening files.
 - Flag shell commands for review before execution — not replace permissions or a sandbox.
 - Mine 40,000 transcript turns for user corrections.
-- Sort 300 screenshots into broken layouts, empty states and other screens.
 - Triage 5,000 feed items before preparing a shortlist.
 
 These are example workloads, not measured end-to-end results.
@@ -117,7 +116,7 @@ $ verdict judge --questions q.json --sort relevant --top 3 < hits.jsonl
 #503  relevant=0.12  | docs/CHANGELOG.md: 1.4.0 auth screen redesign
 ```
 
-`judge()` launches the installed app if necessary. Auto-routing selects the multilingual model for non-ASCII text and Gemma for dictionaries containing local `image`, `audio` or `video` paths. You can also select a model explicitly.
+`judge()` launches the installed app if necessary. Auto-routing selects the multilingual model for non-ASCII text. You can also select a model explicitly.
 
 Items that exceed a model's context return an error in their original position; they are not silently truncated. An unavailable worker raises `VerdictError`. The client warns about question shapes such as a choice without an “other” option or a request to count.
 
@@ -147,10 +146,10 @@ Downloading and loading happen before a model can answer. The table shows the op
   <img src="docs/images/models-downloading.png" alt="Laya English loading, with a progress indicator in the table footer" width="900">
 </p>
 
-A flame marks a hot model. Here English, Multilingual and Gemma are ready; **Unload** frees a model's memory without deleting its weights. The table also exposes per-model precision: Laya supports 16-, 8- and 4-bit settings; Gemma uses 4-bit weights. Changing a hot Laya model's precision reloads it.
+A flame marks a hot model. Here English and Multilingual are ready; **Unload** frees a model's memory without deleting its weights. The table also exposes per-model precision (16, 8 or 4 bits); changing it on a hot model reloads it in place.
 
 <p align="center">
-  <img src="docs/images/models-current.png" alt="English, Multilingual and Gemma hot, with precision controls and benchmark columns" width="900">
+  <img src="docs/images/models-current.png" alt="English and Multilingual hot, with precision controls and benchmark columns" width="900">
 </p>
 
 **Keep Hot** chooses between staying resident and unloading after an idle window. Unloaded models load again on the next judgement. Under memory pressure, Verdict drops its cache first, then sheds models rather than keeping them all resident.
@@ -172,8 +171,7 @@ A flame marks a hot model. Here English, Multilingual and Gemma are ready; **Unl
 | Command Line Tools | Swift build, `git`, code signing | `xcode-select --install` |
 | Python 3.12, 3.13 or 3.14 | the worker's private runtime (macOS's own `/usr/bin/python3` is 3.9 and is skipped) | `brew install python@3.12`; with `uv` installed the setup fetches one itself |
 | Internet, first run only | ~600 MB of Python packages, ~0.8 GB for Laya English | — |
-| Disk | ~1.5 GB; +0.6 GB per extra Laya model, +3.6 GB for Gemma | — |
-| `ffmpeg` (optional) | Gemma audio/video in formats other than WAV | `brew install ffmpeg` |
+| Disk | ~1.5 GB; +0.6–0.8 GB per extra Laya model | — |
 
 Tested from scratch with Python 3.12, 3.13 and 3.14, a bare system `PATH` and empty caches: 91 s from nothing to the first answer. No PyTorch, no Xcode app, no Apple developer account.
 
@@ -211,29 +209,26 @@ verdict skill                              # prints the skill; hand it to your a
 
 ## Models
 
-The System One models Verdict runs today: the Laya family for text, on MLX, and Gemma E2B RLCD for text, image, audio and video. Jev is listed for reference only; it is hosted and closed. New open System One models are added to the catalog as they prove out on a Mac.
+The System One models Verdict runs today: the Laya family, for text, on MLX. Jev is listed for reference only; it is hosted and closed. New open System One models are added to the catalog as they prove out on a Mac.
 
-The recorded text benchmarks compare topic classification on AG News and emotion classification on DAIR Emotion, zero-shot with a `Choice` question. Accuracy is the mean across those sets; calibration is expected calibration error (lower is better); speed is median time per item. The benchmark file records `n = 500` for each Laya model and `n = 200` for Gemma. These results do not establish accuracy on your task. `scripts/benchmark.py` is the reproduction entry point.
+The recorded text benchmarks compare topic classification on AG News and emotion classification on DAIR Emotion, zero-shot with a `Choice` question. Accuracy is the mean across those sets; calibration is expected calibration error (lower is better); speed is median time per item. The benchmark file records `n = 500` for each Laya model. These results do not establish accuracy on your task. `scripts/benchmark.py` is the reproduction entry point.
 
 | Model | Inputs | Params | Context | Languages | Accuracy | Calibration | Speed |
 |---|---|---|---|---|---|---|---|
 | **Laya · English** | text | 421M | 8k | English | 76.4% | 0.096 | 6 ms |
 | Laya · Typed decisions | text | 421M | 8k | English | 76.3% | 0.252 ⚠ | 6 ms |
 | **Laya · Multilingual** | text | 322M | 8k | 100+ | 71.7% | 0.113 | 4 ms |
-| **Gemma E2B · RLCD** | text, image, audio, video | 5B (4-bit) | 128k | 140+ | 65.7% | 0.315 ⚠ | 37 ms text · ~0.2 s image · ~2 s audio |
 | Jev · TypeSafe (hosted, reference) | text | — | 64k | English | 69.5%† | 0.246† | 256 ms† |
 
 
-⚠ Laya Typed decisions and Gemma have poorly calibrated confidence in these results. Do not treat their probabilities as reliable thresholds without validation on your data. † Jev figures are published reference results, not measured here; Verdict cannot load or call it. The image and audio timings are approximate, not part of the recorded text benchmark.
+⚠ Laya Typed decisions has poorly calibrated confidence in these results. Do not treat their probabilities as reliable thresholds without validation on your data. † Jev figures are published reference results, not measured here; Verdict cannot load or call it. The image and audio timings are approximate, not part of the recorded text benchmark.
 
 <details>
 <summary>Context, precision and limits</summary>
 
-**Context.** Laya runs at its encoder's real limit of 8,192 tokens (its shipped config says 512; on 300 long BBC articles with the decisive text after 800 tokens of filler, accuracy was 26% at 512 and 91% at 1,024 and above). Gemma takes 131,072. Questions count toward the budget. Over-limit items return errors rather than truncated judgements.
+**Context.** Laya runs at its encoder's real limit of 8,192 tokens (its shipped config says 512; on 300 long BBC articles with the decisive text after 800 tokens of filler, accuracy was 26% at 512 and 91% at 1,024 and above). Questions count toward the budget. Over-limit items return errors rather than truncated judgements.
 
-**Precision.** Laya defaults to 16-bit (fp32 measured identical; 8-bit costs 0.2 points and saves ~350 MB per model, 4-bit costs a point and saves ~530 MB; neither is faster). Change it per model in the table. Gemma is published only as 4-bit weights.
-
-**Gemma on audio.** Its scores are raw likelihoods and can swing with the question set: on the same clip, a lone yes/no scored 0.04 while the same question asked alongside a choice and a second yes/no scored 0.98 (0.87 as text). Ask several questions together and treat single audio yes/no answers with suspicion.
+**Precision.** Laya defaults to 16-bit (fp32 measured identical; 8-bit costs 0.2 points and saves ~350 MB per model, 4-bit costs a point and saves ~530 MB; neither is faster). Change it per model in the table.
 
 **Limits.** Each judgement sees one item, not the whole collection. Sort scores in code; do not expect cross-item reasoning. Use ordinary code for counting, arithmetic and date comparisons. Keep choice labels distinct, include an escape option, and write rubric levels as checkable situations. Test domain-specific rules on labelled examples before relying on them.
 
@@ -258,9 +253,9 @@ With **Keep Hot → Always**, loaded models stay resident. Choose an idle window
 </details>
 
 <details>
-<summary>Can it judge screenshots?</summary>
+<summary>Can it judge images, audio or video?</summary>
 
-Yes. Pass `{"image": "/path/to/screenshot.png"}` to `judge()` with your questions; auto-routing selects Gemma E2B RLCD. Use it for coarse classification, such as identifying an error screen, not precise small-text reading or element counting. Validate its answers and do not assume its confidence is calibrated.
+No. Verdict judges text. The multimodal decision models we tried were far larger and worse at the job than the text models, so they are not in the catalog; an item with an `image`, `audio` or `video` path comes back as a per-item error.
 
 </details>
 
@@ -275,4 +270,4 @@ To remove downloaded weights, delete the models from the table first. Then quit 
 
 ## Licence
 
-[Apache-2.0](LICENSE). Keep the [NOTICE](NOTICE) when you redistribute. Laya weights © Convai Innovations (Apache-2.0), MLX conversions by [mizorewww](https://github.com/mizorewww/laya-mlx); Gemma E2B RLCD by [larkooo](https://huggingface.co/larkooo/gemma-e2b-rlcd) (Apache-2.0; Gemma terms apply to the base weights).
+[Apache-2.0](LICENSE). Keep the [NOTICE](NOTICE) when you redistribute. Laya weights © Convai Innovations (Apache-2.0), MLX conversions by [mizorewww](https://github.com/mizorewww/laya-mlx).

@@ -137,8 +137,6 @@ import VerdictCore
         s.items = 1204; s.last_ms = 6.6
         states.append(("hot", s, nil, nil))
         s.models["laya-multilingual"] = LoadedModel(device: "mlx", load_s: 3.1)
-        s.installed["gemma-e2b-rlcd"] = InstalledModel(bytes: 3_580_000_000)
-        s.models["gemma-e2b-rlcd"] = LoadedModel(device: "mlx", load_s: 7.2)
         states.append(("two-hot", s, nil, nil))
         states.append(("error", s, "Could not download aac6fef/laya-typed-decisions-mlx: network unreachable", nil))
         states.append(("busy", s, nil, "laya-typed-decisions"))

@@ -250,13 +250,10 @@ def has_media(item):
 
 
 def pick_model(item, requested):
+    if has_media(item):
+        return None  # text only: media items get a per-item error in judge(), whatever model was requested
     if requested and requested != 'auto':
         return requested
-    if has_media(item):
-        for m in CATALOG:
-            if 'image' in m.get('inputs', []) and m.get('repository'):
-                return m['id']
-        raise ValueError('No multimodal model in the catalog')
     text = json.dumps(item, ensure_ascii=False) if not isinstance(item, str) else item
     # Always the best model for the language; an unloaded one is loaded, never substituted.
     return 'laya-english' if is_english(text) else 'laya-multilingual'
@@ -322,6 +319,9 @@ def judge(items, questions, requested='auto'):
         groups = {}
         for i, item in enumerate(items):
             model_id = pick_model(item, requested)
+            if model_id is None:
+                out[i] = {'error': 'Verdict judges text; image, audio and video items are not supported.', 'model': None, 'ms': 0}
+                continue
             groups.setdefault(model_id, []).append(i)
         for model_id, idxs in groups.items():
             agent = load(model_id)

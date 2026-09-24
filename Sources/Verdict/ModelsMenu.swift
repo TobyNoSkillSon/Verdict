@@ -165,8 +165,7 @@ struct ModelTable: View {
     @ViewBuilder private func precisionPicker(_ model: CatalogModel, hot: Bool, loading: Bool) -> some View {
         if model.reference == true {
             Text("—").foregroundStyle(.secondary)
-        } else if model.runtime == "gemma_rlcd" {
-            Text("4").help("Only a 4-bit MLX checkpoint is published.")
+
         } else {
             Picker("", selection: Binding(get: { backend.precision(model.id) }, set: { backend.setPrecision(model.id, $0) })) {
                 Text("16").tag(0); Text("8").tag(8); Text("4").tag(4)

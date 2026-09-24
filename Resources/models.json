@@ -75,33 +75,6 @@
     }
   },
   {
-    "id": "gemma-e2b-rlcd",
-    "name": "Gemma E2B \u00b7 RLCD",
-    "backbone": "Gemma 4 E2B (4-bit)",
-    "params": "5B",
-    "repository": "larkooo/gemma-e2b-rlcd",
-    "subfolder": "",
-    "downloadBytes": 3600000000,
-    "context": 131072,
-    "languages": "140+ languages",
-    "license": "apache-2.0",
-    "recommendation": "Multimodal: text, image, audio, video. Scores allowed answers with a generative model; probabilities are uncalibrated until fitted.",
-    "recommended": false,
-    "runtime": "gemma_rlcd",
-    "inputs": [
-      "text",
-      "image",
-      "audio",
-      "video"
-    ],
-    "links": {
-      "upstream": "https://huggingface.co/google/gemma-4-E2B-it",
-      "weights": "https://huggingface.co/larkooo/gemma-e2b-rlcd",
-      "runtime": "https://github.com/Larkooo/gemma-e2b-rlcd",
-      "family": "Gemma RLCD"
-    }
-  },
-  {
     "id": "jev",
     "name": "Jev \u00b7 TypeSafe",
     "backbone": "closed",

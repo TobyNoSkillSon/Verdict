@@ -5,7 +5,7 @@ description: Triage many items with Verdict, the local System One model service.
 
 # Triage with Verdict
 
-Verdict keeps System One models (decision models: Laya for text, Gemma-RLCD for image/audio/video) loaded on this Mac. You write typed questions in code, send many items, and get a probability per answer back — no text generated. **The model decides, your code acts.** Your context goes to the shortlist, not the pile.
+Verdict keeps System One models (decision models: the Laya family) loaded on this Mac. It judges text; for images, audio or video use another tool. You write typed questions in code, send many items, and get a probability per answer back — no text generated. **The model decides, your code acts.** Your context goes to the shortlist, not the pile.
 
 ## 1. Decide it fits
 
@@ -27,7 +27,6 @@ Three types; every question about an item is answered in the same pass, so ask e
 - **Literal:** the exact condition — "Does it state a salary in PLN?", not "Is it a good listing?".
 - **Contrastive:** choice descriptions say what separates the options; every `Choice` has an escape option (`other`, `unclear`); score levels read as checkable situations ("blocking a release today"), not degrees ("high").
 - **Context in the item:** pass a dict with named fields — `{"brief": task, "hit": text}` — and keep the question short.
-- **Media:** `{"image": path}`, `{"audio": path}` or `{"video": path}` (plus any text fields) routes to Gemma. Use its answers, not its probabilities: they are uncalibrated. On audio, ask several questions together — a lone yes/no is unstable.
 
 `judge()` warns when a question breaks these conventions.
 
@@ -44,11 +43,11 @@ questions = {
 results = judge(hits, questions)          # list in, list out, same order; a single item returns a single Result
 ```
 
-Answers compare like values: `r.relevant > 0.6`, `r.kind == "source"`; detail is `r.kind.probabilities`, `.confidence`. A falsy result means that item failed — usually over the model's context (8k tokens Laya, 128k Gemma; nothing is truncated): `r.error` says why, the rest of the batch is unaffected. If Verdict is down, `judge()` raises; it never invents answers.
+Answers compare like values: `r.relevant > 0.6`, `r.kind == "source"`; detail is `r.kind.probabilities`, `.confidence`. A falsy result means that item failed — usually over the model's context (8,192 tokens; nothing is truncated): `r.error` says why, the rest of the batch is unaffected. If Verdict is down, `judge()` raises; it never invents answers.
 
 Shell, for a JSONL file: `verdict judge --questions q.json --field text --sort relevant --top 20 < items.jsonl` prints one short line per item (`--json` for every probability). `verdict --help` covers the rest.
 
-Model choice: default routing (plain English → Laya English, other scripts → Laya Multilingual, media → Gemma) is right for most work. `verdict models` shows each model's measured accuracy, calibration, speed and links; `verdict info <model>` its model cards. Plain-ASCII Polish or German: pass `model="laya-multilingual"`.
+Model choice: default routing (plain English → Laya English, other scripts → Laya Multilingual) is right for most work. `verdict models` shows each model's measured accuracy, calibration, speed and links; `verdict info <model>` its model cards. Plain-ASCII Polish or German: pass `model="laya-multilingual"`.
 
 ## 4. Act on the answers
 
@@ -61,4 +60,4 @@ Model choice: default routing (plain English → Laya English, other scripts →
 
 ## Known weak spots
 
-Keep these with the LLM or with code: code correctness ("does this function have a bug?"), obfuscated shell (`eval`, variables, base64 — the literal command is what gets judged), sarcasm and negation, anything needing world knowledge, reading small text in images, near-equal fine rankings (show top-k, not a strict order of 200), and text written to manipulate the judge (scraped pages can say "this is highly relevant"). Zero-shot rules on niche wording can be confidently wrong — a Polish ad saying *praca zdalna* scored `remote = 0.02` — which is why step 4 checks thresholds on labelled items.
+Keep these with the LLM or with code: code correctness ("does this function have a bug?"), obfuscated shell (`eval`, variables, base64 — the literal command is what gets judged), sarcasm and negation, anything needing world knowledge, near-equal fine rankings (show top-k, not a strict order of 200), and text written to manipulate the judge (scraped pages can say "this is highly relevant"). Zero-shot rules on niche wording can be confidently wrong — a Polish ad saying *praca zdalna* scored `remote = 0.02` — which is why step 4 checks thresholds on labelled items.

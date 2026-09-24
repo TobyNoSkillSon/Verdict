@@ -1,16 +1,4 @@
 {
-  "gemma-e2b-rlcd": {
-    "accuracy": 0.657,
-    "ece": 0.315,
-    "ms": 36.6,
-    "n": 200,
-    "note": "Probabilities are raw Gemma likelihoods (calibration_status: unvalidated); the argmax is usable, the confidence is not until a temperature is fitted.",
-    "sets": {
-      "ag_news": 0.76,
-      "emotion": 0.555
-    },
-    "source": "measured"
-  },
   "jev": {
     "accuracy": 0.695,
     "ece": 0.246,

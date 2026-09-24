@@ -34,7 +34,7 @@ from verdict import judge, status
 results = judge(items, questions, model="auto", batch=64)
 ```
 
-`items` can be strings or dicts (dicts are shown to the model as JSON, so name the fields). Media go in dict keys `image`/`images`, `audio`, `video`/`videos` as local paths and route to the multimodal model. Context is 8,192 tokens for the Laya models and 128k for Gemma, questions included; an item over the limit is returned as `{"error": ...}` in its position — nothing is truncated.
+`items` can be strings or dicts (dicts are shown to the model as JSON, so name the fields). Items with image, audio or video paths return a per-item error; Verdict judges text...}` in its position — nothing is truncated.
 
 ## Writing questions
 
