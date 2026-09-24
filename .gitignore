@@ -9,3 +9,7 @@ native/.build*/
 native/.build*.log
 native/.swiftpm/
 native/dist/
+bench/results/
+bench/research/
+bench/__pycache__/
+bench/tasks/__pycache__/
