@@ -30,6 +30,7 @@ public final class LayaModel: DecisionModel {
     static let sortByLength = ProcessInfo.processInfo.environment["VERDICT_LAYA_ARRIVAL_ORDER"] != "1"
     static let tokenBudget = Int(ProcessInfo.processInfo.environment["VERDICT_LAYA_TOKEN_BUDGET"] ?? "") ?? 8192
     static let padMultiple = Int(ProcessInfo.processInfo.environment["VERDICT_LAYA_PAD_MULTIPLE"] ?? "") ?? 16
+    static let parallelBytesFast = Int(ProcessInfo.processInfo.environment["VERDICT_LAYA_PARALLEL_BYTES"] ?? "") ?? Int.max
     static let profile = ProcessInfo.processInfo.environment["VERDICT_PROFILE"] == "1"
     private var questionCache: [String: (template: LayaPrompt.QuestionTemplate, count: Int)] = [:]
 
@@ -142,7 +143,10 @@ public final class LayaModel: DecisionModel {
     /// Serial below ~8 items or ~4 KB of text, where thread hand-off costs more than it saves.
     private func encodeStates(_ texts: [String]) -> [(ids: [Int], count: Int)] {
         let prompt = self.prompt, bytes = texts.reduce(0) { $0 + $1.utf8.count }
-        if texts.count < 8 || bytes < 4096 { return texts.map { prompt.encodeState($0) } }
+        // The fast tokenizer encodes ~5 MB/s per core: go parallel only when a serial pass would take
+        // several milliseconds; below that, thread hand-off and word-cache locking cost more CPU than they save.
+        let threshold = prompt.hasFastTokenizer ? Self.parallelBytesFast : 4096   // fast: serial measured best (35% vs 50% CPU, same speed)
+        if texts.count < 8 || bytes < threshold { return texts.map { prompt.encodeState($0) } }
         var out = [(ids: [Int], count: Int)](repeating: ([], 0), count: texts.count)
         out.withUnsafeMutableBufferPointer { buffer in
             let base = buffer.baseAddress!

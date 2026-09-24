@@ -45,6 +45,7 @@ public final class LayaPrompt {
         (_, clsID) = try special("cls_token"); (_, sepID) = try special("sep_token")
         (_, padID) = try special("pad_token"); (maskToken, maskID) = try special("mask_token")
     }
+    var hasFastTokenizer: Bool { fastTokenizer != nil }
     public func encode(_ text: String, addSpecialTokens: Bool = false) -> [Int] {
         fastTokenizer?.encode(text, addSpecialTokens: addSpecialTokens)
             ?? tokenizer.encode(text: text, addSpecialTokens: addSpecialTokens)
