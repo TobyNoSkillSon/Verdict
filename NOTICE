@@ -4,3 +4,7 @@ Bundles no model weights. At runtime it downloads community MLX conversions
 (aac6fef/laya-mlx, aac6fef/laya-multilingual-mlx, aac6fef/laya-typed-decisions-mlx)
 of Laya by Convai Innovations (Apache-2.0), using the laya-mlx runtime by
 mizorewww (https://github.com/mizorewww/laya-mlx) and MLX by Apple.
+
+Von 1.1 and 1.2 by wfzyx (Apache-2.0) are optional runtime downloads from
+https://huggingface.co/wfzyx/von at pinned revisions. Verdict distributes no
+Von weights; its native inference code implements Von's option-marker model.

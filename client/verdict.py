@@ -372,7 +372,10 @@ def _main(argv):
             print(f"{'model':22} {'inputs':24} {'context':>7} {'accuracy':>8} {'ece':>6} {'speed':>7}  {'state':10} weights")
             for m in sorted(ms, key=lambda m: -(m['benchmark'] or {}).get('accuracy', 0)):
                 b = m['benchmark'] or {}
-                print(f"{m['id']:22} {','.join(m['inputs']):24} {m['context']:>7} {b.get('accuracy', 0)*100:>7.1f}% {b.get('ece', 0):>6.3f} {b.get('ms', 0):>4.0f} ms  {m['state']:10} {m['links'].get('weights') or m['links'].get('upstream', '')}")
+                acc = f"{b['accuracy']*100:>7.1f}%" if b.get('accuracy') is not None else f"{'—':>8}"
+                ece = f"{b['ece']:>6.3f}" if b.get('ece') is not None else f"{'—':>6}"
+                spd = f"{b['ms']:>4.0f} ms" if b.get('ms') else f"{'—':>7}"
+                print(f"{m['id']:22} {','.join(m['inputs']):24} {m['context']:>7} {acc} {ece} {spd}  {m['state']:10} {m['links'].get('weights') or m['links'].get('upstream', '')}")
             print("\nverdict info <model> for details and model-card links; verdict models --json for everything.")
             return 0
         if cmd == 'info':

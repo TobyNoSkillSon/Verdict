@@ -1,7 +1,7 @@
 [
   {
     "id": "laya-english",
-    "name": "Laya \u00b7 English",
+    "name": "Laya · English",
     "backbone": "ModernBERT-large",
     "params": "421M",
     "repository": "aac6fef/laya-mlx",
@@ -26,7 +26,7 @@
   },
   {
     "id": "laya-multilingual",
-    "name": "Laya \u00b7 Multilingual",
+    "name": "Laya · Multilingual",
     "backbone": "mmBERT-base",
     "params": "322M",
     "repository": "aac6fef/laya-multilingual-mlx",
@@ -51,7 +51,7 @@
   },
   {
     "id": "laya-typed-decisions",
-    "name": "Laya \u00b7 Typed decisions",
+    "name": "Laya · Typed decisions",
     "backbone": "ModernBERT-large",
     "params": "421M",
     "repository": "aac6fef/laya-typed-decisions-mlx",
@@ -75,10 +75,58 @@
     }
   },
   {
+    "id": "von-1.2",
+    "name": "Von · 1.2",
+    "backbone": "ModernBERT-large",
+    "params": "395M",
+    "repository": "wfzyx/von",
+    "revision": "5df8185a4f2327ad0a7cd117cc4f701ac557b9ae",
+    "subfolder": "",
+    "downloadBytes": 1584908301,
+    "context": 8192,
+    "languages": "English",
+    "license": "apache-2.0",
+    "recommendation": "Option-marker decisions; compare with Laya before choosing a default.",
+    "recommended": false,
+    "runtime": "von",
+    "inputs": [
+      "text"
+    ],
+    "links": {
+      "upstream": "https://huggingface.co/wfzyx/von",
+      "weights": "https://huggingface.co/wfzyx/von/tree/5df8185a4f2327ad0a7cd117cc4f701ac557b9ae",
+      "family": "Von"
+    }
+  },
+  {
+    "id": "von-1.1",
+    "name": "Von · 1.1",
+    "backbone": "ModernBERT-large",
+    "params": "395M",
+    "repository": "wfzyx/von",
+    "revision": "d8bb5e0745d8ee1fb65d536d6d4892d54d5a93fd",
+    "subfolder": "",
+    "downloadBytes": 1584907147,
+    "context": 8192,
+    "languages": "English",
+    "license": "apache-2.0",
+    "recommendation": "Option-marker decisions; compare with Laya before choosing a default.",
+    "recommended": false,
+    "runtime": "von",
+    "inputs": [
+      "text"
+    ],
+    "links": {
+      "upstream": "https://huggingface.co/wfzyx/von",
+      "weights": "https://huggingface.co/wfzyx/von/tree/d8bb5e0745d8ee1fb65d536d6d4892d54d5a93fd",
+      "family": "Von"
+    }
+  },
+  {
     "id": "jev",
-    "name": "Jev \u00b7 TypeSafe",
+    "name": "Jev · TypeSafe",
     "backbone": "closed",
-    "params": "\u2014",
+    "params": "—",
     "repository": "",
     "subfolder": "",
     "downloadBytes": 0,

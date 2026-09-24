@@ -39,9 +39,16 @@ private final class StubModel: DecisionModel {
     }
 }
 
-let productionLoaders: [String: ModelLoader.Type] = ["laya": LayaLoader.self]
+let productionLoaders: [String: ModelLoader.Type] = ["laya": LayaLoader.self, "von": VonLoader.self]
+
+// MLX enables TF32 GEMM by default. Von ships f32 PyTorch weights, and TF32
+// changes its first QKV projection by ~2e-4; 28 layers amplify that into
+// ~0.001 probability drift. Configure before *any* model's first matmul because
+// MLX caches this process-wide flag on first access (Laya may load before Von).
+private let preciseMatmulConfigured: Void = { setenv("MLX_ENABLE_TF32", "0", 1) }()
 
 func loader(runtime: String) throws -> ModelLoader.Type {
+    _ = preciseMatmulConfigured
     if ProcessInfo.processInfo.environment["VERDICT_STUB_MODELS"] == "1" { return StubLoader.self }
     guard let type = productionLoaders[runtime] else {
         throw ServiceError("Native \(runtime) loader is not ready; the Python worker remains the production path")

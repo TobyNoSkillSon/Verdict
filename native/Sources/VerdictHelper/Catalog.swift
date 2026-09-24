@@ -4,6 +4,7 @@ import CryptoKit
 struct ModelSpec {
     let id: String
     let repository: String
+    let revision: String?
     let runtime: String
     let context: Int
     let inputs: [String]
@@ -39,7 +40,7 @@ final class Catalog {
         raw = obj
         entries = obj.compactMap { m in
             guard let id = m["id"] as? String else { return nil }
-            return ModelSpec(id: id, repository: m["repository"] as? String ?? "", runtime: m["runtime"] as? String ?? "laya", context: m["context"] as? Int ?? 8192, inputs: m["inputs"] as? [String] ?? [], raw: m)
+            return ModelSpec(id: id, repository: m["repository"] as? String ?? "", revision: m["revision"] as? String, runtime: m["runtime"] as? String ?? "laya", context: m["context"] as? Int ?? 8192, inputs: m["inputs"] as? [String] ?? [], raw: m)
         }
         cache = URL(fileURLWithPath: env["HF_HUB_CACHE"] ?? ((env["HF_HOME"] ?? ((env["HOME"] ?? NSHomeDirectory()) + "/.cache/huggingface")) + "/hub"), isDirectory: true)
     }
@@ -53,14 +54,18 @@ final class Catalog {
         cache.appendingPathComponent("models--" + spec.repository.replacingOccurrences(of: "/", with: "--"), isDirectory: true)
     }
     private func required(_ spec: ModelSpec) -> [String] {
-        ["model.safetensors", "manifest.json", "mlx_config.json"]
+        spec.runtime == "von" ? ["option_marker.pt", "config.json", "tokenizer.json", "tokenizer_config.json", "marker_calibration.json"] : ["model.safetensors", "manifest.json", "mlx_config.json"]
     }
     func cached(_ spec: ModelSpec) -> URL? {
         let base = base(spec)
-        let ref = (try? String(contentsOf: base.appendingPathComponent("refs/main"), encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let ref = spec.revision ?? (try? String(contentsOf: base.appendingPathComponent("refs/main"), encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
         let snapshots = base.appendingPathComponent("snapshots")
-        let dirs = ([ref].compactMap { $0 } + ((try? fm.contentsOfDirectory(atPath: snapshots.path)) ?? [])).map { snapshots.appendingPathComponent($0) }
-        return dirs.first { dir in fm.fileExists(atPath: dir.appendingPathComponent("model.safetensors").path) }
+        let names = spec.revision.map { [$0] } ?? ([ref].compactMap { $0 } + ((try? fm.contentsOfDirectory(atPath: snapshots.path)) ?? []))
+        let dirs = names.map { snapshots.appendingPathComponent($0) }
+        return dirs.first { dir in
+            let files = spec.runtime == "von" ? required(spec) : ["model.safetensors"]
+            return files.allSatisfy { fm.fileExists(atPath: dir.appendingPathComponent($0).path) }
+        }
     }
     func installed() -> [String: Any] {
         var out: [String: Any] = [:]
@@ -77,22 +82,37 @@ final class Catalog {
     }
     func delete(_ spec: ModelSpec) {
         guard let dir = cached(spec) else { return }
+        let root = base(spec)
+        let ownedBlobs = root.appendingPathComponent("blobs").standardizedFileURL.path + "/"
+        let snapshots = root.appendingPathComponent("snapshots")
         for file in required(spec) {
             let link = dir.appendingPathComponent(file)
             let blob = link.resolvingSymlinksInPath()
             try? fm.removeItem(at: link)
-            if blob.path != link.path { try? fm.removeItem(at: blob) }
+            // A manually linked local checkpoint belongs to its owner, not to
+            // this cache. Different pinned Von revisions may also share blobs.
+            if blob.standardizedFileURL.path.hasPrefix(ownedBlobs),
+               let siblings = try? fm.contentsOfDirectory(at: snapshots, includingPropertiesForKeys: nil),
+               !siblings.contains(where: { sibling in
+                   required(spec).contains { name in
+                       let candidate = sibling.appendingPathComponent(name)
+                       return fm.fileExists(atPath: candidate.path) && candidate.resolvingSymlinksInPath() == blob
+                   }
+               }) {
+                try? fm.removeItem(at: blob)
+            }
         }
+        if spec.runtime == "von" { try? fm.removeItem(at: dir.appendingPathComponent("von-encoder.safetensors")) }
     }
     func snapshot(_ spec: ModelSpec) throws -> URL {
         if let cached = cached(spec), required(spec).allSatisfy({ fm.fileExists(atPath: cached.appendingPathComponent($0).path) }) { return cached }
-        let url = URL(string: "https://huggingface.co/api/models/\(spec.repository)/revision/main")!
+        let url = URL(string: "https://huggingface.co/api/models/\(spec.repository)/revision/\(spec.revision ?? "main")")!
         let data = try downloadData(url)
         guard let meta = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let sha = meta["sha"] as? String, let siblings = meta["siblings"] as? [[String: Any]] else { throw ServiceError("Invalid Hugging Face manifest for \(spec.id)") }
+              let sha = meta["sha"] as? String, let siblings = meta["siblings"] as? [[String: Any]], spec.revision == nil || sha == spec.revision else { throw ServiceError("Invalid Hugging Face manifest/revision for \(spec.id)") }
         let root = base(spec), dest = root.appendingPathComponent("snapshots/\(sha)")
         try fm.createDirectory(at: dest, withIntermediateDirectories: true)
-        let selected: Set<String> = ["model.safetensors", "manifest.json", "mlx_config.json", "rl_agent_config.json", "validation.json", "encoder/config.json", "tokenizer/tokenizer.json", "tokenizer/tokenizer_config.json"]
+        let selected: Set<String> = spec.runtime == "von" ? Set(required(spec)) : ["model.safetensors", "manifest.json", "mlx_config.json", "rl_agent_config.json", "validation.json", "encoder/config.json", "tokenizer/tokenizer.json", "tokenizer/tokenizer_config.json"]
         // HF's tree metadata supplies the same content-addressed blob names as huggingface_hub.
         var metadata: [String: [String: Any]] = [:]
         let folders = Set([""] + selected.compactMap { $0.contains("/") ? String($0.split(separator: "/").first!) : nil })
@@ -140,7 +160,7 @@ final class Catalog {
         }
         let refs = root.appendingPathComponent("refs")
         try fm.createDirectory(at: refs, withIntermediateDirectories: true)
-        try sha.write(to: refs.appendingPathComponent("main"), atomically: true, encoding: .utf8)
+        if spec.revision == nil { try sha.write(to: refs.appendingPathComponent("main"), atomically: true, encoding: .utf8) }
         guard required(spec).allSatisfy({ fm.fileExists(atPath: dest.appendingPathComponent($0).path) }) else { throw ServiceError("Incomplete snapshot for \(spec.id)") }
         return dest
     }
