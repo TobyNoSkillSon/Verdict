@@ -30,7 +30,7 @@ final class Service {
         Memory.cacheLimit = cacheLimit * 1024 * 1024
     }
     func start(port: Int) { locked { state["port"] = port; writeStatus() } }
-    func finish() { locked { state["models"] = [:]; state["port"] = NSNull(); writeStatus() } }
+    func finish() { locked { state["models"] = [:]; state["port"] = NSNull(); writeStatus() }; flushStatus() }
     func preload() {
         for id in (ProcessInfo.processInfo.environment["VERDICT_PRELOAD"] ?? "").split(separator: ",") {
             do { try locked { _ = try load(String(id)) } }
@@ -50,17 +50,30 @@ final class Service {
         }
         return ["rss_mb": lastRSS.1, "mlx_active_mb": (Double(Memory.activeMemory) / 1e6).rounded(), "mlx_cache_mb": (Double(Memory.cacheMemory) / 1e6).rounded()]
     }
-    private func writeStatus() {
-        do {
-            try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
-            var value = state; value["updated"] = Date().timeIntervalSince1970; value["installed"] = catalog.installed(); value["memory"] = memory()
-            let bytes = try JSONSerialization.data(withJSONObject: value)
-            let tmp = support.appendingPathComponent("status.\(getpid()).\(UUID().uuidString).tmp")
-            try bytes.write(to: tmp)
-            let target = support.appendingPathComponent("status.json")
-            guard rename(tmp.path, target.path) == 0 else { throw ServiceError("status.json rename failed: \(errno)") }
-        } catch { fputs("status write: \(error)\n", stderr) }
+    /// Disk scan of downloaded snapshots; only load/download/delete change it, so judgements reuse it.
+    private var installedCache: [String: Any]?
+    /// Judgements write status.json off the request path (serial queue keeps writes ordered); a judgement
+    /// used to spend ~1.2 ms here on a catalog disk scan, JSON and an atomic rename. Lifecycle changes
+    /// (load, unload, delete, settings) stay synchronous: once they return, the file reflects them.
+    private let statusQueue = DispatchQueue(label: "verdict.status")
+    private func writeStatus(refreshInstalled: Bool = true, background: Bool = false) {
+        if refreshInstalled || installedCache == nil { installedCache = catalog.installed() }
+        var value = state; value["updated"] = Date().timeIntervalSince1970; value["installed"] = installedCache!; value["memory"] = memory()
+        guard let bytes = try? JSONSerialization.data(withJSONObject: value) else { fputs("status write: unserializable state\n", stderr); return }
+        let support = self.support
+        let write = {
+            do {
+                try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+                let tmp = support.appendingPathComponent("status.\(getpid()).\(UUID().uuidString).tmp")
+                try bytes.write(to: tmp)
+                let target = support.appendingPathComponent("status.json")
+                guard rename(tmp.path, target.path) == 0 else { throw ServiceError("status.json rename failed: \(errno)") }
+            } catch { fputs("status write: \(error)\n", stderr) }
+        }
+        if background { statusQueue.async(execute: write) } else { statusQueue.sync(execute: write) }
     }
+    /// Block until queued status writes reach disk (shutdown).
+    func flushStatus() { statusQueue.sync {} }
     private func load(_ id: String) throws -> DecisionModel {
         if let existing = models[id] { return existing }
         let spec = try catalog.spec(id)
@@ -184,7 +197,10 @@ final class Service {
         }
         state["last_used"] = Date().timeIntervalSince1970; state["idle_unloaded"] = false
         if Memory.cacheMemory > cacheLimit * 1_000_000 { Memory.clearCache() }
-        writeStatus(); return ["results": results]
+        let w = ContinuousClock.now
+        writeStatus(refreshInstalled: false, background: true)
+        if ProcessInfo.processInfo.environment["VERDICT_PROFILE"] == "1" { FileHandle.standardError.write(Data("profile status-write \(ContinuousClock.now - w)\n".utf8)) }
+        return ["results": results]
     }
     private func resultObject(_ result: ItemResult, _ id: String, _ ms: Double) -> [String: Any] {
         switch result {
