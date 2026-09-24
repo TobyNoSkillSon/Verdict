@@ -28,6 +28,15 @@ STATUS = SUPPORT / 'status.json'
 CATALOG = json.loads((Path(__file__).with_name('models.json')).read_text())
 BY_ID = {m['id']: m for m in CATALOG}
 LOCK = threading.Lock()
+# MLX streams belong to the thread that created them (mlx-audio's audio path creates one at load).
+# Every model operation therefore runs on one dedicated thread; HTTP and housekeeping threads submit to it.
+from concurrent.futures import ThreadPoolExecutor
+_MLX_THREAD = ThreadPoolExecutor(max_workers=1, thread_name_prefix='mlx')
+
+
+def on_mlx(fn, *args, **kwargs):
+    """Run fn on the single MLX thread and return its result (exceptions propagate). Callers must not hold LOCK."""
+    return _MLX_THREAD.submit(fn, *args, **kwargs).result()
 STATE = {'models': {}, 'calls': 0, 'items': 0, 'last_ms': None, 'started': time.time(), 'port': None, 'pid': os.getpid(), 'loading': None, 'error': None, 'last_used': time.time(), 'idle_minutes': int(os.environ.get('VERDICT_IDLE_MINUTES') or 0)}
 AGENTS = {}
 CACHE_LIMIT_MB = int(os.environ.get('VERDICT_CACHE_LIMIT_MB') or 1024)
@@ -352,6 +361,11 @@ def judge(items, questions, requested='auto'):
     return out
 
 
+def _locked(fn, *args):
+    with LOCK:
+        return fn(*args)
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = 'HTTP/1.1'
 
@@ -379,31 +393,31 @@ class Handler(BaseHTTPRequestHandler):
         try:
             b = self.body()
             if self.path == '/judge':
-                return self.send(200, {'results': judge(b.get('items'), b.get('questions'), b.get('model', 'auto'))})
+                return self.send(200, {'results': on_mlx(judge, b.get('items'), b.get('questions'), b.get('model', 'auto'))})
             if self.path == '/load':
-                with LOCK:
-                    if 'bits' in b:
-                        PRECISION[b['model']] = int(b['bits'] or 0)
-                        unload(b['model'])
-                    load(b['model'])
+                def _load():
+                    with LOCK:
+                        if 'bits' in b:
+                            PRECISION[b['model']] = int(b['bits'] or 0)
+                            unload(b['model'])
+                        load(b['model'])
+                on_mlx(_load)
                 return self.send(200, {'loaded': list(AGENTS)})
             if self.path == '/unload':
-                with LOCK:
-                    unload(b['model'])
+                on_mlx(lambda: _locked(unload, b['model']))
                 return self.send(200, {'loaded': list(AGENTS)})
             if self.path == '/delete':
-                with LOCK:
-                    delete(b['model'])
+                on_mlx(lambda: _locked(delete, b['model']))
                 return self.send(200, {'installed': installed()})
             if self.path == '/shed':
                 # Memory pressure: keep the first hot model, drop the rest and all cache.
-                with LOCK:
-                    shed()
+                on_mlx(lambda: _locked(shed))
                 return self.send(200, {'loaded': list(AGENTS)})
             if self.path == '/trim':
-                with LOCK:
+                def _trim():
                     import mlx.core as mx
                     mx.clear_cache()
+                on_mlx(lambda: _locked(_trim))
                 return self.send(200, {'ok': True})
             if self.path == '/settings':
                 STATE['idle_minutes'] = int(b.get('idle_minutes', STATE['idle_minutes']) or 0); STATE['last_used'] = time.time(); write_status()
@@ -468,8 +482,7 @@ def main():
     def warm():
         for m in preload:
             try:
-                with LOCK:
-                    load(m)
+                on_mlx(_locked, load, m)
             except Exception as e:
                 print(json.dumps({'error': str(e)[:300]}), file=sys.stderr, flush=True)
     threading.Thread(target=warm, daemon=True).start()
@@ -481,21 +494,24 @@ def main():
             time.sleep(30)
             free = free_memory_pct()
             if len(AGENTS) > 1 and free < SHED_FREE_PCT and not STATE.get('loading'):
-                with LOCK:
-                    shed()
+                on_mlx(_locked, shed)
                 continue
             if free < TRIM_FREE_PCT:
-                try:
+                def _trim():
                     import mlx.core as mx
                     mx.clear_cache()
+                try:
+                    on_mlx(_trim)
                 except Exception:
                     pass
             minutes = STATE.get('idle_minutes') or 0
             if minutes and AGENTS and time.time() - STATE['last_used'] > minutes * 60 and not STATE.get('loading'):
-                with LOCK:
-                    for m in list(AGENTS):
-                        unload(m)
-                    STATE['idle_unloaded'] = True; write_status()
+                def _idle():
+                    with LOCK:
+                        for m in list(AGENTS):
+                            unload(m)
+                        STATE['idle_unloaded'] = True; write_status()
+                on_mlx(_idle)
     threading.Thread(target=idle_watch, daemon=True).start()
     try:
         server.serve_forever()
