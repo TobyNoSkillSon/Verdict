@@ -57,11 +57,11 @@ POST /quit
 
 ## Adding models
 
-`Resources/models.json` is the catalog. A candidate needs: open weights with a licence that allows local use, a `predict(state, questions)` interface over the three question types, per-answer probabilities, and an MLX or otherwise Apple-Silicon-native runtime with load times in seconds. Add the entry, point `repository` at the weights, and — if it is not a Laya checkpoint — add a loader branch in `Resources/worker.py`.
+`Resources/models.json` is the catalog. A candidate needs: open weights with a licence that allows local use, a typed-question interface over choice / score / yes-no with per-answer probabilities, and an architecture that can be implemented on mlx-swift. Add the entry, implement a `DecisionModel` + `ModelLoader` in `native/Sources/VerdictEngine`, register it in `native/Sources/VerdictHelper/Registry.swift`, prove parity against the model's reference implementation on fixed fixtures, then run `scripts/benchmark.py`.
 
 ## Troubleshooting
 
-- **Worker exited / orange header** — open the log from the header. The usual cause is a broken runtime; rerun `scripts/setup-backend.sh`.
+- **Worker exited / orange header** — open the log from the header. Reinstall with `git pull && scripts/install.sh` if the helper is missing or damaged.
 - **First load is slow** — that is the download (~0.6–0.85 GB per model). Later loads take a few seconds.
 - **`verdict` says not running and the app is installed elsewhere** — set `VERDICT_APP=/path/to/Verdict.app`.
 - **Wrong language model** — pass `--model laya-multilingual`; auto-routing only switches on non-ASCII text.

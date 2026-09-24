@@ -52,7 +52,7 @@ import VerdictCore
         if FileManager.default.fileExists(atPath: Self.configURL.path) {
             return try JSONDecoder().decode(Configuration.self, from: Data(contentsOf: Self.configURL))
         }
-        return Configuration(executable: bundledHelper?.path ?? Self.support.appendingPathComponent("runtime/bin/python").path)
+        return Configuration(executable: bundledHelper?.path ?? "")
     }
     func save(_ config: Configuration) throws {
         try FileManager.default.createDirectory(at: Self.support, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
@@ -69,37 +69,8 @@ import VerdictCore
         return FileManager.default.isExecutableFile(atPath: helper.path) ? helper : nil
     }
 
-    var runtimeReady: Bool {
-        if bundledHelper != nil { return true }
-        return (try? configuration().validate()) != nil && FileManager.default.isExecutableFile(atPath: (try? configuration())?.executable ?? "")
-    }
-    private var setup: Process?
-
-    /// Runs the bundled setup-backend.sh once; output goes to setup.log. Never runs twice at once.
-    func setUpRuntime() {
-        guard setup == nil, let script = Bundle.main.url(forResource: "setup-backend", withExtension: "sh") else { return }
-        let proc = Process(); proc.executableURL = URL(fileURLWithPath: "/bin/bash"); proc.arguments = [script.path]
-        var env = ProcessInfo.processInfo.environment; env["VERDICT_SUPPORT_DIR"] = Self.support.path
-        env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + (env["PATH"] ?? "/usr/bin:/bin")
-        proc.environment = env
-        try? FileManager.default.createDirectory(at: Self.support, withIntermediateDirectories: true)
-        let logURL = Self.support.appendingPathComponent("setup.log")
-        FileManager.default.createFile(atPath: logURL.path, contents: nil)
-        if let log = try? FileHandle(forWritingTo: logURL) { proc.standardOutput = log; proc.standardError = log }
-        proc.terminationHandler = { [weak self] p in
-            Task { @MainActor in
-                guard let self else { return }
-                self.setup = nil
-                if p.terminationStatus == 0 { self.lastError = nil; self.start() }
-                else {
-                    let tail = (try? String(contentsOf: logURL, encoding: .utf8))?.split(separator: "\n").suffix(2).joined(separator: " ") ?? ""
-                    self.lastError = "Runtime setup failed. \(tail)"; self.phase = .failed(self.lastError ?? ""); self.onChange?()
-                }
-            }
-        }
-        do { try proc.run(); setup = proc; phase = .settingUp; lastError = nil } catch { lastError = error.localizedDescription; phase = .failed(lastError ?? "") }
-        onChange?()
-    }
+    /// True when the bundled native helper is present (the app is built with it).
+    var runtimeReady: Bool { bundledHelper != nil }
 
     /// Workers from earlier app instances (crash, force-quit) must not linger.
     private func sweepStrayWorkers() {
@@ -118,23 +89,22 @@ import VerdictCore
     }
 
     func start() {
-        guard !processRunning, setup == nil else { return }
+        guard !processRunning else { return }
         sweepStrayWorkers()
         stopping = false
         do {
             let config = try configuration()
-            let helper = bundledHelper
-            if helper == nil { try config.validate() }
-            let script = Bundle.main.url(forResource: "worker", withExtension: "py") ?? URL(fileURLWithPath: "Resources/worker.py")
+            guard let helper = bundledHelper else {
+                throw VerdictError.message("The native helper is missing from Verdict.app. Reinstall: git pull && scripts/install.sh")
+            }
             let proc = Process()
-            proc.executableURL = helper ?? URL(fileURLWithPath: config.executable)
-            proc.arguments = helper == nil ? [script.path] : []
+            proc.executableURL = helper
+            proc.arguments = []
             var env = ProcessInfo.processInfo.environment
             env["VERDICT_SUPPORT_DIR"] = Self.support.path
             env["VERDICT_PRELOAD"] = config.hotModels.joined(separator: ",")
             env["VERDICT_IDLE_MINUTES"] = String(config.idleMinutes ?? 0)
             if let data = try? JSONSerialization.data(withJSONObject: config.precision ?? [:]) { env["VERDICT_PRECISION"] = String(data: data, encoding: .utf8) }
-            env["USE_TF"] = "0"
             proc.environment = env
             try FileManager.default.createDirectory(at: Self.support, withIntermediateDirectories: true)
             FileManager.default.createFile(atPath: Self.logURL.path, contents: nil)
@@ -150,7 +120,6 @@ import VerdictCore
             phase = .starting
             startPolling()
         } catch {
-            if bundledHelper == nil && !runtimeReady { setUpRuntime(); return }
             lastError = error.localizedDescription
             phase = .failed(error.localizedDescription)
         }

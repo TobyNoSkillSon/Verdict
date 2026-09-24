@@ -1,0 +1,152 @@
+// Prompt/calibration port of laya-mlx 0.2.0 common.py and agent.py (Apache-2.0).
+import Foundation
+import MLX
+
+public enum LayaLoader: ModelLoader {
+    public static func load(id: String, snapshot: URL, bits: Int) throws -> any DecisionModel {
+        try LayaModel(id: id, snapshot: snapshot, bits: bits)
+    }
+}
+
+public struct LayaPreparedRow: Codable, Sendable {
+    public let ids: [Int]
+    public let markers: [Int]
+    public let qtype: Int
+    public init(ids: [Int], markers: [Int], qtype: Int) { self.ids = ids; self.markers = markers; self.qtype = qtype }
+}
+
+public final class LayaModel: DecisionModel {
+    public let id: String
+    public let contextLimit = 8192
+    public var residentBytes: Int { network.residentBytes }
+    private let prompt: LayaPrompt
+    private let temperatures: [Double]
+    private let temperatureBuckets: [String: Double]
+    private let network: LayaNetwork
+
+    public init(id: String, snapshot: URL, bits: Int = 0) throws {
+        guard ["laya-english", "laya-multilingual", "laya-typed-decisions"].contains(id) else { throw LayaError.invalid("Unknown Laya model '\(id)'") }
+        guard [0, 16, 8, 4].contains(bits) else { throw LayaError.invalid("Laya precision must be 16, 8 or 4 bits") }
+        self.id = id
+        let agent = try JSONSerialization.jsonObject(with: Data(contentsOf: snapshot.appendingPathComponent("rl_agent_config.json"))) as? [String: Any] ?? [:]
+        guard let headLayers = agent["head_layers"] as? Int, headLayers >= 0, agent["encoder"] != nil else { throw LayaError.invalid("Laya config must specify encoder and head_layers") }
+        let rawTemps = agent["temperature"] as? [Double] ?? [1, 1, 1]
+        let rawBuckets = agent["temperature_by_options"] as? [String: Double] ?? [:]
+        guard rawTemps.count == 3, (rawTemps + Array(rawBuckets.values)).allSatisfy({ $0.isFinite && $0 > 0 }) else { throw LayaError.invalid("Calibration temperatures must be finite and positive") }
+        temperatures = rawTemps.map { min(5, max(0.5, $0)) }
+        temperatureBuckets = rawBuckets.mapValues { min(5, max(0.5, $0)) }
+        prompt = try LayaPrompt(snapshot: snapshot)
+        network = try LayaNetwork(snapshot: snapshot, config: LayaEncoderConfiguration(data: Data(contentsOf: snapshot.appendingPathComponent("encoder/config.json"))), headLayers: headLayers, bits: bits)
+    }
+
+    public func encode(_ text: String, addSpecialTokens: Bool = false) -> [Int] {
+        prompt.encode(text, addSpecialTokens: addSpecialTokens)
+    }
+
+    private func typeIndex(_ question: Question) -> Int {
+        switch question.kind { case .choice: 0; case .score: 1; case .noul: 2 }
+    }
+
+    /// Python common.build_sequence, including literal-mask replacement and per-option cap.
+    public func prepare(_ item: Item, _ question: Question) throws -> LayaPreparedRow {
+        try prompt.prepare(item, question)
+    }
+
+    /// Raw logits are exposed for numerical parity fixtures, not through the public HTTP API.
+    public func logits(_ rows: [LayaPreparedRow]) throws -> [[Float]] {
+        guard !rows.isEmpty, rows.count <= 64 else { throw LayaError.invalid("Expected 1...64 Laya rows") }
+        let length = rows.map { $0.ids.count }.max()!, count = max(2, rows.map { $0.markers.count }.max()!)
+        var ids = [Int32](repeating: Int32(prompt.padID), count: rows.count * length)
+        var valid = [Bool](repeating: false, count: ids.count)
+        var positions = [Int32](repeating: 0, count: rows.count * count)
+        var markerMask = [Bool](repeating: false, count: positions.count)
+        for (i, row) in rows.enumerated() {
+            for (j, token) in row.ids.enumerated() { ids[i * length + j] = Int32(token); valid[i * length + j] = true }
+            for (j, marker) in row.markers.enumerated() { positions[i * count + j] = Int32(marker); markerMask[i * count + j] = true }
+        }
+        let inputs = [MLXArray(ids, [rows.count, length]), MLXArray(valid, [rows.count, length]), MLXArray(positions, [rows.count, count]), MLXArray(markerMask, [rows.count, count]), MLXArray(rows.map { Int32($0.qtype) })]
+        let flat = network.forward(inputs).asArray(Float.self)
+        guard flat.allSatisfy(\.isFinite) else { throw LayaError.invalid("Non-finite model outputs; retry with dtype='float32'") }
+        return rows.indices.map { Array(flat[($0 * count)..<($0 * count + count)]) }
+    }
+
+    public func tokenCount(_ item: Item, _ questions: [Question]) throws -> Int {
+        // worker.py's backend.encode() defaults to adding tokenizer special tokens.
+        encode(item.text, addSpecialTokens: true).count + (questions.map { encode($0.sourceJSON ?? Self.questionJSON($0), addSpecialTokens: true).count }.max() ?? 0) + 8
+    }
+
+    public func predict(_ items: [Item], _ questions: [Question]) throws -> [ItemResult] {
+        guard !questions.isEmpty else { throw LayaError.invalid("questions must be a nonempty object") }
+        let questionCount = questions.map { encode($0.sourceJSON ?? Self.questionJSON($0), addSpecialTokens: true).count }.max() ?? 0
+        let templates = try questions.map { try prompt.template($0) }
+        var results = Array(repeating: ItemResult.answers([:]), count: items.count)
+        var answers = Array(repeating: [String: Answer](), count: items.count)
+        var rows: [LayaPreparedRow] = [], metadata: [(Int, Question)] = []
+        for (i, item) in items.enumerated() {
+            let state = prompt.encodeState(item.text)
+            let count = state.count + questionCount + 8
+            if count > contextLimit {
+                results[i] = .error("Item needs about \(count) tokens; \(id) accepts \(contextLimit). Shorten it or split it.")
+                continue
+            }
+            for (question, template) in zip(questions, templates) {
+                rows.append(prompt.row(stateIDs: state.ids, template: template))
+                metadata.append((i, question))
+            }
+        }
+        for start in stride(from: 0, to: rows.count, by: 64) {
+            let end = min(start + 64, rows.count), chunk = Array(rows[start..<end])
+            let values = try logits(chunk)
+            for (r, row) in chunk.enumerated() {
+                let (index, question) = metadata[start + r]
+                answers[index][question.id] = answer(values[r], optionCount: row.markers.count, question: question)
+            }
+        }
+        for i in items.indices { if case .answers = results[i] { results[i] = .answers(answers[i]) } }
+        return results
+    }
+
+    private func answer(_ logits: [Float], optionCount k: Int, question: Question) -> Answer {
+        let bucket = k <= 2 ? "2" : k <= 5 ? "3-5" : k <= 10 ? "6-10" : "11+"
+        let temperature = Float(temperatureBuckets[question.kind.rawValue + ":" + bucket] ?? temperatures[typeIndex(question)])
+        let z = logits.prefix(k).map { $0 / temperature }, maxZ = z.max()!
+        let exponents = z.map { exp($0 - maxZ) }, total = exponents.reduce(Float(0), +)
+        let p = exponents.map { $0 / total }
+        let entropy = -p.reduce(Float(0)) { $0 + $1 * log(min(1, max(1e-12, $1))) }
+        // NumPy's weak scalar promotion keeps this expression in float32.
+        let confidence: Float = k < 2 ? 1 : min(1, max(0, 1 - entropy / Float(log(Double(k)))))
+        func rounded(_ value: Double) -> Double { (value * 10000).rounded(.toNearestOrEven) / 10000 }
+        var result = Answer(); result.confidence = rounded(Double(confidence))
+        switch question.kind {
+        case .noul:
+            result.noul = rounded(Double(p[1])); result.confidence = rounded(max(Double(p[1]), 1 - Double(p[1])))
+        case .choice:
+            let winner = p.firstIndex(of: p.max()!)!
+            result.choice = question.criteria[winner].0
+            result.probabilities = Dictionary(uniqueKeysWithValues: zip(question.criteria, p).map { ($0.0.0, rounded(Double($0.1))) })
+        case .score:
+            result.score = rounded(p.enumerated().reduce(0) { $0 + Double($1.offset) * Double($1.element) })
+            result.probabilities = Dictionary(uniqueKeysWithValues: p.enumerated().map { (String($0.offset), rounded(Double($0.element))) })
+        }
+        return result
+    }
+
+    // Ordered Python json.dumps(... ensure_ascii=False) for ordinary client Question shapes.
+    // The service should retain raw question JSON for arbitrary criteria shapes / key order.
+    static func questionJSON(_ question: Question) -> String {
+        func quote(_ s: String) -> String {
+            let bytes = try! JSONSerialization.data(withJSONObject: s, options: [.fragmentsAllowed, .withoutEscapingSlashes])
+            return String(decoding: bytes, as: UTF8.self)
+        }
+        var fields = ["\"type\": " + quote(question.kind.rawValue), "\"instructions\": " + quote(question.instructions)]
+        switch question.kind {
+        case .choice:
+            fields.append("\"criteria\": {" + question.criteria.map { quote($0.0) + ": " + quote($0.1) }.joined(separator: ", ") + "}")
+        case .score:
+            fields.append("\"criteria\": [" + question.criteria.map { quote($0.1) }.joined(separator: ", ") + "]")
+        case .noul:
+            if !question.criteria.isEmpty { fields.append("\"criteria\": {" + question.criteria.map { quote($0.0) + ": " + quote($0.1) }.joined(separator: ", ") + "}") }
+        }
+        return "{" + fields.joined(separator: ", ") + "}"
+    }
+}

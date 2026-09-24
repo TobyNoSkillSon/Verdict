@@ -8,3 +8,4 @@ __pycache__/
 native/.build*/
 native/.build*.log
 native/.swiftpm/
+native/dist/

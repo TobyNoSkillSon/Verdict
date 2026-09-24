@@ -7,7 +7,7 @@ public enum VerdictError: LocalizedError {
 
 /// Persisted in ~/Library/Application Support/Verdict/config.json.
 public struct Configuration: Codable, Equatable {
-    public var executable: String            // python inside the runtime venv
+    public var executable: String            // the bundled verdict-helper (informational)
     public var hotModels: [String]           // loaded at launch, kept resident
     public var launchAtLogin: Bool
     public var idleMinutes: Int?             // 0 or nil = always hot
@@ -16,9 +16,7 @@ public struct Configuration: Codable, Equatable {
         self.executable = executable; self.hotModels = hotModels; self.launchAtLogin = launchAtLogin; self.idleMinutes = idleMinutes
     }
     public func validate() throws {
-        guard executable.hasPrefix("/"), executable.split(separator: "/").last?.hasPrefix("python") == true else {
-            throw VerdictError.message("Runtime is not set up. Run scripts/setup-backend.sh, then relaunch Verdict.")
-        }
+        guard executable.hasPrefix("/") else { throw VerdictError.message("The native helper is missing. Reinstall: git pull && scripts/install.sh") }
     }
 }
 
@@ -87,7 +85,7 @@ public struct WorkerStatus: Codable, Equatable {
 }
 
 public enum WorkerPhase: Equatable {
-    case stopped, starting, settingUp, loading(String), downloading(String), ready(hot: Int), failed(String)
+    case stopped, starting, loading(String), downloading(String), ready(hot: Int), failed(String)
 }
 
 public func phase(for status: WorkerStatus?, processRunning: Bool) -> WorkerPhase {
@@ -102,7 +100,6 @@ public func summaryLine(_ phase: WorkerPhase, status: WorkerStatus?) -> String {
     switch phase {
     case .stopped: return "Verdict: stopped"
     case .starting: return "Verdict: starting…"
-    case .settingUp: return "Verdict: setting up runtime…"
     case .loading(let id): return "Verdict: loading \(id)…"
     case .downloading(let id): return "Verdict: downloading \(id)…"
     case .failed: return "Verdict: needs attention…"
@@ -134,9 +131,9 @@ public func formatBytes(_ bytes: Int64) -> String {
 public let modelRequest = """
 Add a decision model to Verdict (menu-bar app that keeps typed-question models hot on this Mac; project at ~/Projects/Verdict or github.com/TobyNoSkillSon/Verdict).
 
-A candidate needs: open weights with a licence that allows local use; a predict(state, questions) interface over choice / score / noul questions returning per-answer probabilities; an Apple-Silicon-native runtime (MLX preferred) that loads in seconds.
+A candidate needs: open weights with a licence that allows local use; a predict(state, questions) interface over choice / score / noul questions returning per-answer probabilities; an architecture that can be implemented on mlx-swift (Verdict's helper is native Swift; see native/PLAN.md).
 
-Steps: (1) find the weights and runtime, verify the licence; (2) add a catalog entry to Resources/models.json (id, name, backbone, params, repository, context, languages, license, recommendation); (3) if it is not a Laya checkpoint, add a loader branch in Resources/worker.py; (4) run scripts/benchmark.py so it appears with measured accuracy, calibration and speed; (5) run the tests (xcrun swift test; cd Tests && python3 -m unittest test_worker). Report what you verified and what remains uncertain.
+Steps: (1) find the weights and runtime, verify the licence; (2) add a catalog entry to Resources/models.json (id, name, backbone, params, repository, context, languages, license, recommendation); (3) if it is not a Laya checkpoint, implement a DecisionModel + ModelLoader in native/Sources/VerdictEngine and register it by the catalog's runtime field in native/Sources/VerdictHelper/Registry.swift; (4) prove parity against the model's reference implementation on fixed fixtures (see native/fixtures and scripts/oracle.py); (5) run scripts/benchmark.py so it appears with measured accuracy, calibration and speed; (6) run the tests (xcrun swift test; python3 Tests/edge_pass.py). Report what you verified and what remains uncertain.
 """
 
 public let keepHotChoices: [(minutes: Int, title: String)] = [(0, "Always"), (15, "15 minutes after use"), (60, "1 hour after use"), (240, "4 hours after use")]

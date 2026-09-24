@@ -160,7 +160,7 @@ A flame marks a hot model. Here English and Multilingual are ready; **Unload** f
 
 ## Install
 
-**Apple Silicon · macOS 14 or newer · Python 3.12–3.14 · Command Line Tools**
+**Apple Silicon · macOS 14 or newer**
 
 <details>
 <summary>What a Mac needs, exactly</summary>
@@ -168,12 +168,11 @@ A flame marks a hot model. Here English and Multilingual are ready; **Unload** f
 | | Why | If missing |
 |---|---|---|
 | Apple Silicon, macOS 14+ | MLX runs on the Apple GPU | — |
-| Command Line Tools | Swift build, `git`, code signing | `xcode-select --install` |
-| Python 3.12, 3.13 or 3.14 | the worker's private runtime (macOS's own `/usr/bin/python3` is 3.9 and is skipped) | `brew install python@3.12`; with `uv` installed the setup fetches one itself |
-| Internet, first run only | ~600 MB of Python packages, ~0.8 GB for Laya English | — |
-| Disk | ~1.5 GB; +0.6–0.8 GB per extra Laya model | — |
+| `python3` (any, incl. macOS's own) | only for the `verdict` CLI and Python client, which use the standard library | `xcode-select --install` |
+| Internet, first run only | ~20 MB app download, ~0.8 GB for Laya English | — |
+| Disk | ~1 GB; +0.6–0.8 GB per extra Laya model | — |
 
-Tested from scratch with Python 3.12, 3.13 and 3.14, a bare system `PATH` and empty caches: 91 s from nothing to the first answer. No PyTorch, no Xcode app, no Apple developer account.
+Verdict is a native Swift app with an MLX helper: no Python runtime, no PyTorch, no Xcode, no Apple developer account. Building from source instead needs Xcode and its Metal Toolchain (`xcodebuild -downloadComponent MetalToolchain`).
 
 </details>
 
@@ -183,12 +182,11 @@ Tell your agent:
 Install Verdict from https://github.com/TobyNoSkillSon/Verdict — follow its AGENTS.md, then install its skill into your harness.
 ```
 
-It clones the repository, runs the installer, waits until a model is loaded, installs the skill wherever its harness keeps skills, and reports back. First run downloads about 1.4 GB (Python packages and Laya English). Turn on **Launch at Login** in the menu afterwards if you want Verdict always there.
+It clones the repository, runs the installer — which downloads the prebuilt app for this version, checks its SHA-256 and installs it — waits until a model is loaded, installs the skill wherever its harness keeps skills, and reports back. First run downloads about 0.8 GB (Laya English). Turn on **Launch at Login** in the menu afterwards if you want Verdict always there.
 
 <details>
 <summary>Installing by hand</summary>
 
-With Apple's Command Line Tools installed (no developer membership needed):
 
 ```sh
 git clone https://github.com/TobyNoSkillSon/Verdict && cd Verdict
@@ -196,14 +194,14 @@ scripts/install.sh
 verdict skill                              # prints the skill; hand it to your agent
 ```
 
-`install.sh` checks the Mac, builds the Python runtime, builds the app into `/Applications`, installs the `verdict` CLI into `~/.local/bin` and the Python module into `~/.local/share/verdict`, starts Verdict and waits until it is ready. **Copy Skill for Your Agent** in the menu copies the same skill to the clipboard.
+`install.sh` downloads the prebuilt release matching the checkout (`Verdict-<version>-arm64.zip` from GitHub Releases, over HTTPS with curl, so macOS does not quarantine it), verifies its SHA-256 and code signature, installs it into `/Applications`, installs the `verdict` CLI into `~/.local/bin` and the Python client into `~/.local/share/verdict`, starts Verdict and waits until it is ready. `VERDICT_BUILD=source scripts/install.sh` builds from the checkout instead (Xcode + Metal Toolchain). Download the zip through the installer, not a browser: a browser adds the quarantine flag and Gatekeeper blocks the ad-hoc-signed app. **Copy Skill for Your Agent** in the menu copies the same skill to the clipboard.
 
 </details>
 
 <details>
 <summary>Updating an existing installation</summary>
 
-`git pull && scripts/install.sh` — or tell your agent to. Downloaded models, settings and the runtime are kept; the installer refuses to replace the app while a model is loading.
+`git pull && scripts/install.sh` — or tell your agent to. Downloaded models and settings are kept; the installer quits an idle Verdict itself and refuses only while a model is loading.
 
 </details>
 
@@ -241,7 +239,7 @@ The recorded text benchmarks compare topic classification on AG News and emotion
 <details>
 <summary>Does anything leave my Mac?</summary>
 
-Judgement inputs stay local. The worker listens on `127.0.0.1`; setup downloads runtime dependencies and model weights. There is no telemetry or hosted inference fallback.
+Judgement inputs stay local. The helper listens on `127.0.0.1`; the only network use is the one-time app and model-weight downloads. There is no telemetry or hosted inference fallback.
 
 </details>
 
@@ -262,7 +260,7 @@ No. Verdict judges text. The multimodal decision models we tried were far larger
 <details>
 <summary>Where are the files, and how do I uninstall?</summary>
 
-`~/Library/Application Support/Verdict` holds settings, status, logs and the Python runtime. Model weights live in `~/.cache/huggingface`.
+`~/Library/Application Support/Verdict` holds settings, status and logs. Model weights live in `~/.cache/huggingface`.
 
 To remove downloaded weights, delete the models from the table first. Then quit Verdict and remove `/Applications/Verdict.app`, its Application Support folder and `~/.local/bin/verdict`. Do not delete the whole Hugging Face cache if other tools use it.
 

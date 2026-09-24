@@ -49,7 +49,6 @@ import VerdictCore
         header.target = self; header.isEnabled = failed
         header.toolTip = backend.lastError ?? backend.status?.error
         let color: NSColor = failed ? .systemOrange : { if case .ready = backend.phase { return .systemGreen }; return .secondaryLabelColor }()
-        let settingUp: Bool = { if case .settingUp = backend.phase { return true }; return false }()
         header.attributedTitle = NSAttributedString(string: summary, attributes: [.foregroundColor: color])
         menu.addItem(header)
         if let latency = latencyLine(backend.status) {
@@ -61,9 +60,7 @@ import VerdictCore
         item("Copy Skill for Your Agent", "doc.on.doc", #selector(copyInstructions))
         item("Open Verdict Files", "folder", #selector(files))
         menu.addItem(.separator())
-        if settingUp { let line = NSMenuItem(title: "Installing Python runtime (about a minute)…", action: nil, keyEquivalent: ""); line.isEnabled = false; menu.addItem(line) }
-        else if !backend.runtimeReady { item("Set Up Runtime…", "wrench.and.screwdriver", #selector(setUp)) }
-        else if backend.processRunning { item("Restart Worker", "arrow.clockwise", #selector(restart)) }
+        if backend.processRunning { item("Restart Worker", "arrow.clockwise", #selector(restart)) }
         else { item("Start Worker", "play", #selector(start)) }
         let keep = NSMenuItem(title: "Keep Hot", action: nil, keyEquivalent: "")
         keep.image = NSImage(systemSymbolName: "flame", accessibilityDescription: nil)
@@ -107,7 +104,6 @@ import VerdictCore
     }
     @objc private func restart() { backend.stop(); backend.start() }
     @objc private func start() { backend.start() }
-    @objc private func setUp() { backend.setUpRuntime() }
     @objc private func selectKeepHot(_ sender: NSMenuItem) { backend.setIdleMinutes(sender.representedObject as? Int ?? 0) }
     @objc private func toggleLogin() {
         do {

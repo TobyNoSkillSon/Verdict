@@ -29,6 +29,6 @@ final class CoreTests: XCTestCase {
     }
     func testConfigValidation() {
         XCTAssertThrowsError(try Configuration(executable: "").validate())
-        XCTAssertNoThrow(try Configuration(executable: "/x/runtime/bin/python3").validate())
+        XCTAssertNoThrow(try Configuration(executable: "/Applications/Verdict.app/Contents/MacOS/verdict-helper").validate())
     }
 }
