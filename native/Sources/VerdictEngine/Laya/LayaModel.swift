@@ -18,6 +18,7 @@ public struct LayaPreparedRow: Codable, Sendable {
 public final class LayaModel: DecisionModel {
     public let id: String
     public let contextLimit = 8192
+    private let bits: Int
     public var residentBytes: Int { network.residentBytes }
     private let prompt: LayaPrompt
     private let temperatures: [Double]
@@ -26,13 +27,14 @@ public final class LayaModel: DecisionModel {
     /// Question templates and token counts survive across requests: agents repeat the same
     /// questions, and tokenizing a long question (e.g. 20 options) dominated single-item calls.
     /// Keyed by the question's source JSON, which fully determines both values.
+    static let sortByLength = ProcessInfo.processInfo.environment["VERDICT_LAYA_ARRIVAL_ORDER"] != "1"
     static let profile = ProcessInfo.processInfo.environment["VERDICT_PROFILE"] == "1"
     private var questionCache: [String: (template: LayaPrompt.QuestionTemplate, count: Int)] = [:]
 
     public init(id: String, snapshot: URL, bits: Int = 0) throws {
         guard ["laya-english", "laya-multilingual", "laya-typed-decisions"].contains(id) else { throw LayaError.invalid("Unknown Laya model '\(id)'") }
         guard [0, 16, 8, 4].contains(bits) else { throw LayaError.invalid("Laya precision must be 16, 8 or 4 bits") }
-        self.id = id
+        self.id = id; self.bits = bits
         let agent = try JSONSerialization.jsonObject(with: Data(contentsOf: snapshot.appendingPathComponent("rl_agent_config.json"))) as? [String: Any] ?? [:]
         guard let headLayers = agent["head_layers"] as? Int, headLayers >= 0, agent["encoder"] != nil else { throw LayaError.invalid("Laya config must specify encoder and head_layers") }
         let rawTemps = agent["temperature"] as? [Double] ?? [1, 1, 1]
@@ -104,13 +106,18 @@ public final class LayaModel: DecisionModel {
         }
         let t1 = clock.now
         var gpu = Duration.zero, padded = 0
-        for start in stride(from: 0, to: rows.count, by: 64) {
-            let end = min(start + 64, rows.count), chunk = Array(rows[start..<end])
+        // fp16: chunk rows in length order so each 64-row forward pads only to similar lengths.
+        // Measured bit-identical to arrival order and to the Python worker's batches (fp16 row
+        // results do not depend on padding or neighbours). Quantized (8/4-bit) matmuls do depend
+        // on chunk shape, so those keep arrival order to stay exact with the Python reference.
+        let order = Self.sortByLength && bits == 0 ? rows.indices.sorted { (rows[$0].ids.count, $0) < (rows[$1].ids.count, $1) } : Array(rows.indices)
+        for start in stride(from: 0, to: order.count, by: 64) {
+            let slots = Array(order[start..<min(start + 64, order.count)]), chunk = slots.map { rows[$0] }
             let g = clock.now
             let values = try logits(chunk)
             gpu += clock.now - g; padded += chunk.count * (chunk.map { $0.ids.count }.max() ?? 0)
             for (r, row) in chunk.enumerated() {
-                let (index, question) = metadata[start + r]
+                let (index, question) = metadata[slots[r]]
                 answers[index][question.id] = answer(values[r], optionCount: row.markers.count, question: question)
             }
         }
