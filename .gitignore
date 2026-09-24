@@ -16,3 +16,4 @@ bench/tasks/__pycache__/
 native/perf/scratch/*.log
 native/perf/scratch/tokcli
 native/perf/scratch/BenchPackage/.build/
+native/perf/logs/

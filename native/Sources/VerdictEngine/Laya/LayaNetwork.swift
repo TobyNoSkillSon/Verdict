@@ -117,6 +117,13 @@ final class LayaNetwork {
         compiled = compile { (inputs: [MLXArray]) in [graph.forward(inputs)] }
     }
 
+    /// Queue the compiled forward without blocking; the caller reads the result later.
+    func launch(_ inputs: [MLXArray]) -> MLXArray {
+        let result = compiled(inputs)[0]
+        asyncEval(result)
+        return result
+    }
+
     func forward(_ inputs: [MLXArray]) -> MLXArray {
         let result = compiled(inputs)[0]
         eval(result)

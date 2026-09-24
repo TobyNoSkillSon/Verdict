@@ -31,6 +31,7 @@ public final class LayaModel: DecisionModel {
     static let tokenBudget = Int(ProcessInfo.processInfo.environment["VERDICT_LAYA_TOKEN_BUDGET"] ?? "") ?? 8192
     static let padMultiple = Int(ProcessInfo.processInfo.environment["VERDICT_LAYA_PAD_MULTIPLE"] ?? "") ?? 16
     static let parallelBytesFast = Int(ProcessInfo.processInfo.environment["VERDICT_LAYA_PARALLEL_BYTES"] ?? "") ?? Int.max
+    static let bucketAll = Int(ProcessInfo.processInfo.environment["VERDICT_LAYA_BUCKET"] ?? "") ?? 8
     static let profile = ProcessInfo.processInfo.environment["VERDICT_PROFILE"] == "1"
     private var questionCache: [String: (template: LayaPrompt.QuestionTemplate, count: Int)] = [:]
 
@@ -64,12 +65,22 @@ public final class LayaModel: DecisionModel {
 
     /// Raw logits are exposed for numerical parity fixtures, not through the public HTTP API.
     public func logits(_ rows: [LayaPreparedRow]) throws -> [[Float]] {
+        try collect(launch(rows), rows: rows)
+    }
+
+    /// Build the chunk's inputs and queue its forward on the GPU without waiting.
+    private func launch(_ rows: [LayaPreparedRow]) throws -> MLXArray {
         guard !rows.isEmpty, rows.count <= 64 else { throw LayaError.invalid("Expected 1...64 Laya rows") }
         var length = rows.map { $0.ids.count }.max()!
-        // Small fp16 forwards (single items) pad to a multiple of 16 so the compiled graph is reused
-        // instead of retraced for every new length (~2-3 ms). fp16 padding is measured bit-neutral;
-        // big batches skip it (the extra padding costs more than the retrace they rarely need).
-        if bits == 0 && rows.count <= 8 && Self.padMultiple > 1 { length = (length + Self.padMultiple - 1) / Self.padMultiple * Self.padMultiple }
+        // fp16 chunks round their padded length up to a bucket so the compiled graph is reused instead of
+        // retraced for every new length. Length-sorted chunks otherwise hit a new shape almost every time:
+        // compile tracing, extra command buffers and buffer churn cost up to a full CPU core. Small forwards
+        // (single items) use 16, larger chunks 8 (measured best on short, long and mixed requests).
+        // fp16 padding is measured bit-neutral; quantized models keep exact lengths.
+        if bits == 0 {
+            let step = rows.count <= 8 ? Self.padMultiple : Self.bucketAll
+            if step > 1 { length = (length + step - 1) / step * step }
+        }
         let count = max(2, rows.map { $0.markers.count }.max()!)
         var ids = [Int32](repeating: Int32(prompt.padID), count: rows.count * length)
         var valid = [Bool](repeating: false, count: ids.count)
@@ -80,7 +91,13 @@ public final class LayaModel: DecisionModel {
             for (j, marker) in row.markers.enumerated() { positions[i * count + j] = Int32(marker); markerMask[i * count + j] = true }
         }
         let inputs = [MLXArray(ids, [rows.count, length]), MLXArray(valid, [rows.count, length]), MLXArray(positions, [rows.count, count]), MLXArray(markerMask, [rows.count, count]), MLXArray(rows.map { Int32($0.qtype) })]
-        let flat = network.forward(inputs).asArray(Float.self)
+        return network.launch(inputs)
+    }
+
+    /// Wait for a launched chunk and split its logits per row.
+    private func collect(_ output: MLXArray, rows: [LayaPreparedRow]) throws -> [[Float]] {
+        let count = max(2, rows.map { $0.markers.count }.max()!)
+        let flat = output.asArray(Float.self)
         guard flat.allSatisfy(\.isFinite) else { throw LayaError.invalid("Non-finite model outputs; retry with dtype='float32'") }
         return rows.indices.map { Array(flat[($0 * count)..<($0 * count + count)]) }
     }
@@ -119,16 +136,28 @@ public final class LayaModel: DecisionModel {
         // results do not depend on padding or neighbours). Quantized (8/4-bit) matmuls do depend
         // on chunk shape, so those keep arrival order to stay exact with the Python reference.
         let order = Self.sortByLength && bits == 0 ? rows.indices.sorted { (rows[$0].ids.count, $0) < (rows[$1].ids.count, $1) } : Array(rows.indices)
-        for slots in chunks(order, rows: rows) {
+        // Double-buffered: queue chunk k+1 on the GPU before waiting for chunk k, so the CPU encodes the
+        // next graph while the GPU runs the current one. Same computation, only scheduling changes.
+        // At most two chunks are in flight, which bounds activation memory.
+        func finish(_ slots: [Int], _ output: MLXArray) throws {
             let chunk = slots.map { rows[$0] }
-            let g = clock.now
-            let values = try logits(chunk)
-            gpu += clock.now - g; padded += chunk.count * (chunk.map { $0.ids.count }.max() ?? 0)
+            let values = try collect(output, rows: chunk)
             for (r, row) in chunk.enumerated() {
                 let (index, question) = metadata[slots[r]]
                 answers[index][question.id] = answer(values[r], optionCount: row.markers.count, question: question)
             }
         }
+        let g = clock.now
+        var inflight: ([Int], MLXArray)? = nil
+        for slots in chunks(order, rows: rows) {
+            let chunk = slots.map { rows[$0] }
+            let output = try launch(chunk)
+            padded += chunk.count * (chunk.map { $0.ids.count }.max() ?? 0)
+            if let (previous, previousOutput) = inflight { try finish(previous, previousOutput) }
+            inflight = (slots, output)
+        }
+        if let (previous, previousOutput) = inflight { try finish(previous, previousOutput) }
+        gpu = clock.now - g
         for i in items.indices { if case .answers = results[i] { results[i] = .answers(answers[i]) } }
         if Self.profile {
             let total = clock.now - t0, real = rows.reduce(0) { $0 + $1.ids.count }
