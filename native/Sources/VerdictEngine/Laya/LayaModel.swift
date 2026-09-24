@@ -28,6 +28,7 @@ public final class LayaModel: DecisionModel {
     /// questions, and tokenizing a long question (e.g. 20 options) dominated single-item calls.
     /// Keyed by the question's source JSON, which fully determines both values.
     static let sortByLength = ProcessInfo.processInfo.environment["VERDICT_LAYA_ARRIVAL_ORDER"] != "1"
+    static let tokenBudget = Int(ProcessInfo.processInfo.environment["VERDICT_LAYA_TOKEN_BUDGET"] ?? "") ?? 8192
     static let profile = ProcessInfo.processInfo.environment["VERDICT_PROFILE"] == "1"
     private var questionCache: [String: (template: LayaPrompt.QuestionTemplate, count: Int)] = [:]
 
@@ -111,8 +112,8 @@ public final class LayaModel: DecisionModel {
         // results do not depend on padding or neighbours). Quantized (8/4-bit) matmuls do depend
         // on chunk shape, so those keep arrival order to stay exact with the Python reference.
         let order = Self.sortByLength && bits == 0 ? rows.indices.sorted { (rows[$0].ids.count, $0) < (rows[$1].ids.count, $1) } : Array(rows.indices)
-        for start in stride(from: 0, to: order.count, by: 64) {
-            let slots = Array(order[start..<min(start + 64, order.count)]), chunk = slots.map { rows[$0] }
+        for slots in chunks(order, rows: rows) {
+            let chunk = slots.map { rows[$0] }
             let g = clock.now
             let values = try logits(chunk)
             gpu += clock.now - g; padded += chunk.count * (chunk.map { $0.ids.count }.max() ?? 0)
@@ -141,6 +142,21 @@ public final class LayaModel: DecisionModel {
             let base = buffer.baseAddress!
             DispatchQueue.concurrentPerform(iterations: texts.count) { i in base[i] = prompt.encodeState(texts[i]) }
         }
+        return out
+    }
+
+    /// Chunks of at most 64 rows. At fp16 (length-sorted) a chunk also closes when its padded size would
+    /// exceed the token budget, so a request of long items cannot allocate gigabytes of activations at once.
+    /// Quantized models keep plain 64-row chunks in arrival order (their results depend on chunk shape).
+    private func chunks(_ order: [Int], rows: [LayaPreparedRow]) -> [[Int]] {
+        guard bits == 0, Self.sortByLength else { return stride(from: 0, to: order.count, by: 64).map { Array(order[$0..<min($0 + 64, order.count)]) } }
+        var out: [[Int]] = [], current: [Int] = []
+        for slot in order {
+            let length = rows[slot].ids.count   // ascending, so this row sets the padded length
+            if !current.isEmpty && (current.count == 64 || (current.count + 1) * length > Self.tokenBudget) { out.append(current); current = [] }
+            current.append(slot)
+        }
+        if !current.isEmpty { out.append(current) }
         return out
     }
 
