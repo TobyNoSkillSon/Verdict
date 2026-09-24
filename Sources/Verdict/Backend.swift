@@ -21,6 +21,7 @@ import VerdictCore
     var onChange: (() -> Void)?
     private var process: Process?
     private var poller: Timer?
+    private var lastHotSet: [String]?
     private var restartAttempts = 0
     private var stopping = false
     private var memoryPressure: DispatchSourceMemoryPressure?
@@ -142,7 +143,7 @@ import VerdictCore
 
     func stop() {
         stopping = true
-        poller?.invalidate(); poller = nil
+        poller?.invalidate(); poller = nil; watcher?.cancel(); watcher = nil
         if let p = process, p.isRunning {
             Task { try? await control("quit", [:]) }
             let deadline = Date().addingTimeInterval(3)
@@ -155,7 +156,7 @@ import VerdictCore
 
     private func processEnded(status code: Int32) {
         process = nil
-        poller?.invalidate(); poller = nil
+        poller?.invalidate(); poller = nil; watcher?.cancel(); watcher = nil
         if stopping { phase = .stopped; onChange?(); return }
         let tail = (try? String(contentsOf: Self.logURL, encoding: .utf8))?.split(separator: "\n").suffix(3).joined(separator: " ") ?? ""
         lastError = "Worker exited (\(code)). \(tail)".trimmingCharacters(in: .whitespaces)
@@ -167,10 +168,22 @@ import VerdictCore
         }
     }
 
+    private var watcher: DispatchSourceFileSystemObject?
+
+    /// Event-driven: the worker replaces status.json atomically, which writes the support
+    /// directory; watch that instead of polling. A slow timer covers the starting phase and
+    /// anything the watcher misses. Idle cost: no wake-ups while nothing changes.
     private func startPolling() {
-        poller?.invalidate()
-        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in Task { @MainActor in self?.poll() } }
-        timer.tolerance = 0.3
+        poller?.invalidate(); watcher?.cancel()
+        let fd = open(Self.support.path, O_EVTONLY)
+        if fd >= 0 {
+            let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: [.write, .rename], queue: .main)
+            source.setEventHandler { [weak self] in Task { @MainActor in self?.poll() } }
+            source.setCancelHandler { close(fd) }
+            source.resume(); watcher = source
+        }
+        let timer = Timer(timeInterval: 15, repeats: true) { [weak self] _ in Task { @MainActor in self?.poll() } }
+        timer.tolerance = 5
         poller = timer; RunLoop.main.add(timer, forMode: .common)
         poll()
     }
@@ -188,8 +201,11 @@ import VerdictCore
         let changed = decoded != status || next != phase
         // The hot set is the launch set. Idle/pressure unloads are transient and do not count.
         if case .ready = next, decoded.loading == nil, decoded.idle_unloaded != true, !decoded.models.isEmpty || status?.models.isEmpty == false,
-           var config = try? configuration(), Set(config.hotModels) != Set(decoded.models.keys) {
+           Set(lastHotSet ?? []) != Set(decoded.models.keys), var config = try? configuration(), Set(config.hotModels) != Set(decoded.models.keys) {
             config.hotModels = decoded.models.keys.sorted(); try? save(config)
+        }
+        if case .ready = next, decoded.loading == nil, decoded.idle_unloaded != true {
+            lastHotSet = decoded.models.keys.sorted()
         }
         status = decoded; phase = next
         if changed { onChange?() }
