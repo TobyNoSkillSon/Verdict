@@ -68,7 +68,7 @@ final class LayaNetwork {
     private var arrays: [String: MLXArray] = [:]
     private var linears: [String: Linear] = [:]
     private(set) var residentBytes = 0
-    private var compiled: (([MLXArray]) -> [MLXArray])!
+    private var graph: LayaGraph!
 
     init(snapshot: URL, config: LayaEncoderConfiguration, headLayers: Int, bits: Int) throws {
         self.config = config; self.headLayers = headLayers
@@ -112,20 +112,22 @@ final class LayaNetwork {
         for linear in linears.values { all += linear.parameters().flattened().map(\.1) }
         eval(all)
         residentBytes = all.reduce(0) { $0 + $1.nbytes }
-        // Capture a separate frozen graph owner rather than self in a stored closure cycle.
-        let graph = LayaGraph(config: config, headLayers: headLayers, arrays: arrays, linears: linears)
-        compiled = compile { (inputs: [MLXArray]) in [graph.forward(inputs)] }
+        // No MLX compile (same finding as VonNetwork): MLX's compile cache is thread_local and keyed by the
+        // closure's address, while requests run on arbitrary GCD threads. Traced graphs, which hold every
+        // weight, then outlive /unload and precision switches (~0.8 GB leaked per English reload), and
+        // per-shape traces grow the footprint. The plain graph gives identical outputs at the same speed.
+        graph = LayaGraph(config: config, headLayers: headLayers, arrays: arrays, linears: linears)
     }
 
-    /// Queue the compiled forward without blocking; the caller reads the result later.
+    /// Queue the forward on the GPU without blocking; the caller reads the result later.
     func launch(_ inputs: [MLXArray]) -> MLXArray {
-        let result = compiled(inputs)[0]
+        let result = graph.forward(inputs)
         asyncEval(result)
         return result
     }
 
     func forward(_ inputs: [MLXArray]) -> MLXArray {
-        let result = compiled(inputs)[0]
+        let result = graph.forward(inputs)
         eval(result)
         return result
     }

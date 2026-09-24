@@ -18,6 +18,8 @@ public final class FastByteBPE: @unchecked Sendable {
     private var cache: [Data: [Int]] = [:]
     private var fifo: [Data] = []
     private var eviction = 0
+    /// Longer words are rare and would pin arbitrary amounts of memory in the 4,096-entry cache.
+    private static let maxCachedWordBytes = 64
     private let cacheLimit = 4096
 
     private static func dict(_ a: Any?) -> [String: Any]? { a as? [String: Any] }
@@ -115,6 +117,47 @@ public final class FastByteBPE: @unchecked Sendable {
         self.added = mapped; self.tokenIDs = tokenIDs; self.byteIDs = byteIDs; self.merges = rankMap
         cls = clsID; sep = sepID
     }
+    /// HF tokenizers `Word::merge_all`: pop the lowest (rank, position) pair from a min-heap over a
+    /// doubly linked symbol list; skip entries made stale by earlier merges. O(n log n) per word.
+    private func mergeAll(_ ids: inout [Int]) {
+        let n = ids.count
+        var prev = [Int](0..<n).map { $0 - 1 }, next = [Int](1...n).map { $0 == n ? -1 : $0 }, alive = [Bool](repeating: true, count: n)
+        var heap: [(rank: Int, pos: Int, id: Int)] = []
+        heap.reserveCapacity(n)
+        func less(_ a: (rank: Int, pos: Int, id: Int), _ b: (rank: Int, pos: Int, id: Int)) -> Bool { a.rank != b.rank ? a.rank < b.rank : a.pos < b.pos }
+        func push(_ e: (rank: Int, pos: Int, id: Int)) {
+            heap.append(e); var i = heap.count - 1
+            while i > 0 { let p = (i - 1) / 2; if less(heap[i], heap[p]) { heap.swapAt(i, p); i = p } else { break } }
+        }
+        func pop() -> (rank: Int, pos: Int, id: Int) {
+            let top = heap[0]; let last = heap.removeLast()
+            if !heap.isEmpty {
+                heap[0] = last; var i = 0
+                while true {
+                    let l = 2 * i + 1, r = l + 1; var m = i
+                    if l < heap.count && less(heap[l], heap[m]) { m = l }
+                    if r < heap.count && less(heap[r], heap[m]) { m = r }
+                    if m == i { break }; heap.swapAt(i, m); i = m
+                }
+            }
+            return top
+        }
+        for i in 0..<(n - 1) { if let m = merges[Self.pair(ids[i], ids[i + 1])] { push((m.rank, i, m.id)) } }
+        while !heap.isEmpty {
+            let top = pop()
+            guard alive[top.pos], next[top.pos] >= 0 else { continue }
+            let right = next[top.pos]
+            guard let m = merges[Self.pair(ids[top.pos], ids[right])], m.id == top.id else { continue }
+            ids[top.pos] = m.id; alive[right] = false
+            next[top.pos] = next[right]; if next[right] >= 0 { prev[next[right]] = top.pos }
+            if prev[top.pos] >= 0, let p = merges[Self.pair(ids[prev[top.pos]], ids[top.pos])] { push((p.rank, prev[top.pos], p.id)) }
+            if next[top.pos] >= 0, let q = merges[Self.pair(ids[top.pos], ids[next[top.pos]])] { push((q.rank, top.pos, q.id)) }
+        }
+        var out: [Int] = []; out.reserveCapacity(n)
+        var i = 0; while i >= 0 { out.append(ids[i]); i = next[i] }
+        ids = out
+    }
+
     public func tokenID(_ token: String) -> Int? { tokenIDs[Data(token.utf8)] }
     private static func byteLevel(_ d: [String: Any]) -> Bool {
         keys(d, ["type", "add_prefix_space", "trim_offsets", "use_regex"]) && equal(d, "type", "ByteLevel") &&
@@ -135,20 +178,25 @@ public final class FastByteBPE: @unchecked Sendable {
         }
     }
     private func bpe(_ word: String) -> [Int] {
-        let key = Data(word.utf8)
-        lock.lock(); let cached = cache[key]; lock.unlock()
+        let key = Data(word.utf8), cacheable = key.count <= Self.maxCachedWordBytes
+        lock.lock(); let cached = cacheable ? cache[key] : nil; lock.unlock()
         if let cached { return cached }
         var ids = word.utf8.map { byteIDs[Int($0)] }
-        while ids.count > 1 {
-            var best = Int.max, at = -1, merged = -1
-            for i in 0..<(ids.count - 1) {
-                if let m = merges[Self.pair(ids[i], ids[i+1])], m.rank < best {
-                    best = m.rank; at = i; merged = m.id
+        // Short words: rescan for the lowest-rank pair (fast for typical words). Long runs without
+        // spaces (DNA, Thai, CJK under the English tokenizer, ASCII art) use the O(n log n) heap merge.
+        if ids.count > 24 { mergeAll(&ids) } else {
+            while ids.count > 1 {
+                var best = Int.max, at = -1, merged = -1
+                for i in 0..<(ids.count - 1) {
+                    if let m = merges[Self.pair(ids[i], ids[i+1])], m.rank < best {
+                        best = m.rank; at = i; merged = m.id
+                    }
                 }
+                if at < 0 { break }
+                ids[at] = merged; ids.remove(at: at + 1)
             }
-            if at < 0 { break }
-            ids[at] = merged; ids.remove(at: at + 1)
         }
+        guard cacheable else { return ids }
         lock.lock()
         if cache[key] == nil {
             if fifo.count >= cacheLimit {

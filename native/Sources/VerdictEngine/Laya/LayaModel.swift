@@ -19,6 +19,8 @@ public final class LayaModel: DecisionModel {
     public let id: String
     public let contextLimit = 8192
     private let bits: Int
+    /// 0 and 16 both load plain fp16 Linear weights (LayaNetwork quantizes only 8 and 4), so both take the fp16 path.
+    private var fp16: Bool { bits == 0 || bits == 16 }
     public var residentBytes: Int { network.residentBytes }
     private let prompt: LayaPrompt
     private let temperatures: [Double]
@@ -26,14 +28,16 @@ public final class LayaModel: DecisionModel {
     private let network: LayaNetwork
     /// Question templates and token counts survive across requests: agents repeat the same
     /// questions, and tokenizing a long question (e.g. 20 options) dominated single-item calls.
-    /// Keyed by the question's source JSON, which fully determines both values.
+    /// Keyed by the question's source JSON, which fully determines both values, as exact UTF-8 bytes:
+    /// String keys compare by canonical equivalence, but the Multilingual tokenizer (no normalizer)
+    /// gives NFC and NFD spellings different token IDs.
     static let sortByLength = ProcessInfo.processInfo.environment["VERDICT_LAYA_ARRIVAL_ORDER"] != "1"
     static let tokenBudget = Int(ProcessInfo.processInfo.environment["VERDICT_LAYA_TOKEN_BUDGET"] ?? "") ?? 8192
     static let padMultiple = Int(ProcessInfo.processInfo.environment["VERDICT_LAYA_PAD_MULTIPLE"] ?? "") ?? 16
     static let parallelBytesFast = Int(ProcessInfo.processInfo.environment["VERDICT_LAYA_PARALLEL_BYTES"] ?? "") ?? Int.max
     static let bucketAll = Int(ProcessInfo.processInfo.environment["VERDICT_LAYA_BUCKET"] ?? "") ?? 8
     static let profile = ProcessInfo.processInfo.environment["VERDICT_PROFILE"] == "1"
-    private var questionCache: [String: (template: LayaPrompt.QuestionTemplate, count: Int)] = [:]
+    private var questionCache: [Data: (template: LayaPrompt.QuestionTemplate, count: Int)] = [:]
 
     public init(id: String, snapshot: URL, bits: Int = 0) throws {
         guard ["laya-english", "laya-multilingual", "laya-typed-decisions"].contains(id) else { throw LayaError.invalid("Unknown Laya model '\(id)'") }
@@ -71,16 +75,7 @@ public final class LayaModel: DecisionModel {
     /// Build the chunk's inputs and queue its forward on the GPU without waiting.
     private func launch(_ rows: [LayaPreparedRow]) throws -> MLXArray {
         guard !rows.isEmpty, rows.count <= 64 else { throw LayaError.invalid("Expected 1...64 Laya rows") }
-        var length = rows.map { $0.ids.count }.max()!
-        // fp16 chunks round their padded length up to a bucket so the compiled graph is reused instead of
-        // retraced for every new length. Length-sorted chunks otherwise hit a new shape almost every time:
-        // compile tracing, extra command buffers and buffer churn cost up to a full CPU core. Small forwards
-        // (single items) use 16, larger chunks 8 (measured best on short, long and mixed requests).
-        // fp16 padding is measured bit-neutral; quantized models keep exact lengths.
-        if bits == 0 {
-            let step = rows.count <= 8 ? Self.padMultiple : Self.bucketAll
-            if step > 1 { length = (length + step - 1) / step * step }
-        }
+        let length = paddedLength(rows)
         let count = max(2, rows.map { $0.markers.count }.max()!)
         var ids = [Int32](repeating: Int32(prompt.padID), count: rows.count * length)
         var valid = [Bool](repeating: false, count: ids.count)
@@ -92,6 +87,18 @@ public final class LayaModel: DecisionModel {
         }
         let inputs = [MLXArray(ids, [rows.count, length]), MLXArray(valid, [rows.count, length]), MLXArray(positions, [rows.count, count]), MLXArray(markerMask, [rows.count, count]), MLXArray(rows.map { Int32($0.qtype) })]
         return network.launch(inputs)
+    }
+
+    /// Sequence length a chunk is padded to. fp16 rounds up to a bucket (VERDICT_LAYA_PAD_MULTIPLE, default 16, for
+    /// chunks of <= 8 rows; VERDICT_LAYA_BUCKET, default 8, above); quantized models keep exact lengths.
+    /// Still worth it without compile (fewer distinct shapes for MLX's kernel and buffer reuse), measured
+    /// 24 Sep: jobs batches 22-23% vs 42-44% helper CPU at the same items/s; single items 4.3 vs 5.1 ms
+    /// CPU and 7.5 vs 7.9 ms wall p50.
+    private func paddedLength(_ rows: [LayaPreparedRow]) -> Int {
+        let length = rows.map { $0.ids.count }.max() ?? 0
+        guard fp16 else { return length }
+        let step = rows.count <= 8 ? Self.padMultiple : Self.bucketAll
+        return step > 1 ? (length + step - 1) / step * step : length
     }
 
     /// Wait for a launched chunk and split its logits per row.
@@ -132,10 +139,11 @@ public final class LayaModel: DecisionModel {
         let t1 = clock.now
         var gpu = Duration.zero, padded = 0
         // fp16: chunk rows in length order so each 64-row forward pads only to similar lengths.
-        // Measured bit-identical to arrival order and to the Python worker's batches (fp16 row
-        // results do not depend on padding or neighbours). Quantized (8/4-bit) matmuls do depend
-        // on chunk shape, so those keep arrival order to stay exact with the Python reference.
-        let order = Self.sortByLength && bits == 0 ? rows.indices.sorted { (rows[$0].ids.count, $0) < (rows[$1].ids.count, $1) } : Array(rows.indices)
+        // Not always bit-identical to the Python worker's arrival-order chunks: MLX picks matmul tiling
+        // from the chunk's total size (e.g. M*N >= 2^20), so a row in a small chunk (a lone tail row) can
+        // differ in the 4th decimal (measured 11/1261 random batched items, max 0.0031; arrival order,
+        // VERDICT_LAYA_ARRIVAL_ORDER=1, matched 1261/1261). Quantized (8/4-bit) keep arrival order.
+        let order = Self.sortByLength && fp16 ? rows.indices.sorted { (rows[$0].ids.count, $0) < (rows[$1].ids.count, $1) } : Array(rows.indices)
         // Double-buffered: queue chunk k+1 on the GPU before waiting for chunk k, so the CPU encodes the
         // next graph while the GPU runs the current one. Same computation, only scheduling changes.
         // At most two chunks are in flight, which bounds activation memory.
@@ -152,7 +160,7 @@ public final class LayaModel: DecisionModel {
         for slots in chunks(order, rows: rows) {
             let chunk = slots.map { rows[$0] }
             let output = try launch(chunk)
-            padded += chunk.count * (chunk.map { $0.ids.count }.max() ?? 0)
+            padded += chunk.count * paddedLength(chunk)
             if let (previous, previousOutput) = inflight { try finish(previous, previousOutput) }
             inflight = (slots, output)
         }
@@ -188,7 +196,7 @@ public final class LayaModel: DecisionModel {
     /// exceed the token budget, so a request of long items cannot allocate gigabytes of activations at once.
     /// Quantized models keep plain 64-row chunks in arrival order (their results depend on chunk shape).
     private func chunks(_ order: [Int], rows: [LayaPreparedRow]) -> [[Int]] {
-        guard bits == 0, Self.sortByLength else { return stride(from: 0, to: order.count, by: 64).map { Array(order[$0..<min($0 + 64, order.count)]) } }
+        guard fp16, Self.sortByLength else { return stride(from: 0, to: order.count, by: 64).map { Array(order[$0..<min($0 + 64, order.count)]) } }
         var out: [[Int]] = [], current: [Int] = []
         for slot in order {
             let length = rows[slot].ids.count   // ascending, so this row sets the padded length
@@ -200,11 +208,11 @@ public final class LayaModel: DecisionModel {
     }
 
     private func cachedQuestion(_ question: Question) throws -> (template: LayaPrompt.QuestionTemplate, count: Int) {
-        let json = question.sourceJSON ?? Self.questionJSON(question)
-        if let hit = questionCache[json] { return hit }
+        let json = question.sourceJSON ?? Self.questionJSON(question), key = Data(json.utf8)
+        if let hit = questionCache[key] { return hit }
         let value = (template: try prompt.template(question), count: encode(json, addSpecialTokens: true).count)
         if questionCache.count >= 512 { questionCache.removeAll(keepingCapacity: true) }
-        questionCache[json] = value
+        questionCache[key] = value
         return value
     }
 
