@@ -21,6 +21,9 @@ public final class LayaModel: DecisionModel, KernelPathReporting {
     private let bits: Int
     /// 0 and 16 both load plain fp16 Linear weights (LayaNetwork quantizes only 8 and 4), so both take the fp16 path.
     private var fp16: Bool { bits == 0 || bits == 16 }
+    /// Rows chunked in length order under the token budget: fp16, and quantized unless VERDICT_LAYA_QUANT_SORT=0.
+    /// Quantized keep exact (unbucketed) lengths, so a single item's rows match the Python worker exactly.
+    private var sorted: Bool { Self.sortByLength && (fp16 || Self.quantizedSorted) }
     public var residentBytes: Int { network.residentBytes }
     public var kernelPath: String { network.kernelPath }
     private let prompt: LayaPrompt
@@ -37,6 +40,10 @@ public final class LayaModel: DecisionModel, KernelPathReporting {
     static let padMultiple = Int(ProcessInfo.processInfo.environment["VERDICT_LAYA_PAD_MULTIPLE"] ?? "") ?? 16
     static let parallelBytesFast = Int(ProcessInfo.processInfo.environment["VERDICT_LAYA_PARALLEL_BYTES"] ?? "") ?? Int.max
     static let bucketAll = Int(ProcessInfo.processInfo.environment["VERDICT_LAYA_BUCKET"] ?? "") ?? 8
+    static let quantizedSorted = ProcessInfo.processInfo.environment["VERDICT_LAYA_QUANT_SORT"] != "0"
+    /// Rows per forward chunk (default 64, as the Python worker).
+    static let quantizedBudget = ProcessInfo.processInfo.environment["VERDICT_LAYA_QUANT_BUDGET"] != "0"
+    static let rowCap = max(1, Int(ProcessInfo.processInfo.environment["VERDICT_LAYA_ROWS"] ?? "") ?? 64)
     static let exactSingle = Int(ProcessInfo.processInfo.environment["VERDICT_LAYA_EXACT_SINGLE"] ?? "") ?? 512
     static let unmaskedFull = ProcessInfo.processInfo.environment["VERDICT_LAYA_UNMASKED"] != "0"
     static let profile = ProcessInfo.processInfo.environment["VERDICT_PROFILE"] == "1"
@@ -55,6 +62,9 @@ public final class LayaModel: DecisionModel, KernelPathReporting {
         temperatureBuckets = rawBuckets.mapValues { min(5, max(0.5, $0)) }
         prompt = try LayaPrompt(snapshot: snapshot)
         network = try LayaNetwork(snapshot: snapshot, config: LayaEncoderConfiguration(data: Data(contentsOf: snapshot.appendingPathComponent("encoder/config.json"))), headLayers: headLayers, bits: bits)
+        // Quantizing leaves the fp16 checkpoint arrays (~0.7 GB) in MLX's buffer cache once the loader's
+        // locals go out of scope; return them now rather than at the first cache trim.
+        Memory.clearCache()
     }
 
     public func encode(_ text: String, addSpecialTokens: Bool = false) -> [Int] {
@@ -77,7 +87,7 @@ public final class LayaModel: DecisionModel, KernelPathReporting {
 
     /// Build the chunk's inputs and queue its forward on the GPU without waiting.
     private func launch(_ rows: [LayaPreparedRow]) throws -> MLXArray {
-        guard !rows.isEmpty, rows.count <= 64 else { throw LayaError.invalid("Expected 1...64 Laya rows") }
+        guard !rows.isEmpty, rows.count <= Self.rowCap else { throw LayaError.invalid("Expected 1...\(Self.rowCap) Laya rows") }
         let length = paddedLength(rows)
         let count = max(2, rows.map { $0.markers.count }.max()!)
         var ids = [Int32](repeating: Int32(prompt.padID), count: rows.count * length)
@@ -148,8 +158,9 @@ public final class LayaModel: DecisionModel, KernelPathReporting {
         // Not always bit-identical to the Python worker's arrival-order chunks: MLX picks matmul tiling
         // from the chunk's total size (e.g. M*N >= 2^20), so a row in a small chunk (a lone tail row) can
         // differ in the 4th decimal (measured 11/1261 random batched items, max 0.0031; arrival order,
-        // VERDICT_LAYA_ARRIVAL_ORDER=1, matched 1261/1261). Quantized (8/4-bit) keep arrival order.
-        let order = Self.sortByLength && fp16 ? rows.indices.sorted { (rows[$0].ids.count, $0) < (rows[$1].ids.count, $1) } : Array(rows.indices)
+        // VERDICT_LAYA_ARRIVAL_ORDER=1, matched 1261/1261). Quantized (8/4-bit) are sorted too (their results
+        // depend on chunk shape: 9-set batches max |dp| 0.001, 0 changed answers; mixed requests ~2x faster).
+        let order = sorted ? rows.indices.sorted { (rows[$0].ids.count, $0) < (rows[$1].ids.count, $1) } : Array(rows.indices)
         // Double-buffered: queue chunk k+1 on the GPU before waiting for chunk k, so the CPU encodes the
         // next graph while the GPU runs the current one. Same computation, only scheduling changes.
         // At most two chunks are in flight, which bounds activation memory.
@@ -198,15 +209,29 @@ public final class LayaModel: DecisionModel, KernelPathReporting {
         return out
     }
 
-    /// Chunks of at most 64 rows. At fp16 (length-sorted) a chunk also closes when its padded size would
-    /// exceed the token budget, so a request of long items cannot allocate gigabytes of activations at once.
-    /// Quantized models keep plain 64-row chunks in arrival order (their results depend on chunk shape).
+    /// Chunks of at most 64 rows. Length-sorted, a chunk also closes when its padded size would exceed the
+    /// token budget, so a request of long items cannot allocate gigabytes of activations at once.
     private func chunks(_ order: [Int], rows: [LayaPreparedRow]) -> [[Int]] {
-        guard fp16, Self.sortByLength else { return stride(from: 0, to: order.count, by: 64).map { Array(order[$0..<min($0 + 64, order.count)]) } }
+        guard sorted else {
+            // Arrival order (quantized): plain 64-row chunks, except that a chunk also closes when its padded
+            // size would exceed the token budget. Only chunks holding long rows change shape; 64 rows of ~7.5k
+            // tokens otherwise peaked at 8.9 GB.
+            guard Self.quantizedBudget else { return stride(from: 0, to: order.count, by: Self.rowCap).map { Array(order[$0..<min($0 + Self.rowCap, order.count)]) } }
+            var out: [[Int]] = [], current: [Int] = [], longest = 0
+            for slot in order {
+                let length = rows[slot].ids.count
+                if !current.isEmpty && (current.count == Self.rowCap || (current.count + 1) * max(longest, length) > Self.tokenBudget) {
+                    out.append(current); current = []; longest = 0
+                }
+                current.append(slot); longest = max(longest, length)
+            }
+            if !current.isEmpty { out.append(current) }
+            return out
+        }
         var out: [[Int]] = [], current: [Int] = []
         for slot in order {
             let length = rows[slot].ids.count   // ascending, so this row sets the padded length
-            if !current.isEmpty && (current.count == 64 || (current.count + 1) * length > Self.tokenBudget) { out.append(current); current = [] }
+            if !current.isEmpty && (current.count == Self.rowCap || (current.count + 1) * length > Self.tokenBudget) { out.append(current); current = [] }
             current.append(slot)
         }
         if !current.isEmpty { out.append(current) }

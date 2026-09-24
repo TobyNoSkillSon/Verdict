@@ -63,6 +63,15 @@ struct LayaEncoderConfiguration: Decodable {
 /// Frozen, inference-only weights. Serial use is owned by the helper's model service.
 /// Uses the exact MLX Linear / QuantizedLinear primitives used by the Python model.
 final class LayaNetwork {
+    /// Tolerance-curve candidates, not defaults: VERDICT_LAYA_DTYPE=bf16 runs weights/activations in bfloat16;
+    /// VERDICT_LAYA_QUANT_SCOPE=mlp|attn quantizes (at 8/4 bits) only the MLP or only the attention Linears.
+    static let activationType: DType = ProcessInfo.processInfo.environment["VERDICT_LAYA_DTYPE"] == "bf16" ? .bfloat16 : .float16
+    static let quantScope = ProcessInfo.processInfo.environment["VERDICT_LAYA_QUANT_SCOPE"] ?? "all"
+    static func quantizes(_ name: String) -> Bool {
+        let mlp = name.contains(".mlp.") || name.hasSuffix(".linear1") || name.hasSuffix(".linear2")
+        let attention = name.contains(".attn.") || name.contains(".self_attn.")
+        switch quantScope { case "mlp": return mlp; case "attn": return attention; default: return true }
+    }
     let config: LayaEncoderConfiguration
     let headLayers: Int
     private var arrays: [String: MLXArray] = [:]
@@ -83,7 +92,7 @@ final class LayaNetwork {
                 key = prefix + ".layers." + key.dropFirst(prefix.count + 1)
             }
             guard weights[key] == nil else { throw LayaError.invalid("Duplicate checkpoint parameter \(key)") }
-            weights[key] = array.asType(.float16)
+            weights[key] = array.asType(LayaNetwork.activationType)
         }
         // Only actual Linear layers are quantized; never embeddings or LayerNorm.
         var linearNames = ["scorer.layers.1", "scorer.layers.3", "act_head.layers.0", "act_head.layers.2"]
@@ -98,7 +107,7 @@ final class LayaNetwork {
                 throw LayaError.invalid("Missing or invalid Linear weight \(name)")
             }
             let bias = weights.removeValue(forKey: name + ".bias")
-            if (bits == 4 || bits == 8) && weight.dim(-1) % 64 == 0 {
+            if (bits == 4 || bits == 8) && weight.dim(-1) % 64 == 0 && LayaNetwork.quantizes(name) {
                 linears[name] = QuantizedLinear(weight: weight, bias: bias, groupSize: 64, bits: bits)
             } else { linears[name] = Linear(weight: weight, bias: bias) }
         }
@@ -148,6 +157,7 @@ final class LayaNetwork {
 /// GELU(a) * b in one kernel: MLXNN's gelu is itself a shapeless compiled closure (same formula); fusing the
 /// product saves one pass over [M, I]. Captures no arrays, so the thread-local compile cache holds no weights.
 private let geglu: @Sendable (MLXArray, MLXArray) -> MLXArray = compile(shapeless: true) { a, b in a * (1 + erf(a / sqrt(2))) / 2 * b }
+private let addmmResidual = ProcessInfo.processInfo.environment["VERDICT_LAYA_ADDMM"] == "1"
 private let fusedGeGLU = ProcessInfo.processInfo.environment["VERDICT_LAYA_GEGLU"] != "0"
 
 private final class LayaGraph {
@@ -163,9 +173,16 @@ private final class LayaGraph {
         MLXFast.layerNorm(x, weight: arrays[name + ".weight"], bias: arrays[name + ".bias"], eps: eps)
     }
     func linear(_ x: MLXArray, _ name: String) -> MLXArray { linears[name]!(x) }
+    /// residual + x W^T. With VERDICT_LAYA_ADDMM=1 and a plain bias-free Linear, one addmm kernel (the residual
+    /// is added in the fp32 epilogue before rounding: not bit-identical); otherwise matmul then add.
+    func linear(_ x: MLXArray, _ name: String, residual: MLXArray) -> MLXArray {
+        let layer = linears[name]!
+        if addmmResidual, type(of: layer) == Linear.self, layer.bias == nil { return addMM(residual, x, layer.weight.T) }
+        return residual + layer(x)
+    }
     /// `mask` nil: no mask (unpadded chunk). `window`: the block mask (LayaWindowedAttention.mask) when this
     /// sliding layer takes the windowed path.
-    func attention(_ x: MLXArray, name: String, heads: Int, mask: MLXArray?, ropeBase: Float? = nil, window: MLXArray? = nil) -> MLXArray {
+    func attention(_ x: MLXArray, name: String, heads: Int, mask: MLXArray?, ropeBase: Float? = nil, window: MLXArray? = nil, residual: MLXArray) -> MLXArray {
         let b = x.dim(0), length = x.dim(1), dims = x.dim(2), d = dims / heads
         let qkv = linear(x, name + (ropeBase == nil ? ".in_proj" : ".Wqkv")).reshaped(b, length, 3, heads, d)
         var q = qkv[0..., 0..., 0, 0..., 0...].transposed(0, 2, 1, 3)
@@ -177,10 +194,10 @@ private final class LayaGraph {
         }
         if let blockMask = window {
             let attended = LayaWindowedAttention.attend(q: q, k: k, v: v, mask: blockMask, half: config.local_attention / 2, scale: pow(Float(d), -0.5))
-            return linear(attended, name + ".Wo")
+            return linear(attended, name + ".Wo", residual: residual)
         }
         let attended = MLXFast.scaledDotProductAttention(queries: q, keys: k, values: v, scale: pow(Float(d), -0.5), mask: mask.map { .array($0) } ?? .none)
-        return linear(attended.transposed(0, 2, 1, 3).reshaped(b, length, dims), name + (ropeBase == nil ? ".out_proj" : ".Wo"))
+        return linear(attended.transposed(0, 2, 1, 3).reshaped(b, length, dims), name + (ropeBase == nil ? ".out_proj" : ".Wo"), residual: residual)
     }
     func forward(_ inputs: [MLXArray], unmasked: Bool) -> MLXArray {
         let ids = inputs[0], valid = inputs[1], markers = inputs[2], markerMask = inputs[3], qtype = inputs[4]
@@ -202,17 +219,17 @@ private final class LayaGraph {
             let prefix = "encoder.layers.\(i)", kind = config.kind(i)
             let normalized = i == 0 ? x : norm(x, prefix + ".attn_norm", eps: config.norm_eps)
             let global = kind == "full_attention"
-            x = x + attention(normalized, name: prefix + ".attn", heads: config.num_attention_heads, mask: global ? full : local,
-                              ropeBase: config.ropeBase(kind), window: global ? nil : blockMask)
+            x = attention(normalized, name: prefix + ".attn", heads: config.num_attention_heads, mask: global ? full : local,
+                          ropeBase: config.ropeBase(kind), window: global ? nil : blockMask, residual: x)
             let mlp = linear(norm(x, prefix + ".mlp_norm", eps: config.norm_eps), prefix + ".mlp.Wi")
             let halves = split(mlp, parts: 2, axis: -1)
-            x = x + linear(fusedGeGLU ? geglu(halves[0], halves[1]) : gelu(halves[0]) * halves[1], prefix + ".mlp.Wo")
+            x = linear(fusedGeGLU ? geglu(halves[0], halves[1]) : gelu(halves[0]) * halves[1], prefix + ".mlp.Wo", residual: x)
         }
         x = norm(x, "encoder.final_norm", eps: config.norm_eps)
         x = x + arrays["type_emb.weight"]![qtype].expandedDimensions(axis: 1)
         for i in 0..<headLayers {
             let prefix = "head.layers.\(i)"
-            x = x + attention(norm(x, prefix + ".norm1"), name: prefix + ".self_attn", heads: max(1, config.hidden_size / 64), mask: full)
+            x = attention(norm(x, prefix + ".norm1"), name: prefix + ".self_attn", heads: max(1, config.hidden_size / 64), mask: full, residual: x)
             x = x + linear(relu(linear(norm(x, prefix + ".norm2"), prefix + ".linear1")), prefix + ".linear2")
         }
         let gathered = x[MLXArray(0..<b).expandedDimensions(axis: 1), maximum(markers, 0)]
