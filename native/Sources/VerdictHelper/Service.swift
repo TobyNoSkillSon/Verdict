@@ -88,6 +88,7 @@ final class Service {
             models[id] = agent; order.append(id)
             var active = state["models"] as? [String: Any] ?? [:]
             active[id] = ["device": "mlx", "load_s": (Date().timeIntervalSince(start) * 10).rounded() / 10, "bits": bits]
+            if let path = (agent as? KernelPathReporting)?.kernelPath, var entry = active[id] as? [String: Any] { entry["kernel"] = path; active[id] = entry }
             state["models"] = active; state["loading"] = NSNull(); state["downloading"] = false; writeStatus()
             return agent
         } catch {

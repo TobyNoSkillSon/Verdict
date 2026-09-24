@@ -15,13 +15,14 @@ public struct LayaPreparedRow: Codable, Sendable {
     public init(ids: [Int], markers: [Int], qtype: Int) { self.ids = ids; self.markers = markers; self.qtype = qtype }
 }
 
-public final class LayaModel: DecisionModel {
+public final class LayaModel: DecisionModel, KernelPathReporting {
     public let id: String
     public let contextLimit = 8192
     private let bits: Int
     /// 0 and 16 both load plain fp16 Linear weights (LayaNetwork quantizes only 8 and 4), so both take the fp16 path.
     private var fp16: Bool { bits == 0 || bits == 16 }
     public var residentBytes: Int { network.residentBytes }
+    public var kernelPath: String { network.kernelPath }
     private let prompt: LayaPrompt
     private let temperatures: [Double]
     private let temperatureBuckets: [String: Double]
