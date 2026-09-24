@@ -37,6 +37,8 @@ public final class LayaModel: DecisionModel, KernelPathReporting {
     static let padMultiple = Int(ProcessInfo.processInfo.environment["VERDICT_LAYA_PAD_MULTIPLE"] ?? "") ?? 16
     static let parallelBytesFast = Int(ProcessInfo.processInfo.environment["VERDICT_LAYA_PARALLEL_BYTES"] ?? "") ?? Int.max
     static let bucketAll = Int(ProcessInfo.processInfo.environment["VERDICT_LAYA_BUCKET"] ?? "") ?? 8
+    static let exactSingle = Int(ProcessInfo.processInfo.environment["VERDICT_LAYA_EXACT_SINGLE"] ?? "") ?? 512
+    static let unmaskedFull = ProcessInfo.processInfo.environment["VERDICT_LAYA_UNMASKED"] != "0"
     static let profile = ProcessInfo.processInfo.environment["VERDICT_PROFILE"] == "1"
     private var questionCache: [Data: (template: LayaPrompt.QuestionTemplate, count: Int)] = [:]
 
@@ -87,7 +89,9 @@ public final class LayaModel: DecisionModel, KernelPathReporting {
             for (j, marker) in row.markers.enumerated() { positions[i * count + j] = Int32(marker); markerMask[i * count + j] = true }
         }
         let inputs = [MLXArray(ids, [rows.count, length]), MLXArray(valid, [rows.count, length]), MLXArray(positions, [rows.count, count]), MLXArray(markerMask, [rows.count, count]), MLXArray(rows.map { Int32($0.qtype) })]
-        return network.launch(inputs)
+        // No padding in the chunk (e.g. a long row alone): full-attention layers skip the key mask
+        // (−20% per global layer at 2k–8k tokens; an all-true mask changes nothing).
+        return network.launch(inputs, unmasked: Self.unmaskedFull && rows.allSatisfy { $0.ids.count == length })
     }
 
     /// Sequence length a chunk is padded to. fp16 rounds up to a bucket (VERDICT_LAYA_PAD_MULTIPLE, default 16, for
@@ -97,7 +101,8 @@ public final class LayaModel: DecisionModel, KernelPathReporting {
     /// CPU and 7.5 vs 7.9 ms wall p50.
     private func paddedLength(_ rows: [LayaPreparedRow]) -> Int {
         let length = rows.map { $0.ids.count }.max() ?? 0
-        guard fp16 else { return length }
+        // A long row alone keeps its exact length: shape reuse is moot there, and no padding means no mask.
+        guard fp16, !(rows.count == 1 && length >= Self.exactSingle) else { return length }
         let step = rows.count <= 8 ? Self.padMultiple : Self.bucketAll
         return step > 1 ? (length + step - 1) / step * step : length
     }

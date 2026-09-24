@@ -131,14 +131,15 @@ final class LayaNetwork {
     }
 
     /// Queue the forward on the GPU without blocking; the caller reads the result later.
-    func launch(_ inputs: [MLXArray]) -> MLXArray {
-        let result = graph.forward(inputs)
+    /// `unmasked`: every row fills the padded length (no padding), so full-attention layers need no mask.
+    func launch(_ inputs: [MLXArray], unmasked: Bool = false) -> MLXArray {
+        let result = graph.forward(inputs, unmasked: unmasked)
         asyncEval(result)
         return result
     }
 
-    func forward(_ inputs: [MLXArray]) -> MLXArray {
-        let result = graph.forward(inputs)
+    func forward(_ inputs: [MLXArray], unmasked: Bool = false) -> MLXArray {
+        let result = graph.forward(inputs, unmasked: unmasked)
         eval(result)
         return result
     }
@@ -157,7 +158,8 @@ private final class LayaGraph {
         MLXFast.layerNorm(x, weight: arrays[name + ".weight"], bias: arrays[name + ".bias"], eps: eps)
     }
     func linear(_ x: MLXArray, _ name: String) -> MLXArray { linears[name]!(x) }
-    /// `window`: the block mask (LayaWindowedAttention.mask) when this sliding layer takes the windowed path.
+    /// `mask` nil: no mask (unpadded chunk). `window`: the block mask (LayaWindowedAttention.mask) when this
+    /// sliding layer takes the windowed path.
     func attention(_ x: MLXArray, name: String, heads: Int, mask: MLXArray?, ropeBase: Float? = nil, window: MLXArray? = nil) -> MLXArray {
         let b = x.dim(0), length = x.dim(1), dims = x.dim(2), d = dims / heads
         let qkv = linear(x, name + (ropeBase == nil ? ".in_proj" : ".Wqkv")).reshaped(b, length, 3, heads, d)
@@ -172,13 +174,14 @@ private final class LayaGraph {
             let attended = LayaWindowedAttention.attend(q: q, k: k, v: v, mask: blockMask, half: config.local_attention / 2, scale: pow(Float(d), -0.5))
             return linear(attended, name + ".Wo")
         }
-        let attended = MLXFast.scaledDotProductAttention(queries: q, keys: k, values: v, scale: pow(Float(d), -0.5), mask: .array(mask!))
+        let attended = MLXFast.scaledDotProductAttention(queries: q, keys: k, values: v, scale: pow(Float(d), -0.5), mask: mask.map { .array($0) } ?? .none)
         return linear(attended.transposed(0, 2, 1, 3).reshaped(b, length, dims), name + (ropeBase == nil ? ".out_proj" : ".Wo"))
     }
-    func forward(_ inputs: [MLXArray]) -> MLXArray {
+    func forward(_ inputs: [MLXArray], unmasked: Bool) -> MLXArray {
         let ids = inputs[0], valid = inputs[1], markers = inputs[2], markerMask = inputs[3], qtype = inputs[4]
         let b = ids.dim(0), length = ids.dim(1)
-        let full = valid.reshaped(b, 1, 1, length)
+        let fullMask = valid.reshaped(b, 1, 1, length)
+        let full: MLXArray? = unmasked ? nil : fullMask
         let windowed = self.windowed && length >= LayaWindowedAttention.minimumLength
         var local: MLXArray? = nil, blockMask: MLXArray? = nil
         if windowed {
@@ -186,7 +189,7 @@ private final class LayaGraph {
         } else {
             let positions = MLXArray(0..<length)
             let localDistances = abs(positions.expandedDimensions(axis: 1) - positions.expandedDimensions(axis: 0)) .<= (config.local_attention / 2)
-            local = logicalAnd(logicalOr(localDistances.reshaped(1, 1, length, length), logicalNot(valid.reshaped(b, 1, length, 1))), full)
+            local = logicalAnd(logicalOr(localDistances.reshaped(1, 1, length, length), logicalNot(valid.reshaped(b, 1, length, 1))), fullMask)
         }
         var x = arrays["encoder.embeddings.tok_embeddings.weight"]![ids]
         x = norm(x, "encoder.embeddings.norm", eps: config.norm_eps)
