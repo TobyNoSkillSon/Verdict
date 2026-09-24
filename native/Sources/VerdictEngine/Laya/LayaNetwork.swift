@@ -145,6 +145,11 @@ final class LayaNetwork {
     }
 }
 
+/// GELU(a) * b in one kernel: MLXNN's gelu is itself a shapeless compiled closure (same formula); fusing the
+/// product saves one pass over [M, I]. Captures no arrays, so the thread-local compile cache holds no weights.
+private let geglu: @Sendable (MLXArray, MLXArray) -> MLXArray = compile(shapeless: true) { a, b in a * (1 + erf(a / sqrt(2))) / 2 * b }
+private let fusedGeGLU = ProcessInfo.processInfo.environment["VERDICT_LAYA_GEGLU"] != "0"
+
 private final class LayaGraph {
     let config: LayaEncoderConfiguration
     let headLayers: Int
@@ -201,7 +206,7 @@ private final class LayaGraph {
                               ropeBase: config.ropeBase(kind), window: global ? nil : blockMask)
             let mlp = linear(norm(x, prefix + ".mlp_norm", eps: config.norm_eps), prefix + ".mlp.Wi")
             let halves = split(mlp, parts: 2, axis: -1)
-            x = x + linear(gelu(halves[0]) * halves[1], prefix + ".mlp.Wo")
+            x = x + linear(fusedGeGLU ? geglu(halves[0], halves[1]) : gelu(halves[0]) * halves[1], prefix + ".mlp.Wo")
         }
         x = norm(x, "encoder.final_norm", eps: config.norm_eps)
         x = x + arrays["type_emb.weight"]![qtype].expandedDimensions(axis: 1)
