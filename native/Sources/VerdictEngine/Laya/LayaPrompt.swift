@@ -11,6 +11,7 @@ public final class LayaPrompt {
     }
 
     private let tokenizer: any Tokenizer
+    private let fastTokenizer: FastByteBPE?
     private let clsID: Int, sepID: Int, maskID: Int
     let padID: Int
     private let maskToken: String
@@ -28,6 +29,7 @@ public final class LayaPrompt {
         let decoder = JSONDecoder()
         let loaded = try AutoTokenizer.from(tokenizerConfig: decoder.decode(Config.self, from: configData), tokenizerData: decoder.decode(Config.self, from: tokenData))
         tokenizer = loaded
+        fastTokenizer = FastByteBPE(data: tokenData)
         // Both shipped checkpoint post-processors add exactly [CLS, SEP] (or
         // <bos, eos>) to a single sequence. Check at load rather than assuming
         // that future tokenizer revisions preserve this shortcut.
@@ -44,7 +46,8 @@ public final class LayaPrompt {
         (_, padID) = try special("pad_token"); (maskToken, maskID) = try special("mask_token")
     }
     public func encode(_ text: String, addSpecialTokens: Bool = false) -> [Int] {
-        tokenizer.encode(text: text, addSpecialTokens: addSpecialTokens)
+        fastTokenizer?.encode(text, addSpecialTokens: addSpecialTokens)
+            ?? tokenizer.encode(text: text, addSpecialTokens: addSpecialTokens)
     }
     /// Encode the state once for all of its question rows. Context counting
     /// uses the original text; only sequence construction removes a literal

@@ -13,3 +13,6 @@ bench/results/
 bench/research/
 bench/__pycache__/
 bench/tasks/__pycache__/
+native/perf/scratch/*.log
+native/perf/scratch/tokcli
+native/perf/scratch/BenchPackage/.build/

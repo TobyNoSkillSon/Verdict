@@ -29,6 +29,7 @@ public final class LayaModel: DecisionModel {
     /// Keyed by the question's source JSON, which fully determines both values.
     static let sortByLength = ProcessInfo.processInfo.environment["VERDICT_LAYA_ARRIVAL_ORDER"] != "1"
     static let tokenBudget = Int(ProcessInfo.processInfo.environment["VERDICT_LAYA_TOKEN_BUDGET"] ?? "") ?? 8192
+    static let padMultiple = Int(ProcessInfo.processInfo.environment["VERDICT_LAYA_PAD_MULTIPLE"] ?? "") ?? 16
     static let profile = ProcessInfo.processInfo.environment["VERDICT_PROFILE"] == "1"
     private var questionCache: [String: (template: LayaPrompt.QuestionTemplate, count: Int)] = [:]
 
@@ -63,7 +64,12 @@ public final class LayaModel: DecisionModel {
     /// Raw logits are exposed for numerical parity fixtures, not through the public HTTP API.
     public func logits(_ rows: [LayaPreparedRow]) throws -> [[Float]] {
         guard !rows.isEmpty, rows.count <= 64 else { throw LayaError.invalid("Expected 1...64 Laya rows") }
-        let length = rows.map { $0.ids.count }.max()!, count = max(2, rows.map { $0.markers.count }.max()!)
+        var length = rows.map { $0.ids.count }.max()!
+        // Small fp16 forwards (single items) pad to a multiple of 16 so the compiled graph is reused
+        // instead of retraced for every new length (~2-3 ms). fp16 padding is measured bit-neutral;
+        // big batches skip it (the extra padding costs more than the retrace they rarely need).
+        if bits == 0 && rows.count <= 8 && Self.padMultiple > 1 { length = (length + Self.padMultiple - 1) / Self.padMultiple * Self.padMultiple }
+        let count = max(2, rows.map { $0.markers.count }.max()!)
         var ids = [Int32](repeating: Int32(prompt.padID), count: rows.count * length)
         var valid = [Bool](repeating: false, count: ids.count)
         var positions = [Int32](repeating: 0, count: rows.count * count)
