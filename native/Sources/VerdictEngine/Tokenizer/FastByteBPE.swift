@@ -10,23 +10,27 @@ public final class FastByteBPE: @unchecked Sendable {
     }
     private struct Merge { let rank: Int; let id: Int }
     private let added: [UInt32: [Added]]
+    private let tokenIDs: [Data: Int]
     private let byteIDs: [Int]
     private let merges: [UInt64: Merge]
     private let cls: Int, sep: Int
     private let lock = NSLock()
-    private var cache: [String: [Int]] = [:]
-    private var fifo: [String] = []
+    private var cache: [Data: [Int]] = [:]
+    private var fifo: [Data] = []
     private var eviction = 0
     private let cacheLimit = 4096
 
     private static func dict(_ a: Any?) -> [String: Any]? { a as? [String: Any] }
-    private static func keys(_ d: [String: Any], _ names: Set<String>) -> Bool { Set(d.keys) == names }
+    private static func keys(_ d: [String: Any], _ names: Set<String>) -> Bool {
+        Set(d.keys.map { Data($0.utf8) }) == Set(names.map { Data($0.utf8) })
+    }
     private static func equal(_ d: [String: Any], _ field: String, _ value: Any) -> Bool {
         guard let a = d[field] else { return false }
         if value is NSNull { return a is NSNull }
         if let b = value as? Bool { return (a as? NSNumber)?.objCType.pointee == 99 && (a as? Bool) == b }
         if let n = value as? Int { return (a as? Int) == n }
-        return (a as? String) == (value as? String)
+        guard let left = a as? String, let right = value as? String else { return false }
+        return left.utf8.elementsEqual(right.utf8)
     }
     private static func pair(_ a: Int, _ b: Int) -> UInt64 { UInt64(a) << 32 | UInt64(b) }
 
@@ -51,28 +55,38 @@ public final class FastByteBPE: @unchecked Sendable {
               model["dropout"] is NSNull, model["unk_token"] is NSNull,
               model["continuing_subword_prefix"] is NSNull, model["end_of_word_suffix"] is NSNull,
               Self.equal(model, "fuse_unk", false), Self.equal(model, "byte_fallback", false), Self.equal(model, "ignore_merges", false),
-              let vocab = model["vocab"] as? [String: Int], vocab.count == 50280,
+              let rawVocab = model["vocab"] as? [String: Int], rawVocab.count == 50280,
               let mergeRows = model["merges"] as? [[String]], mergeRows.count == 50009,
               let addedRows = root["added_tokens"] as? [[String: Any]], addedRows.count == 116
         else { return nil }
+        // Foundation's String keys compare by canonical equivalence; materialize
+        // exact UTF-8 keys before any vocab/merge lookup. The shape count above
+        // rejects a JSON table whose distinct keys were folded during parsing.
+        var vocab = [Data: Int](minimumCapacity: rawVocab.count)
+        for (word, id) in rawVocab {
+            guard vocab.updateValue(id, forKey: Data(word.utf8)) == nil else { return nil }
+        }
         for (name, id) in [("[CLS]", 50281), ("[SEP]", 50282), ("[PAD]", 50283), ("[MASK]", 50284), ("[UNK]", 50280)] {
             guard let s = Self.dict(specials[name]), Self.keys(s, ["id", "ids", "tokens"]),
-                  Self.equal(s, "id", name), (s["ids"] as? [Int]) == [id], (s["tokens"] as? [String]) == [name]
+                  Self.equal(s, "id", name), (s["ids"] as? [Int]) == [id],
+                  let tokens = s["tokens"] as? [String], tokens.count == 1, tokens[0].utf8.elementsEqual(name.utf8)
             else { return nil }
         }
         var mapped = [UInt32: [Added]]()
         var seen = Set<Int>()
+        var tokenIDs = [Data: Int](minimumCapacity: addedRows.count)
         for row in addedRows {
             guard Self.keys(row, ["id", "content", "single_word", "lstrip", "rstrip", "normalized", "special"]),
                   let id = row["id"] as? Int, let content = row["content"] as? String,
                   !content.isEmpty, content.unicodeScalars.allSatisfy({ $0.value < 128 }), !seen.contains(id),
-                  (id >= 50280 ? vocab[content] == nil : vocab[content] == id),
+                  (id >= 50280 ? vocab[Data(content.utf8)] == nil : vocab[Data(content.utf8)] == id),
                   Self.equal(row, "single_word", false), Self.equal(row, "rstrip", false),
                   let lstrip = row["lstrip"] as? Bool, let normalized = row["normalized"] as? Bool,
                   let special = row["special"] as? Bool,
-                  lstrip == (content == "[MASK]"), normalized == !special,
+                  lstrip == content.utf8.elementsEqual("[MASK]".utf8), normalized == !special,
                   (!special || ["<|padding|>", "<|endoftext|>", "[UNK]", "[CLS]", "[SEP]", "[PAD]", "[MASK]"].contains(content))
             else { return nil }
+            guard tokenIDs.updateValue(id, forKey: Data(content.utf8)) == nil else { return nil }
             seen.insert(id)
             let seq = Array(content.unicodeScalars)
             mapped[seq[0].value, default: []].append(Added(id: id, scalars: seq, lstrip: lstrip))
@@ -88,18 +102,20 @@ public final class FastByteBPE: @unchecked Sendable {
                 byteChars[b] = String(Unicode.Scalar(b)!)
             } else { byteChars[b] = String(Unicode.Scalar(next)!); next += 1 }
         }
-        let byteIDs = byteChars.map { vocab[$0] ?? -1 }
+        let byteIDs = byteChars.map { vocab[Data($0.utf8)] ?? -1 }
         guard byteIDs.enumerated().allSatisfy({ b, id in id >= 0 || b == 0xc0 || b == 0xc1 || b >= 0xf5 }) else { return nil }
         var rankMap = [UInt64: Merge](minimumCapacity: mergeRows.count)
         for (rank, row) in mergeRows.enumerated() {
-            guard row.count == 2, let a = vocab[row[0]], let b = vocab[row[1]],
-                  let combined = vocab[row[0] + row[1]], rankMap[Self.pair(a, b)] == nil
+            guard row.count == 2, let a = vocab[Data(row[0].utf8)], let b = vocab[Data(row[1].utf8)],
+                  let combined = vocab[Data(row[0].utf8) + Data(row[1].utf8)], rankMap[Self.pair(a, b)] == nil
             else { return nil }
             rankMap[Self.pair(a, b)] = Merge(rank: rank, id: combined)
         }
-        self.added = mapped; self.byteIDs = byteIDs; self.merges = rankMap
-        cls = 50281; sep = 50282
+        guard let clsID = tokenIDs[Data("[CLS]".utf8)], let sepID = tokenIDs[Data("[SEP]".utf8)] else { return nil }
+        self.added = mapped; self.tokenIDs = tokenIDs; self.byteIDs = byteIDs; self.merges = rankMap
+        cls = clsID; sep = sepID
     }
+    public func tokenID(_ token: String) -> Int? { tokenIDs[Data(token.utf8)] }
     private static func byteLevel(_ d: [String: Any]) -> Bool {
         keys(d, ["type", "add_prefix_space", "trim_offsets", "use_regex"]) && equal(d, "type", "ByteLevel") &&
         equal(d, "add_prefix_space", false) && equal(d, "trim_offsets", true) && equal(d, "use_regex", true)
@@ -119,7 +135,8 @@ public final class FastByteBPE: @unchecked Sendable {
         }
     }
     private func bpe(_ word: String) -> [Int] {
-        lock.lock(); let cached = cache[word]; lock.unlock()
+        let key = Data(word.utf8)
+        lock.lock(); let cached = cache[key]; lock.unlock()
         if let cached { return cached }
         var ids = word.utf8.map { byteIDs[Int($0)] }
         while ids.count > 1 {
@@ -133,12 +150,12 @@ public final class FastByteBPE: @unchecked Sendable {
             ids[at] = merged; ids.remove(at: at + 1)
         }
         lock.lock()
-        if cache[word] == nil {
+        if cache[key] == nil {
             if fifo.count >= cacheLimit {
-                cache.removeValue(forKey: fifo[eviction]); fifo[eviction] = word
+                cache.removeValue(forKey: fifo[eviction]); fifo[eviction] = key
                 eviction = (eviction + 1) % cacheLimit
-            } else { fifo.append(word) }
-            cache[word] = ids
+            } else { fifo.append(key) }
+            cache[key] = ids
         }
         lock.unlock()
         return ids

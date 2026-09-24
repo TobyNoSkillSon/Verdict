@@ -10,8 +10,8 @@ public final class LayaPrompt {
         let qtype: Int
     }
 
-    private let tokenizer: any Tokenizer
-    private let fastTokenizer: FastByteBPE?
+    private let tokenizer: (any Tokenizer)?
+    private let fastEncode: ((String, Bool) -> [Int])?
     private let clsID: Int, sepID: Int, maskID: Int
     let padID: Int
     private let maskToken: String
@@ -26,29 +26,57 @@ public final class LayaPrompt {
         let dir = snapshot.appendingPathComponent("tokenizer")
         let configData = try Data(contentsOf: dir.appendingPathComponent("tokenizer_config.json"))
         let tokenData = try Data(contentsOf: dir.appendingPathComponent("tokenizer.json"))
-        let decoder = JSONDecoder()
-        let loaded = try AutoTokenizer.from(tokenizerConfig: decoder.decode(Config.self, from: configData), tokenizerData: decoder.decode(Config.self, from: tokenData))
-        tokenizer = loaded
-        fastTokenizer = FastByteBPE(data: tokenData)
-        // Both shipped checkpoint post-processors add exactly [CLS, SEP] (or
-        // <bos, eos>) to a single sequence. Check at load rather than assuming
-        // that future tokenizer revisions preserve this shortcut.
-        singleSpecialTokenCount = loaded.encode(text: "", addSpecialTokens: true).count
-            - loaded.encode(text: "", addSpecialTokens: false).count
-        guard singleSpecialTokenCount == 2 else { throw LayaError.invalid("Unsupported Laya tokenizer post-processor") }
         let config = try JSONSerialization.jsonObject(with: configData) as? [String: Any] ?? [:]
-        func special(_ name: String) throws -> (String, Int) {
-            let value = config[name] as? String ?? (config[name] as? [String: Any])?["content"] as? String
-            guard let text = value, let id = loaded.convertTokenToId(text) else { throw LayaError.invalid("Tokenizer is missing a valid \(name)") }
-            return (text, id)
+        func text(_ name: String) -> String? {
+            config[name] as? String ?? (config[name] as? [String: Any])?["content"] as? String
         }
-        (_, clsID) = try special("cls_token"); (_, sepID) = try special("sep_token")
-        (_, padID) = try special("pad_token"); (maskToken, maskID) = try special("mask_token")
+        func fastIDs(_ expected: [String: String], lookup: (String) -> Int?) -> (Int, Int, Int, Int)? {
+            func id(_ name: String) -> Int? {
+                guard let token = text(name), let wanted = expected[name],
+                      token.utf8.elementsEqual(wanted.utf8) else { return nil }
+                return lookup(token)
+            }
+            guard let cls = id("cls_token"), let sep = id("sep_token"),
+                  let pad = id("pad_token"), let mask = id("mask_token"),
+                  Set([cls, sep, pad, mask]).count == 4 else { return nil }
+            return (cls, sep, pad, mask)
+        }
+        let english = ["cls_token": "[CLS]", "sep_token": "[SEP]", "pad_token": "[PAD]", "mask_token": "[MASK]"]
+        let multilingual = ["cls_token": "<bos>", "sep_token": "<eos>", "pad_token": "<pad>", "mask_token": "<mask>"]
+        if english.allSatisfy({ text($0.key)?.utf8.elementsEqual($0.value.utf8) == true }),
+           let fast = FastByteBPE(data: tokenData), let ids = fastIDs(english, lookup: fast.tokenID) {
+            tokenizer = nil
+            fastEncode = { fast.encode($0, addSpecialTokens: $1) }
+            singleSpecialTokenCount = 2
+            (clsID, sepID, padID, maskID) = ids; maskToken = text("mask_token")!
+        } else if multilingual.allSatisfy({ text($0.key)?.utf8.elementsEqual($0.value.utf8) == true }),
+                  let fast = FastMetaspaceBPE(data: tokenData), let ids = fastIDs(multilingual, lookup: fast.tokenID) {
+            tokenizer = nil
+            fastEncode = { fast.encode($0, addSpecialTokens: $1) }
+            singleSpecialTokenCount = 2
+            (clsID, sepID, padID, maskID) = ids; maskToken = text("mask_token")!
+        } else {
+            let decoder = JSONDecoder()
+            let loaded = try AutoTokenizer.from(tokenizerConfig: decoder.decode(Config.self, from: configData), tokenizerData: decoder.decode(Config.self, from: tokenData))
+            tokenizer = loaded
+            fastEncode = nil
+            singleSpecialTokenCount = loaded.encode(text: "", addSpecialTokens: true).count
+                - loaded.encode(text: "", addSpecialTokens: false).count
+            guard singleSpecialTokenCount == 2 else { throw LayaError.invalid("Unsupported Laya tokenizer post-processor") }
+            func special(_ name: String) throws -> (String, Int) {
+                guard let token = text(name), let id = loaded.convertTokenToId(token) else {
+                    throw LayaError.invalid("Tokenizer is missing a valid \(name)")
+                }
+                return (token, id)
+            }
+            (_, clsID) = try special("cls_token"); (_, sepID) = try special("sep_token")
+            (_, padID) = try special("pad_token"); (maskToken, maskID) = try special("mask_token")
+        }
     }
-    var hasFastTokenizer: Bool { fastTokenizer != nil }
+    var hasFastTokenizer: Bool { fastEncode != nil }
     public func encode(_ text: String, addSpecialTokens: Bool = false) -> [Int] {
-        fastTokenizer?.encode(text, addSpecialTokens: addSpecialTokens)
-            ?? tokenizer.encode(text: text, addSpecialTokens: addSpecialTokens)
+        fastEncode?(text, addSpecialTokens)
+            ?? tokenizer!.encode(text: text, addSpecialTokens: addSpecialTokens)
     }
     /// Encode the state once for all of its question rows. Context counting
     /// uses the original text; only sequence construction removes a literal
