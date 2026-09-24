@@ -23,6 +23,11 @@ public final class LayaModel: DecisionModel {
     private let temperatures: [Double]
     private let temperatureBuckets: [String: Double]
     private let network: LayaNetwork
+    /// Question templates and token counts survive across requests: agents repeat the same
+    /// questions, and tokenizing a long question (e.g. 20 options) dominated single-item calls.
+    /// Keyed by the question's source JSON, which fully determines both values.
+    static let profile = ProcessInfo.processInfo.environment["VERDICT_PROFILE"] == "1"
+    private var questionCache: [String: (template: LayaPrompt.QuestionTemplate, count: Int)] = [:]
 
     public init(id: String, snapshot: URL, bits: Int = 0) throws {
         guard ["laya-english", "laya-multilingual", "laya-typed-decisions"].contains(id) else { throw LayaError.invalid("Unknown Laya model '\(id)'") }
@@ -77,13 +82,16 @@ public final class LayaModel: DecisionModel {
 
     public func predict(_ items: [Item], _ questions: [Question]) throws -> [ItemResult] {
         guard !questions.isEmpty else { throw LayaError.invalid("questions must be a nonempty object") }
-        let questionCount = questions.map { encode($0.sourceJSON ?? Self.questionJSON($0), addSpecialTokens: true).count }.max() ?? 0
-        let templates = try questions.map { try prompt.template($0) }
+        let clock = ContinuousClock(), t0 = clock.now
+        let prepared = try questions.map(cachedQuestion)
+        let questionCount = prepared.map(\.count).max() ?? 0
+        let templates = prepared.map(\.template)
         var results = Array(repeating: ItemResult.answers([:]), count: items.count)
         var answers = Array(repeating: [String: Answer](), count: items.count)
         var rows: [LayaPreparedRow] = [], metadata: [(Int, Question)] = []
-        for (i, item) in items.enumerated() {
-            let state = prompt.encodeState(item.text)
+        let states = encodeStates(items.map(\.text))
+        for (i, _) in items.enumerated() {
+            let state = states[i]
             let count = state.count + questionCount + 8
             if count > contextLimit {
                 results[i] = .error("Item needs about \(count) tokens; \(id) accepts \(contextLimit). Shorten it or split it.")
@@ -94,16 +102,48 @@ public final class LayaModel: DecisionModel {
                 metadata.append((i, question))
             }
         }
+        let t1 = clock.now
+        var gpu = Duration.zero, padded = 0
         for start in stride(from: 0, to: rows.count, by: 64) {
             let end = min(start + 64, rows.count), chunk = Array(rows[start..<end])
+            let g = clock.now
             let values = try logits(chunk)
+            gpu += clock.now - g; padded += chunk.count * (chunk.map { $0.ids.count }.max() ?? 0)
             for (r, row) in chunk.enumerated() {
                 let (index, question) = metadata[start + r]
                 answers[index][question.id] = answer(values[r], optionCount: row.markers.count, question: question)
             }
         }
         for i in items.indices { if case .answers = results[i] { results[i] = .answers(answers[i]) } }
+        if Self.profile {
+            let total = clock.now - t0, real = rows.reduce(0) { $0 + $1.ids.count }
+            func ms(_ d: Duration) -> String { String(format: "%.1f", Double(d.components.attoseconds) / 1e15 + Double(d.components.seconds) * 1000) }
+            FileHandle.standardError.write(Data("profile \(id) items=\(items.count) rows=\(rows.count) tokens=\(real) padded=\(padded) prepare=\(ms(t1 - t0))ms forward=\(ms(gpu))ms post=\(ms(total - (t1 - t0) - gpu))ms total=\(ms(total))ms\n".utf8))
+        }
         return results
+    }
+
+    /// Tokenize item texts across CPU cores. Same tokenizer function, same tokens; the
+    /// tokenizer (swift-transformers PreTrainedTokenizer) is Sendable with read-only state.
+    /// Serial below ~8 items or ~4 KB of text, where thread hand-off costs more than it saves.
+    private func encodeStates(_ texts: [String]) -> [(ids: [Int], count: Int)] {
+        let prompt = self.prompt, bytes = texts.reduce(0) { $0 + $1.utf8.count }
+        if texts.count < 8 || bytes < 4096 { return texts.map { prompt.encodeState($0) } }
+        var out = [(ids: [Int], count: Int)](repeating: ([], 0), count: texts.count)
+        out.withUnsafeMutableBufferPointer { buffer in
+            let base = buffer.baseAddress!
+            DispatchQueue.concurrentPerform(iterations: texts.count) { i in base[i] = prompt.encodeState(texts[i]) }
+        }
+        return out
+    }
+
+    private func cachedQuestion(_ question: Question) throws -> (template: LayaPrompt.QuestionTemplate, count: Int) {
+        let json = question.sourceJSON ?? Self.questionJSON(question)
+        if let hit = questionCache[json] { return hit }
+        let value = (template: try prompt.template(question), count: encode(json, addSpecialTokens: true).count)
+        if questionCache.count >= 512 { questionCache.removeAll(keepingCapacity: true) }
+        questionCache[json] = value
+        return value
     }
 
     private func answer(_ logits: [Float], optionCount k: Int, question: Question) -> Answer {
