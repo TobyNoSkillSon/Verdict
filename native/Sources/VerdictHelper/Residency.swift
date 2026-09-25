@@ -113,14 +113,22 @@ func memoryEstimateMB(_ spec: ModelSpec, bits: Int, measured: [String: [Int: Dou
 /// "1.5" for 1,520 MB.
 func gigabytes(_ mb: Double) -> String { String(format: "%.1f", Swift.max(0, mb) / 1000) }
 
-/// The refusal text: need, what is free, and the ways out that exist for this request.
-func refusalMessage(_ spec: ModelSpec, bits: Int, needMB: Double, freeMB: Double, loaded: [String]) -> String {
+/// The refusal text: need, what is free, and the ways out that exist for this request. `loaded`: models that could be
+/// unloaded (never one the request itself needs). `together`: other models this request needs that are loaded now;
+/// unloading them cannot help (the request loads them again), so the advice is to split the request instead.
+func refusalMessage(_ spec: ModelSpec, bits: Int, needMB: Double, freeMB: Double, loaded: [String], together: [String] = []) -> String {
     let effective = spec.effectiveBits(bits)
     var fixes: [String] = []
+    var context = ""
+    if !together.isEmpty {
+        let names = together + [spec.id]
+        context = " This request needs " + names.dropLast().joined(separator: ", ") + " and " + names.last! + " loaded together."
+        fixes.append("send one request per model")
+    }
     if !loaded.isEmpty { fixes.append("unload " + loaded.joined(separator: " or ")) }
     if let lower = spec.precisionOptions.first(where: { $0 < effective }) { fixes.append("pick \(lower)-bit") }
     fixes.append("allow swap in Verdict → Memory")
     var advice = fixes.count == 1 ? fixes[0] : fixes.dropLast().joined(separator: ", ") + (fixes.count > 2 ? ", or " : " or ") + fixes.last!
     advice = advice.prefix(1).uppercased() + advice.dropFirst()
-    return "\(spec.id) at \(effective)-bit needs ~\(gigabytes(needMB)) GB; ~\(gigabytes(freeMB)) GB free without swapping. \(advice)."
+    return "\(spec.id) at \(effective)-bit needs ~\(gigabytes(needMB)) GB; ~\(gigabytes(freeMB)) GB free without swapping.\(context) \(advice)."
 }

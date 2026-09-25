@@ -280,7 +280,10 @@ final class Service {
                 if free >= need { return estimate }
             }
         }
-        let message = refusalMessage(spec, bits: bits, needMB: need, freeMB: free, loaded: order.filter { $0 != spec.id })
+        // Never advise unloading a model this request needs: it would be loaded again and refused the same way.
+        let message = refusalMessage(spec, bits: bits, needMB: need, freeMB: free,
+                                     loaded: order.filter { $0 != spec.id && !pinned.contains($0) },
+                                     together: order.filter { $0 != spec.id && pinned.contains($0) })
         state["refused"] = ["model": spec.id, "message": message, "at": Date().timeIntervalSince1970]; writeStatus(refreshInstalled: false)
         fputs("{\"refused\":\(jsonString(spec.id)),\"message\":\(jsonString(message))}\n", stderr)
         throw MemoryRefusal(message: message)

@@ -169,8 +169,29 @@ class ResidencyTests(unittest.TestCase):
         code, reply = h.call('/judge', {'items': ['plain English', 'zażółć gęślą jaźń'], 'questions': Q})
         self.assertEqual(code, 507, reply)
         self.assertEqual(reply['error'], 'laya-multilingual at 16-bit needs ~1.5 GB; ~1.0 GB free without swapping. '
-                                         'Unload laya-english, pick 8-bit, or allow swap in Verdict → Memory.')
+                                         'This request needs laya-english and laya-multilingual loaded together. '
+                                         'Send one request per model, pick 8-bit, or allow swap in Verdict → Memory.')
         self.assertEqual(h.loaded(), {'laya-english'})
+
+    def test_refusal_never_advises_unloading_a_model_the_request_needs(self):
+        """Review 2 R2.5: following the advice (unload laya-english) and retrying must not be the suggested way out."""
+        h = self.helper(available_mb=2000)
+        h.ok('/load', {'model': 'laya-english'})
+        h.ok('/load', {'model': 'laya-typed-decisions', 'manual': True})           # not needed by the request: 600 left
+        body = {'items': ['plain English', 'zażółć gęślą jaźń'], 'questions': Q}
+        code, reply = h.call('/judge', body)
+        self.assertEqual(code, 507, reply)
+        self.assertNotIn('Unload laya-english', reply['error'])
+        self.assertNotIn('laya-english or', reply['error'])
+        self.assertIn('This request needs laya-english and laya-multilingual loaded together.', reply['error'])
+        self.assertIn('unload laya-typed-decisions', reply['error'])                # an idle model is still a way out
+        self.assertEqual(h.loaded(), {'laya-english', 'laya-typed-decisions'})
+        # A single-model refusal with nothing else loaded still reads as before.
+        h.ok('/unload', {'model': 'laya-typed-decisions'}); h.ok('/unload', {'model': 'laya-english'})
+        h.set_available(1000)
+        code, reply = h.call('/judge', {'items': ['zażółć gęślą jaźń'], 'questions': Q})
+        self.assertEqual((code, reply['error']), (507, 'laya-multilingual at 16-bit needs ~1.5 GB; ~1.0 GB free without swapping. '
+                                                       'Pick 8-bit or allow swap in Verdict → Memory.'))
 
     def test_reload_under_negative_headroom_keeps_the_model(self):
         """Review 2 R2.2: the loaded model's credit is added to the raw (negative) headroom, not to a clamped zero."""
