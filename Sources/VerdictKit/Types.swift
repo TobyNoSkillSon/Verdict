@@ -36,6 +36,18 @@ public struct Answer: Sendable, Hashable, Codable {
     /// The number to sort or threshold on: the score, else P(true), else the choice's confidence.
     public var value: Double { score ?? noul ?? confidence ?? 0 }
 
+    /// The API's JSON, labels exactly as they are (JSONEncoder would merge normalization-distinct ones).
+    public var json: JSON {
+        var m: [JSON.Member] = []
+        if let choice { m.append(.init("choice", .string(choice))) }
+        if let calibrated { m.append(.init("calibrated", .bool(calibrated))) }
+        if let confidence { m.append(.init("confidence", JSON(confidence))) }
+        if let noul { m.append(.init("noul", JSON(noul))) }
+        if let probabilities { m.append(.init("probabilities", .object(probabilities.entries.map { .init($0.key, JSON($0.value)) }))) }
+        if let score { m.append(.init("score", JSON(score))) }
+        return .object(m)
+    }
+
     /// From the API's JSON (`{"choice", "probabilities", "confidence", "noul", "score", "calibrated"}`).
     public init(json: JSON) throws {
         guard json.members != nil else { throw VerdictError.unavailable("Unexpected answer from Verdict: an answer is not an object") }
@@ -67,6 +79,14 @@ public struct Judgement: Sendable, Hashable, Codable {
         error = json["error"]?.string
         model = json["model"]?.string
         ms = json["ms"]?.double ?? 0
+    }
+    /// The API's JSON, ids exactly as they are (JSONEncoder would merge normalization-distinct ones).
+    public var json: JSON {
+        var m: [JSON.Member] = [.init("answers", .object(answers.entries.map { .init($0.key, $0.value.json) }))]
+        if let error { m.append(.init("error", .string(error))) }
+        m.append(.init("model", model.map(JSON.string) ?? .null))
+        m.append(.init("ms", JSON(ms)))
+        return .object(m)
     }
     enum CodingKeys: String, CodingKey { case answers, error, model, ms }
     /// Decodable for convenience; note that JSONDecoder folds canonically equivalent ids into one before this runs.

@@ -2,7 +2,7 @@ import Foundation
 
 /// Keys in order, compared by their exact UTF-8 bytes. Swift's `String ==` and `Dictionary` treat canonically
 /// equivalent strings ("é" as U+00E9 and "e" + U+0301) as one key; the Verdict API does not, so question ids and
-/// choice labels are kept in this instead. Lookup returns the first entry with the same bytes.
+/// choice labels are kept in this instead. Keys are unique by bytes: a repeated key keeps its first value.
 ///
 ///     judgement.answers["refund"]?.noul
 ///     for (id, answer) in judgement.answers { … }
@@ -15,7 +15,11 @@ public struct ExactKeyed<Value> {
     public private(set) var entries: [Entry]
 
     public init() { entries = [] }
-    public init(_ pairs: [(String, Value)]) { entries = pairs.map { Entry($0.0, $0.1) } }
+    /// A key repeated with the same bytes keeps its first value (as JSON lookup does).
+    public init(_ pairs: [(String, Value)]) {
+        entries = []
+        for (key, value) in pairs where !entries.contains(where: { exactlyEqual($0.key, key) }) { entries.append(Entry(key, value)) }
+    }
 
     public subscript(key: String) -> Value? {
         get { entries.first { exactlyEqual($0.key, key) }?.value }
@@ -48,14 +52,14 @@ extension ExactKeyed: Sequence {
 }
 
 extension ExactKeyed: ExpressibleByDictionaryLiteral {
-    /// Keeps the literal's order and every key, including ones Swift would consider equal.
+    /// Keeps the literal's order and every distinct key, including ones Swift would consider equal.
     public init(dictionaryLiteral elements: (String, Value)...) { self.init(elements) }
 }
 
 extension ExactKeyed.Entry: Sendable where Value: Sendable {}
 extension ExactKeyed: Sendable where Value: Sendable {}
 
-/// Equal when the same keys (by bytes) map to equal values, in any order.
+/// Equal when the same keys (by bytes) map to equal values, in any order (keys are unique, so this is symmetric).
 extension ExactKeyed: Equatable where Value: Equatable {
     public static func == (a: ExactKeyed, b: ExactKeyed) -> Bool {
         a.count == b.count && a.entries.allSatisfy { e in b.entries.contains { exactlyEqual($0.key, e.key) && $0.value == e.value } }
@@ -70,8 +74,10 @@ extension ExactKeyed: Hashable where Value: Hashable {
     }
 }
 
-/// JSONDecoder folds canonically equivalent keys before any Decodable sees them; `Judgement(json:)` (what
-/// `Verdict.judge` uses) and `JSON.parse` keep them. Encoding writes every entry.
+/// Foundation's JSONDecoder and JSONEncoder fold canonically equivalent keys ("é" / "e\u{301}") into one. Decoding
+/// through them therefore sees one key; `Judgement(json:)` (what `Verdict.judge` uses) and `JSON.parse` keep both.
+/// Encoding refuses such keys with an EncodingError instead of silently dropping one; `Judgement.json` /
+/// `Answer.json` serialize them exactly.
 extension ExactKeyed: Codable where Value: Codable {
     private struct Name: CodingKey {
         var stringValue: String; var intValue: Int? { nil }
@@ -83,6 +89,10 @@ extension ExactKeyed: Codable where Value: Codable {
         self.init(try c.allKeys.map { ($0.stringValue, try c.decode(Value.self, forKey: $0)) })
     }
     public func encode(to encoder: Encoder) throws {
+        if Set(keys).count < count {   // Set<String> uses Swift's canonical equality: a collision the encoder would fold
+            throw EncodingError.invalidValue(self, .init(codingPath: encoder.codingPath, debugDescription:
+                "keys that differ only by Unicode normalization would be merged by this encoder; use Judgement.json / Answer.json"))
+        }
         var c = encoder.container(keyedBy: Name.self)
         for e in entries { try c.encode(e.value, forKey: Name(stringValue: e.key)) }
     }

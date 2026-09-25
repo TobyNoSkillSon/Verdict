@@ -98,6 +98,32 @@ final class WireTests: XCTestCase {
         XCTAssertNotEqual(built, Judgement(answers: [composed: Answer(noul: 0.1), composed: Answer(noul: 0.9)]))
     }
 
+    /// Review 3 re-check: exact keys are unique (first wins, like lookup), so == is symmetric and agrees with hash;
+    /// JSONEncoder would fold normalization-distinct keys, so encoding refuses them instead of losing one, and
+    /// `json` is the exact serialization.
+    func testExactKeyedIsASetOfExactKeysAndNeverEncodesLossily() throws {
+        let a: ExactKeyed<Int> = ["x": 1, "x": 1], b: ExactKeyed<Int> = ["x": 1, "y": 2]
+        XCTAssertEqual(a.count, 1)
+        XCTAssertNotEqual(a, b); XCTAssertNotEqual(b, a)
+        let dup: ExactKeyed<Int> = ["x": 1, "x": 2]
+        XCTAssertEqual(dup.keys, ["x"]); XCTAssertEqual(dup["x"], 1, "the first entry wins, as in lookup")
+        XCTAssertEqual(ExactKeyed([("y", 2), ("x", 1)]), ExactKeyed([("x", 1), ("y", 2)]), "order does not matter")
+        XCTAssertEqual(ExactKeyed([("y", 2), ("x", 1)]).hashValue, ExactKeyed([("x", 1), ("y", 2)]).hashValue)
+        // Encoding: fine without a collision; a normalization collision is refused, not folded.
+        let plain: ExactKeyed<Double> = ["a": 0.5, "b": 0.25]
+        XCTAssertEqual(String(decoding: try JSONEncoder().encode(plain), as: UTF8.self).count, #"{"a":0.5,"b":0.25}"#.count)
+        let folded: ExactKeyed<Double> = ["\u{E9}": 0.1, "e\u{301}": 0.9]
+        XCTAssertThrowsError(try JSONEncoder().encode(folded)) { error in
+            XCTAssertTrue("\(error)".contains("normalization"), "\(error)")
+        }
+        // The exact serialization keeps both.
+        let judgement = Judgement(answers: ["\u{E9}": Answer(noul: 0.1), "e\u{301}": Answer(choice: "x", probabilities: folded)], model: "m", ms: 2)
+        let json = judgement.json
+        XCTAssertEqual(json["answers"]?.members?.count, 2)
+        XCTAssertEqual(json["answers"]?["e\u{301}"]?["probabilities"]?.members?.count, 2)
+        XCTAssertEqual(try Judgement(json: json), judgement, "round trip")
+    }
+
     func testNotRunningWithoutLaunch() async throws {
         let empty = FileManager.default.temporaryDirectory.appendingPathComponent("verdictkit-empty-\(UUID().uuidString)")
         do {
