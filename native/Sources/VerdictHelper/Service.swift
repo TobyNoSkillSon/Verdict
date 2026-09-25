@@ -193,12 +193,16 @@ final class Service {
         // Do not download weights if no production loader is registered.
         let type = try loader(runtime: spec.runtime)
         let estimate = try admit(spec, bits: precision[id] ?? spec.defaultBits)
-        state["loading"] = id; state["downloading"] = catalog.cached(spec) == nil; state["error"] = NSNull(); writeStatus()
+        let downloading = catalog.cached(spec) == nil
+        state["loading"] = id; state["downloading"] = downloading; state["error"] = NSNull(); writeStatus()
         let start = Date()
         do {
-            let snapshot = ProcessInfo.processInfo.environment["VERDICT_STUB_MODELS"] == "1" ? support : try catalog.snapshot(spec)
+            let stub = ProcessInfo.processInfo.environment["VERDICT_STUB_MODELS"] == "1"
+            let snapshot = stub ? support : try catalog.snapshot(spec)
             // Explicit choice (VERDICT_PRECISION or /load bits; 0 = native) wins; else the catalog's recommended default.
             let bits = precision[id] ?? spec.defaultBits
+            // A download can take minutes and memory moves meanwhile: check again right before allocating weights.
+            if downloading && !stub { installedCache = nil; try admit(spec, bits: bits) }
             let agent = try type.load(id: id, snapshot: snapshot, bits: bits)
             // VERDICT_STOCK_PATH=1: serve every model on the stock MLX path (diagnosis; the fallback tests' reference).
             if Self.stockRequested, let paths = agent as? InferencePathSwitching { try paths.useStockPath(true) }
@@ -216,7 +220,9 @@ final class Service {
             return agent
         } catch {
             state["loading"] = NSNull(); state["downloading"] = false
-            state["error"] = "\(id): \(String(describing: error).prefix(200))"; writeStatus()
+            // A refusal is reported in state["refused"] (admit), not as a worker failure.
+            if !(error is MemoryRefusal) { state["error"] = "\(id): \(String(describing: error).prefix(200))" }
+            writeStatus()
             throw error
         }
     }

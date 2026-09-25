@@ -315,5 +315,40 @@ class ProbeTests(unittest.TestCase):
             urllib.request.urlopen(urllib.request.Request(f'http://127.0.0.1:{port}/quit', data=b'{}', headers={'Content-Type': 'application/json'}), timeout=5).close()
             proc.wait(timeout=10); proc.stdout.close(); proc.stderr.close()
 
+    def test_page_estimate_does_not_double_count(self):
+        """Review 2 R2.1: purgeable pages can also be inactive and speculative pages are also file-backed. Free (not
+        speculative) + file-backed + purgeable are disjoint; inactive anonymous pages are not counted as free.
+        VERDICT_TEST_VM_STATS replaces the host_statistics64 counters and kern.memorystatus_level."""
+        ram = int(subprocess.run(['sysctl', '-n', 'hw.memsize'], capture_output=True, text=True).stdout) / 1e6
+        margin = max(1000, ram * .1)
+        page = 16384
+        pages = lambda mb: int(mb * 1e6 / page)
+        free, speculative, external = pages(1000), pages(500), pages(1500)     # speculative ⊂ external (read-ahead)
+        purgeable = pages(margin + 500)
+        inactive = purgeable + pages(800)                                         # the purgeable pages + anonymous ones
+        counters = {'page_size': page, 'free_count': free + speculative, 'speculative_count': speculative,
+                    'inactive_count': inactive, 'purgeable_count': purgeable, 'external_page_count': external,
+                    'memorystatus_level': 100}
+        support = tempfile.mkdtemp(prefix='verdict-probe-'); self.addCleanup(shutil.rmtree, support, True)
+        stats = Path(support) / 'vm.json'; stats.write_text(json.dumps(counters))
+        env = dict(os.environ, VERDICT_SUPPORT_DIR=support, VERDICT_STUB_MODELS='1', VERDICT_PORT='0', VERDICT_PRELOAD='',
+                   HF_HUB_CACHE=support + '/hub', VERDICT_CATALOG=str(ROOT / 'Resources/models.json'), VERDICT_TEST_VM_STATS=str(stats))
+        env.pop('VERDICT_TEST_MEMORY_FILE', None)
+        proc = subprocess.Popen([str(BINARY)], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            port = json.loads(proc.stdout.readline())['port']
+            def available():
+                with urllib.request.urlopen(f'http://127.0.0.1:{port}/status', timeout=5) as r:
+                    return json.load(r)['memory']['available_mb']
+            expected = (free + external + purgeable) * page / 1e6 - margin         # ≈ 3000 MB
+            self.assertAlmostEqual(available(), expected, delta=1)
+            # The kernel's pressure level still caps it.
+            counters['memorystatus_level'] = 1; stats.write_text(json.dumps(counters))
+            self.assertEqual(available(), max(0, round(ram * .01 - margin)))
+        finally:
+            urllib.request.urlopen(urllib.request.Request(f'http://127.0.0.1:{port}/quit', data=b'{}', headers={'Content-Type': 'application/json'}), timeout=5).close()
+            proc.wait(timeout=10); proc.stdout.close(); proc.stderr.close()
+
+
 
 if __name__ == '__main__': unittest.main()

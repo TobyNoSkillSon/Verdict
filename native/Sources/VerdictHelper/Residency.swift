@@ -16,54 +16,86 @@ struct MemoryRefusal: Error, LocalizedError {
     var errorDescription: String? { message }
 }
 
-/// Memory macOS can hand out right now without swapping, in MB (1e6 bytes, like memory_mb in benchmarks.json).
+/// Best-effort estimate of the memory macOS can hand out right now without swapping, in MB (1e6 bytes, like memory_mb
+/// in benchmarks.json). It is a load-time check, not a guarantee: other processes and later inference allocations are
+/// not bounded by it.
 ///
-///     pages_mb  = (free_count + inactive_count + purgeable_count) × page size       (host_statistics64 HOST_VM_INFO64;
-///                 free_count already contains the speculative pages, vm_stat prints them separately)
+///     pages_mb  = (free_count − speculative_count      truly free pages
+///                  + external_page_count              file-backed pages: dropped or written back, never swapped
+///                                                     (includes the speculative read-ahead pages)
+///                  + purgeable_count) × page size     volatile purgeable pages: discarded, never swapped
+///                 (host_statistics64 HOST_VM_INFO64; the same split as Activity Monitor's free + cached files)
 ///     level_mb  = kern.memorystatus_level / 100 × RAM                              (the kernel's own pressure gauge)
 ///     margin_mb = max(1 GB, 10% of RAM)
-///     available = max(0, min(pages_mb, level_mb) − margin_mb)
+///     raw       = min(pages_mb, level_mb) − margin_mb   (negative when already short)
+///     available = max(0, raw)
 ///
-/// Inactive pages are reclaimable without swap only partly (anonymous ones get compressed first), which the margin
-/// absorbs; the memorystatus minimum makes a Mac already under pressure refuse loads. Test hook:
-/// VERDICT_TEST_MEMORY_FILE = JSON {"available_mb": N} → available = N − the estimates of the models loaded now (so
-/// evictions free what they are expected to); the file is re-read on every check.
+/// The three page populations are disjoint: purgeable objects are anonymous, so a purgeable page is never
+/// file-backed, and speculative pages are counted once (as file-backed). inactive_count is not used: it overlaps both
+/// purgeable and file-backed pages, and its anonymous remainder is compressed or swapped, not freed. The memorystatus
+/// minimum makes a Mac already under pressure refuse loads. Test hooks, re-read on every check:
+/// VERDICT_TEST_MEMORY_FILE = JSON {"available_mb": N} → raw = N − the estimates of the models loaded now (so
+/// evictions free what they are expected to); VERDICT_TEST_VM_STATS = JSON with the counters above, page_size and
+/// memorystatus_level in place of the kernel's.
 struct MemoryProbe {
     static let headroomMB = 512.0
     static var totalMB: Double { Double(ProcessInfo.processInfo.physicalMemory) / 1e6 }
     static var marginMB: Double { max(1000, totalMB * 0.10) }
     let testFile: URL?
+    let vmStatsFile: URL?
 
     init(environment: [String: String]) {
         testFile = environment["VERDICT_TEST_MEMORY_FILE"].map { URL(fileURLWithPath: $0) }
+        vmStatsFile = environment["VERDICT_TEST_VM_STATS"].map { URL(fileURLWithPath: $0) }
     }
 
+    /// `available` above: never negative.
+    func availableMB(loadedMB: Double) -> Double { max(0, rawAvailableMB(loadedMB: loadedMB)) }
+
+    /// `raw` above: negative when memory is already short.
     /// `loadedMB`: Σ load estimates of the models loaded now (used by the test probe only).
-    func availableMB(loadedMB: Double) -> Double {
+    func rawAvailableMB(loadedMB: Double) -> Double {
         if let testFile {
-            let object = (try? Data(contentsOf: testFile)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
-            let base = (object?["available_mb"] as? NSNumber)?.doubleValue ?? 0
-            return max(0, base - loadedMB)
+            let base = (Self.json(testFile)?["available_mb"] as? NSNumber)?.doubleValue ?? 0
+            return base - loadedMB
         }
-        return max(0, Swift.min(Self.pagesMB(), Self.levelMB()) - Self.marginMB)
+        let counters = vmStatsFile.map { Self.json($0) ?? [:] }
+        return Swift.min(pagesMB(counters), levelPercent(counters) / 100 * Self.totalMB) - Self.marginMB
+    }
+
+    private static func json(_ url: URL) -> [String: Any]? {
+        (try? Data(contentsOf: url)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+    }
+
+    /// Reclaimable-without-swap pages in MB from the kernel's counters (formula above; disjoint populations).
+    static func reclaimableMB(free: Double, speculative: Double, external: Double, purgeable: Double, pageSize: Double) -> Double {
+        (Swift.max(0, free - speculative) + external + purgeable) * pageSize / 1e6
     }
 
     private static let host = mach_host_self()
-    static func pagesMB() -> Double {
+    private func pagesMB(_ counters: [String: Any]?) -> Double {
+        if let counters {
+            func value(_ key: String) -> Double { (counters[key] as? NSNumber)?.doubleValue ?? 0 }
+            return Self.reclaimableMB(free: value("free_count"), speculative: value("speculative_count"), external: value("external_page_count"),
+                                      purgeable: value("purgeable_count"), pageSize: value("page_size"))
+        }
         var info = vm_statistics64_data_t()
         var count = mach_msg_type_number_t(MemoryLayout<vm_statistics64_data_t>.stride / MemoryLayout<integer_t>.stride)
         let result = withUnsafeMutablePointer(to: &info) {
-            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { host_statistics64(host, HOST_VM_INFO64, $0, &count) }
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { host_statistics64(Self.host, HOST_VM_INFO64, $0, &count) }
         }
         guard result == KERN_SUCCESS else { return 0 }
-        let pages = Double(info.free_count) + Double(info.inactive_count) + Double(info.purgeable_count)
-        return pages * Double(vm_kernel_page_size) / 1e6
+        return Self.reclaimableMB(free: Double(info.free_count), speculative: Double(info.speculative_count), external: Double(info.external_page_count),
+                                  purgeable: Double(info.purgeable_count), pageSize: Double(vm_kernel_page_size))
+    }
+    private func levelPercent(_ counters: [String: Any]?) -> Double {
+        if let level = counters?["memorystatus_level"] as? NSNumber { return level.doubleValue }
+        return Self.levelPercent()
     }
     static func levelPercent() -> Double {
         var value: Int32 = 100; var size = MemoryLayout<Int32>.size
         return sysctlbyname("kern.memorystatus_level", &value, &size, nil, 0) == 0 ? Double(value) : 100
     }
-    static func levelMB() -> Double { levelPercent() / 100 * totalMB }
 }
 
 /// Load-size estimate in MB, without the activation headroom: the measured memory_mb for this model and precision
