@@ -20,6 +20,7 @@ here unchanged. Plain dicts are still accepted.
 A thin client of the Verdict app's local HTTP API (docs/API.md); starts the app if it is not running. Standard
 library only. The command line is the `verdict` binary that ships with the app.
 """
+import http.client
 import json
 import os
 import re
@@ -230,8 +231,9 @@ def _call(method, path, body=None, timeout=600):
         if e.code == 404 and msg == 'not found' and path.startswith('/v1/'):
             msg = 'the running Verdict predates the v1 API; update it (git pull && scripts/install.sh)'
         raise VerdictError(msg) from None
-    except (urllib.error.URLError, OSError) as e:    # refused, reset, timeout (socket.timeout is an OSError)
-        reason = getattr(e, 'reason', None) or e
+    except (urllib.error.URLError, OSError, http.client.HTTPException) as e:
+        # refused, reset, timeout (socket.timeout is an OSError), a dropped or truncated answer (IncompleteRead)
+        reason = getattr(e, 'reason', None) or str(e) or type(e).__name__
         raise VerdictError(f'Verdict did not answer: {reason}') from None
 
 
