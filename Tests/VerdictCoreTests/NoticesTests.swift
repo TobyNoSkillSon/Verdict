@@ -36,7 +36,12 @@ final class NoticesTests: XCTestCase {
         // MIT/BSD/zlib copyright lines must be reproduced, including code MLX vendors; the Runtime Library Exception kept.
         for line in ["Copyright (c) 2023 ml-explore", "Copyright © 2023 Apple Inc.", "Niels Lohmann", "Victor Zverovich",
                      "Max-Planck-Society", "Jakob Progsch", "NVIDIA Corporation", "YaoYuan", "Copyright 2025 Mattt",
-                     "Runtime Library Exception", "The SwiftCrypto Project"] {
+                     "Runtime Library Exception", "The SwiftCrypto Project",
+                     // Review 3 re-check N1: vendored MLX code with its own notice (MLX's ACKNOWLEDGMENTS.md omits them).
+                     "Copyright © 2018 the V8 project authors.", "Copyright (c) 2015-2023 Norbert Juffa",
+                     "SPDX-FileCopyrightText: 2009 Florian Loitsch", "Copyright (c) 2009 Florian Loitsch",
+                     "SPDX-FileCopyrightText: 2008-2009 Björn Hoehrmann", "SPDX-FileCopyrightText: 2016-2021 Evan Nemerson",
+                     "SPDX-FileCopyrightText: 2018 The Abseil Authors"] {
             XCTAssertTrue(notices.contains(line), line)
         }
     }
@@ -57,6 +62,97 @@ final class NoticesTests: XCTestCase {
             let body = normalized(licence).trimmingCharacters(in: .whitespacesAndNewlines)
             XCTAssertTrue(notices.contains(body), "\(file) is not reproduced verbatim; rerun scripts/third-party-notices.py")
         }
+    }
+
+    /// Review 3 re-check N1: every copyright holder named in a vendored C, C++ or Metal source of the pinned checkouts
+    /// (MLX, mlx-c, fmt, nlohmann/json, metal-cpp, the generated JIT kernels, yyjson) is named in the notices. Apple's
+    /// own headers are covered by the package licences. Tests, fuzzers and docs are not compiled and are skipped.
+    func testEveryVendoredCopyrightHolderIsInTheNotices() throws {
+        let checkouts = Self.root.appendingPathComponent(".build/checkouts")
+        guard FileManager.default.fileExists(atPath: checkouts.appendingPathComponent("mlx-swift/Source/Cmlx").path) else {
+            throw XCTSkip("no .build/checkouts (run swift package resolve)")
+        }
+        // fmt's LICENSE writes "{fmt} contributors", its headers "fmt contributors".
+        let notices = try text("Resources/THIRD_PARTY_NOTICES.txt").replacingOccurrences(of: "{fmt}", with: "fmt")
+        // "Copyright (c) 2012 - present, Victor Zverovich" → "Victor Zverovich"; also SPDX-FileCopyrightText lines.
+        let line = try NSRegularExpression(pattern: #"(?:Copyright\s*(?:©|\([cC]\)|@)?\s*(?=\d)|SPDX-FileCopyrightText:\s*)([^<\n]*)"#)
+        let lead = try NSRegularExpression(pattern: #"^[\d\s,\-–]*(?:present,?\s*)?"#)
+        let skipped = ["/test/", "/tests/", "/docs/", "/doc/", "/benchmarks/", "/examples/", "/python/", "/backend/cuda/"]
+        var missing: [String: String] = [:], scanned = 0
+        for tree in ["mlx-swift/Source/Cmlx", "yyjson/src"] {
+            let base = checkouts.appendingPathComponent(tree)
+            let files = try XCTUnwrap(FileManager.default.enumerator(at: base, includingPropertiesForKeys: nil))
+            for case let url as URL in files where ["h", "hpp", "c", "cc", "cpp", "metal", "m", "mm"].contains(url.pathExtension) {
+                let rel = tree + "/" + url.path.dropFirst(base.path.count + 1)
+                if skipped.contains(where: rel.contains) { continue }
+                guard let source = try? String(contentsOf: url, encoding: .utf8) else { continue }
+                scanned += 1
+                for m in line.matches(in: source, range: NSRange(source.startIndex..., in: source)) {
+                    var holder = String(source[Range(m.range(at: 1), in: source)!])
+                    holder = lead.stringByReplacingMatches(in: holder, range: NSRange(holder.startIndex..., in: holder), withTemplate: "")
+                    holder = holder.replacingOccurrences(of: "All rights reserved.", with: "").replacingOccurrences(of: "{fmt}", with: "fmt")
+                        .trimmingCharacters(in: CharacterSet.whitespaces.union(CharacterSet(charactersIn: ".,")))
+                    if holder.isEmpty || holder.hasPrefix("Apple") || notices.contains(holder) { continue }
+                    missing[holder] = missing[holder] ?? rel
+                }
+            }
+        }
+        XCTAssertGreaterThan(scanned, 300, "the scan found the vendored sources")
+        XCTAssertEqual(missing, [:], "copyright holders absent from THIRD_PARTY_NOTICES.txt (add them to scripts/third-party-notices.py)")
+    }
+
+    /// Review 3 re-check N5: the release zip has no AppleDouble (._*) or __MACOSX entries, and an app extracted
+    /// with /usr/bin/unzip still verifies. scripts/release-zip.sh makes and checks the archive for package-release.sh;
+    /// here it runs on a small ad-hoc signed app carrying an extended attribute (a stand-in for com.apple.provenance).
+    func testReleaseZipHasNoAppleDoubleAndVerifiesAfterUnzip() throws {
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("verdict-zip-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let app = tmp.appendingPathComponent("Probe.app")
+        try FileManager.default.createDirectory(at: app.appendingPathComponent("Contents/MacOS"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: app.appendingPathComponent("Contents/Resources"), withIntermediateDirectories: true)
+        try FileManager.default.copyItem(atPath: "/usr/bin/true", toPath: app.appendingPathComponent("Contents/MacOS/Probe").path)
+        try Data("""
+            <?xml version="1.0" encoding="UTF-8"?>
+            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+            <plist version="1.0"><dict><key>CFBundleExecutable</key><string>Probe</string>
+            <key>CFBundleIdentifier</key><string>test.verdict.probe</string><key>CFBundlePackageType</key><string>APPL</string></dict></plist>
+            """.utf8).write(to: app.appendingPathComponent("Contents/Info.plist"))
+        try Data("notice\n".utf8).write(to: app.appendingPathComponent("Contents/Resources/NOTICE"))
+        func run(_ tool: String, _ args: [String]) throws -> (Int32, String) {
+            let p = Process(), pipe = Pipe()
+            p.executableURL = URL(fileURLWithPath: tool); p.arguments = args
+            p.standardOutput = pipe; p.standardError = pipe
+            try p.run()
+            let out = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            p.waitUntilExit()
+            return (p.terminationStatus, out)
+        }
+        XCTAssertEqual(try run("/usr/bin/codesign", ["--force", "--sign", "-", app.path]).0, 0)
+        for f in ["Contents/Resources/NOTICE", "Contents/Info.plist", "Contents/MacOS/Probe"] {
+            XCTAssertEqual(try run("/usr/bin/xattr", ["-w", "com.example.verdict-test", "1", app.appendingPathComponent(f).path]).0, 0)
+        }
+        let script = Self.root.appendingPathComponent("scripts/release-zip.sh").path
+        // The archive the old `ditto -c -k --keepParent` wrote: ._ entries, and the unzipped app fails verification.
+        let old = tmp.appendingPathComponent("old.zip").path
+        XCTAssertEqual(try run("/usr/bin/ditto", ["-c", "-k", "--keepParent", app.path, old]).0, 0)
+        XCTAssertTrue(try run("/usr/bin/zipinfo", ["-1", old]).1.contains("/._NOTICE"), "precondition: ditto keeps xattrs as ._ files")
+        let rejected = try run("/bin/bash", [script, "--verify", old])
+        XCTAssertNotEqual(rejected.0, 0, rejected.1)
+        XCTAssertTrue(rejected.1.contains("AppleDouble"), rejected.1)
+        // The archive release-zip.sh writes: no ._ or __MACOSX entries; the /usr/bin/unzip extraction verifies.
+        let zip = tmp.appendingPathComponent("Probe.zip").path
+        let made = try run("/bin/bash", [script, app.path, zip])
+        XCTAssertEqual(made.0, 0, made.1)
+        let listing = try run("/usr/bin/zipinfo", ["-1", zip]).1.split(separator: "\n")
+        XCTAssertTrue(listing.contains("Probe.app/Contents/Resources/NOTICE"), "\(listing)")
+        XCTAssertFalse(listing.contains { $0.contains("/._") || $0.hasPrefix("._") || $0.hasPrefix("__MACOSX") }, "\(listing)")
+        let out = tmp.appendingPathComponent("unzipped")
+        XCTAssertEqual(try run("/usr/bin/unzip", ["-q", zip, "-d", out.path]).0, 0)
+        let verified = try run("/usr/bin/codesign", ["--verify", "--deep", "--strict", out.appendingPathComponent("Probe.app").path])
+        XCTAssertEqual(verified.0, 0, verified.1)
+        let package = try text("scripts/package-release.sh")
+        XCTAssertTrue(package.contains("scripts/release-zip.sh"), "package-release.sh builds the archive with release-zip.sh")
+        XCTAssertFalse(package.contains("ditto -c -k --keepParent"), "no archive with extended attributes")
     }
 
     /// 0.3.0 is stated once, in Info.plist; the build number is a whole number that only goes up.

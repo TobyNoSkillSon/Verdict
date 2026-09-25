@@ -489,6 +489,158 @@ NVIDIA CCCL complex math (adapted in MLX Metal kernels)
 // https://github.com/NVIDIA/cccl/blob/main/thrust/thrust/detail/complex/cexpf.h
 
 ==============================================================================
+SmallVector from V8 (adapted in MLX)
+  package  mlx-swift revision (901941965d82e4a216d4d117231d847d194c563d)
+  source   https://github.com/ml-explore/mlx-swift.git
+  licence  BSD-3-Clause
+  used for small-vector container behind MLX array shapes and strides
+==============================================================================
+
+--- Source/Cmlx/mlx/mlx/small_vector.h (lines 1-28)
+
+// Copyright © 2025 Apple Inc.
+// Copyright © 2018 the V8 project authors.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are
+// met:
+//
+//     * Redistributions of source code must retain the above copyright
+//       notice, this list of conditions and the following disclaimer.
+//     * Redistributions in binary form must reproduce the above
+//       copyright notice, this list of conditions and the following
+//       disclaimer in the documentation and/or other materials provided
+//       with the distribution.
+//     * Neither the name of Google Inc. nor the names of its
+//       contributors may be used to endorse or promote products derived
+//       from this software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+==============================================================================
+expm1f by Norbert Juffa (adapted in MLX Metal kernels)
+  package  mlx-swift revision (901941965d82e4a216d4d117231d847d194c563d)
+  source   https://github.com/ml-explore/mlx-swift.git
+  licence  BSD-2-Clause
+  used for expm1/erf Metal kernel source, embedded in the helper and compiled at run time
+==============================================================================
+
+--- Source/Cmlx/mlx/mlx/backend/metal/kernels/expm1f.h (lines 7-30)
+
+// Original license copied below:
+//  Copyright (c) 2015-2023 Norbert Juffa
+//  All rights reserved.
+//
+//  Redistribution and use in source and binary forms, with or without
+//  modification, are permitted provided that the following conditions
+//  are met:
+//
+//  1. Redistributions of source code must retain the above copyright
+//     notice, this list of conditions and the following disclaimer.
+//
+//  2. Redistributions in binary form must reproduce the above copyright
+//     notice, this list of conditions and the following disclaimer in the
+//     documentation and/or other materials provided with the distribution.
+//
+//  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+//  "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+//  LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+//  A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+//  HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+//  SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+//  LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+//  DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+//  THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+
+==============================================================================
+nlohmann/json third-party parts (vendored in mlx-swift)
+  package  mlx-swift revision (901941965d82e4a216d4d117231d847d194c563d)
+  source   https://github.com/ml-explore/mlx-swift.git
+  licence  MIT (per the nlohmann/json SPDX headers; the Abseil code is Apache-2.0, text above)
+  used for Grisu2 number formatting, UTF-8 decoding, Hedley macros and integer_sequence inside JSON (safetensors headers)
+==============================================================================
+
+--- Source/Cmlx/json/include/nlohmann/detail/conversions/to_chars.hpp (lines 1-8)
+
+//     __ _____ _____ _____
+//  __|  |   __|     |   | |  JSON for Modern C++
+// |  |  |__   |  |  | | | |  version 3.11.3
+// |_____|_____|_____|_|___|  https://github.com/nlohmann/json
+//
+// SPDX-FileCopyrightText: 2009 Florian Loitsch <https://florian.loitsch.com/>
+// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
+// SPDX-License-Identifier: MIT
+
+--- Source/Cmlx/json/include/nlohmann/detail/conversions/to_chars.hpp (lines 25-33)
+
+/*!
+@brief implements the Grisu2 algorithm for binary to decimal floating-point
+conversion.
+
+This implementation is a slightly modified version of the reference
+implementation which may be obtained from
+http://florian.loitsch.com/publications (bench.tar.gz).
+
+The code is distributed under the MIT license, Copyright (c) 2009 Florian Loitsch.
+
+--- Source/Cmlx/json/include/nlohmann/detail/output/serializer.hpp (lines 1-8)
+
+//     __ _____ _____ _____
+//  __|  |   __|     |   | |  JSON for Modern C++
+// |  |  |__   |  |  | | | |  version 3.11.3
+// |_____|_____|_____|_|___|  https://github.com/nlohmann/json
+//
+// SPDX-FileCopyrightText: 2008-2009 Björn Hoehrmann <bjoern@hoehrmann.de>
+// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
+// SPDX-License-Identifier: MIT
+
+--- Source/Cmlx/json/include/nlohmann/detail/output/serializer.hpp (lines 897-898)
+
+    @copyright Copyright (c) 2008-2009 Bjoern Hoehrmann <bjoern@hoehrmann.de>
+    @sa http://bjoern.hoehrmann.de/utf-8/decoder/dfa/
+
+--- Source/Cmlx/json/include/nlohmann/thirdparty/hedley/hedley.hpp (lines 3-14)
+
+//     __ _____ _____ _____
+//  __|  |   __|     |   | |  JSON for Modern C++
+// |  |  |__   |  |  | | | |  version 3.11.3
+// |_____|_____|_____|_|___|  https://github.com/nlohmann/json
+//
+// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
+// SPDX-FileCopyrightText: 2016-2021 Evan Nemerson <evan@nemerson.com>
+// SPDX-License-Identifier: MIT
+
+/* Hedley - https://nemequ.github.io/hedley
+ * Created by Evan Nemerson <evan@nemerson.com>
+ */
+
+--- Source/Cmlx/json/include/nlohmann/detail/meta/cpp_future.hpp (lines 1-8)
+
+//     __ _____ _____ _____
+//  __|  |   __|     |   | |  JSON for Modern C++
+// |  |  |__   |  |  | | | |  version 3.11.3
+// |_____|_____|_____|_|___|  https://github.com/nlohmann/json
+//
+// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
+// SPDX-FileCopyrightText: 2018 The Abseil Authors
+// SPDX-License-Identifier: MIT
+
+--- Source/Cmlx/json/include/nlohmann/detail/meta/cpp_future.hpp (lines 40-41)
+
+// The following code is taken from https://github.com/abseil/abseil-cpp/blob/10cb35e459f5ecca5b2ff107635da0bfa41011b4/absl/utility/utility.h
+// which is part of Google Abseil (https://github.com/abseil/abseil-cpp), licensed under the Apache License 2.0.
+
+==============================================================================
 swift-numerics
   package  swift-numerics 1.1.1 (0c0290ff6b24942dadb83a929ffaaa1481df04a2)
   source   https://github.com/apple/swift-numerics

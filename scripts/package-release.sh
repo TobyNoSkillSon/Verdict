@@ -14,7 +14,8 @@ VERDICT_APP_PATH="$STAGE/Verdict.app" VERDICT_RELEASE_VERSION="$VERSION" "$PROJE
 APP="$STAGE/Verdict.app"
 codesign --verify --deep --strict "$APP"
 ZIP="Verdict-$VERSION-arm64.zip"
-ditto -c -k --keepParent "$APP" "$STAGE/$ZIP"
+# No extended attributes in the archive (no ._* entries); the /usr/bin/unzip extraction must verify.
+"$PROJECT/scripts/release-zip.sh" "$APP" "$STAGE/$ZIP"
 # The archive must carry the licences (Verdict's and every linked package's).
 LISTING="$(zipinfo -1 "$STAGE/$ZIP")"
 for f in LICENSE NOTICE THIRD_PARTY_NOTICES.txt; do

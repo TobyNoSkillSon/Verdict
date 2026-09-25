@@ -313,7 +313,8 @@ def judge(items, questions, model='auto', batch=256, check=True, bits=None):
     Verdict judges text; an item with image/audio/video paths, or over a model's context, comes back as a Result with .error set; the rest still run.
     bits runs the model(s) at that precision, a whole number (a loaded model at another precision is reloaded and stays at it
     while loaded; a later load without bits uses models()'s precision['selected']).
-    Raises VerdictError when the worker is unavailable — never returns made-up answers."""
+    Raises VerdictError when the worker is unavailable or its reply is not one result object per item — never
+    returns made-up or misaligned answers."""
     questions = {k: dict(v) for k, v in questions.items()}
     bits = None if bits is None else _whole(bits)
     if check:
@@ -327,9 +328,21 @@ def judge(items, questions, model='auto', batch=256, check=True, bits=None):
     for i in range(0, len(items), batch):
         body = {'items': items[i:i + batch], 'questions': questions, 'model': model}
         if bits is not None: body['bits'] = bits
-        out += _call('POST', '/v1/judge', body)['results']
+        out += _results(_call('POST', '/v1/judge', body), len(body['items']))
     results = [Result(r) for r in out]
     return results[0] if single else results
+
+
+def _results(reply, count):
+    """The reply's results list: exactly `count` objects, in item order, or VerdictError."""
+    results = reply.get('results') if isinstance(reply, dict) else None
+    if not isinstance(results, list):
+        raise VerdictError(f'Unexpected answer from Verdict: no results list in {type(reply).__name__} reply')
+    if len(results) != count:
+        raise VerdictError(f'Unexpected answer from Verdict: {len(results)} results for {count} items')
+    if not all(isinstance(r, dict) for r in results):
+        raise VerdictError('Unexpected answer from Verdict: a result is not an object')
+    return results
 
 
 class Verdict:
@@ -346,7 +359,8 @@ def gate(state, checks, allow_if, model='auto', on_error='raise'):
     checks: questions about `state`; allow_if: function of the Result returning True to allow.
     Returns a Verdict. on_error='raise' (default) surfaces an unavailable worker; on_error='allow'
     or 'deny' fails open/closed and marks the verdict escalated so the caller can log it. Unavailable includes a
-    refused connection, a timeout and an unreadable answer (a helper restarting mid-request)."""
+    refused connection, a timeout, an unreadable answer (a helper restarting mid-request) and a reply that is
+    not one result per item."""
     try:
         r = judge(state, checks, model=model)
     except VerdictError as e:

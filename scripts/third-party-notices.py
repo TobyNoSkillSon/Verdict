@@ -30,6 +30,23 @@ INVENTORY = [
     ('mlx-swift', 'ThreadPool (adapted in MLX)', 'thread pool inside MLX', 'zlib', [('Source/Cmlx/mlx/mlx/threadpool.h', (1, 20))]),
     ('mlx-swift', 'NVIDIA CCCL complex math (adapted in MLX Metal kernels)', 'complex exponential kernel', 'Apache-2.0',
      [('Source/Cmlx/mlx/mlx/backend/metal/kernels/cexpf.h', (1, 18))]),
+    # Review 3 re-check N1: vendored code with its own notice that MLX's ACKNOWLEDGMENTS.md omits.
+    # Tests/VerdictCoreTests/NoticesTests checks every copyright holder in the vendored C/C++/Metal sources is named here.
+    ('mlx-swift', 'SmallVector from V8 (adapted in MLX)', 'small-vector container behind MLX array shapes and strides',
+     'BSD-3-Clause', [('Source/Cmlx/mlx/mlx/small_vector.h', (1, 28))]),
+    ('mlx-swift', 'expm1f by Norbert Juffa (adapted in MLX Metal kernels)',
+     'expm1/erf Metal kernel source, embedded in the helper and compiled at run time', 'BSD-2-Clause',
+     [('Source/Cmlx/mlx/mlx/backend/metal/kernels/expm1f.h', (7, 30))]),
+    ('mlx-swift', 'nlohmann/json third-party parts (vendored in mlx-swift)',
+     'Grisu2 number formatting, UTF-8 decoding, Hedley macros and integer_sequence inside JSON (safetensors headers)',
+     'MIT (per the nlohmann/json SPDX headers; the Abseil code is Apache-2.0, text above)',
+     [('Source/Cmlx/json/include/nlohmann/detail/conversions/to_chars.hpp', (1, 8)),
+      ('Source/Cmlx/json/include/nlohmann/detail/conversions/to_chars.hpp', (25, 33)),
+      ('Source/Cmlx/json/include/nlohmann/detail/output/serializer.hpp', (1, 8)),
+      ('Source/Cmlx/json/include/nlohmann/detail/output/serializer.hpp', (897, 898)),
+      ('Source/Cmlx/json/include/nlohmann/thirdparty/hedley/hedley.hpp', (3, 14)),
+      ('Source/Cmlx/json/include/nlohmann/detail/meta/cpp_future.hpp', (1, 8)),
+      ('Source/Cmlx/json/include/nlohmann/detail/meta/cpp_future.hpp', (40, 41))]),
     ('swift-numerics', 'swift-numerics', 'real-number protocols used by mlx-swift', 'Apache-2.0 with Runtime Library Exception',
      [('LICENSE.txt', None)]),
     ('swift-transformers', 'swift-transformers (Tokenizers, Hub)', 'fallback tokenizer and tokenizer.json loading', 'Apache-2.0',
@@ -53,6 +70,8 @@ def excerpt(path, lines):
     if lines:
         a, b = lines
         text = '\n'.join(text.splitlines()[a - 1:b]) + '\n'
+        if not re.search(r'copyright|licen[cs]e', text, re.I):   # a pin change moved the header: fix the range
+            sys.exit(f'{path} lines {a}-{b} hold no copyright or licence text')
     return text.rstrip() + '\n'
 
 
