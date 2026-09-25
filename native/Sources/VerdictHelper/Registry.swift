@@ -21,7 +21,7 @@ private final class StubModel: DecisionModel {
             if need > contextLimit {
                 return .error("Item needs about \(need) tokens; \(id) accepts \(contextLimit). Shorten it or split it.")
             }
-            var out: [String: Answer] = [:]
+            var out = Answers()
             for q in questions {
                 var a = Answer()
                 switch q.kind {

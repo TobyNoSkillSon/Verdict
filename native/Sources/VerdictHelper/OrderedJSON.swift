@@ -15,6 +15,7 @@ indirect enum OrderedJSON {
     var arrayValues: [OrderedJSON]? { if case .array(let values) = self { return values }; return nil }
     var fields: [(String, OrderedJSON)]? { if case .object(let entries) = self { return entries }; return nil }
     var text: String? { if case .string(let value) = self { return value }; return nil }
+    var isNull: Bool { if case .scalar("null") = self { return true }; return false }
     func render() -> String {
         switch self {
         case .string(let value):

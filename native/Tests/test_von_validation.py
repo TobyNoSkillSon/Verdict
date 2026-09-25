@@ -30,6 +30,19 @@ CANONICAL = {'q': {'type': 'choice', 'instructions': 'Pick the label', 'criteria
 CANONICAL_ITEMS = ['plain text', 'caf\u00e9 review: great coffee']
 SDK_CANONICAL = {'1.1': [(0.0082, 0.9918), (0.7865, 0.2135)], '1.2': [(0.0766, 0.9234), (0.9727, 0.0273)]}
 TOL = 0.0001
+# Choice descriptions sent as null: the SDK describes the option by its label (desc.strip() if desc else opt.strip()).
+CUSTOMER = ['I want my money back for this broken kettle', 'What time do you open on Sunday?']
+NULL_DESC = {'q': {'type': 'choice', 'instructions': 'What does the customer want?',
+                   'criteria': {'refund': None, 'opening hours': None, 'other': 'Anything else'}}}
+SDK_NULL_DESC = {'1.1': [{'refund': 0.979, 'opening hours': 0.0095, 'other': 0.0115},
+                         {'refund': 0.0344, 'opening hours': 0.8388, 'other': 0.1268}],
+                 '1.2': [{'refund': 0.9722, 'opening hours': 0.008, 'other': 0.0198},
+                         {'refund': 0.0062, 'opening hours': 0.9658, 'other': 0.028}]}
+# Question ids that differ only by NFC/NFD are two questions (two JSON keys, two SDK answers).
+NFC_ID, NFD_ID = '\u00e9', 'e\u0301'
+ID_QUESTIONS = {NFC_ID: {'type': 'noul', 'instructions': 'Does the customer ask for a refund?'},
+                NFD_ID: {'type': 'noul', 'instructions': 'Is this about opening hours?'}}
+SDK_IDS = {'1.1': [(0.8971, 0.0222), (0.0135, 0.7834)], '1.2': [(0.821, 0.0729), (0.0403, 0.7307)]}
 
 
 @unittest.skipUnless(os.environ.get('VERDICT_VON_PARITY') == '1', 'Set VERDICT_VON_PARITY=1 for Von GPU tests')
@@ -157,6 +170,32 @@ class VonValidationTests(unittest.TestCase):
             observed = [r['answers']['q']['noul'] for r in results]
             for item, got, want in zip(STATE_ITEMS, observed, SDK_STATE[version]):
                 self.assertAlmostEqual(got, want, delta=TOL, msg=f'{item!r}: native {got}, SDK {want}')
+        self.each_version(body)
+
+
+    # Follow-up — null descriptions and normalization-distinct question ids
+    def test_null_description_uses_label(self):
+        def body(version):
+            results = self.judge(CUSTOMER, NULL_DESC)['results']
+            for result, want in zip(results, SDK_NULL_DESC[version]):
+                got = result['answers']['q']['probabilities']
+                self.assertEqual(sorted(got), sorted(want))
+                for label in want:
+                    self.assertAlmostEqual(got[label], want[label], delta=TOL, msg=f'{label}: native {got}, SDK {want}')
+            # Noul criteria given as null are absent criteria (zero-shot, with the null pass).
+            plain = self.judge(CUSTOMER, REFUND)['results']
+            nulls = self.judge(CUSTOMER, {'q': dict(REFUND['q'], criteria={'true': None, 'false': None})})['results']
+            self.assertEqual([r['answers'] for r in nulls], [r['answers'] for r in plain])
+        self.each_version(body)
+
+    def test_question_ids_are_bytes(self):
+        def body(version):
+            results = self.judge(CUSTOMER, ID_QUESTIONS)['results']
+            for result, (nfc, nfd) in zip(results, SDK_IDS[version]):
+                answers = result['answers']
+                self.assertEqual(sorted(answers), sorted([NFC_ID, NFD_ID]))
+                self.assertAlmostEqual(answers[NFC_ID]['noul'], nfc, delta=TOL)
+                self.assertAlmostEqual(answers[NFD_ID]['noul'], nfd, delta=TOL)
         self.each_version(body)
 
 

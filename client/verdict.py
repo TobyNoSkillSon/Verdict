@@ -359,7 +359,8 @@ def models():
 def judge(items, questions, model='auto', batch=256, check=True):
     """Answer `questions` about one item (returns a Result) or a list of items (returns a list).
 
-    Items are strings or dicts; dicts are shown to the model as JSON, so name the fields.
+    Items are strings or dicts (Laya sees a dict as JSON, Von as key: value lines), so name the fields.
+    Question ids and choice labels are distinct as exact strings, as in any Python dict.
     Verdict judges text; an item with image/audio/video paths, or over a model's context, comes back as a Result with .error set; the rest still run.
     Raises VerdictError when the worker is unavailable — never returns made-up answers."""
     questions = {k: dict(v) for k, v in questions.items()}

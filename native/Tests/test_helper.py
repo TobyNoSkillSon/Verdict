@@ -164,6 +164,25 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(sorted(r['results'][0]['answers']['c']['probabilities']), sorted(labels))
         self.assertIsNone(self.proc.poll())
 
+    def test_question_ids_are_bytes(self):
+        """Ids differing only by NFC/NFD are two JSON keys: both answered, in the helper and through the client."""
+        questions = {'\u00e9': {'type': 'noul', 'instructions': 'first'}, 'e\u0301': {'type': 'choice', 'instructions': 'second',
+                                                                                     'criteria': {'a': None, 'b': 'bee'}}}
+        r = self.call('POST', '/judge', {'items': ['x', 'y'], 'model': 'laya-english', 'questions': questions})
+        for result in r['results']:
+            self.assertEqual(sorted(result['answers']), sorted(questions))
+            self.assertIn('noul', result['answers']['\u00e9']); self.assertIn('choice', result['answers']['e\u0301'])
+        sys.path.insert(0, str(ROOT / 'client'))
+        import verdict
+        old = verdict.SUPPORT, verdict.STATUS
+        try:
+            verdict.SUPPORT, verdict.STATUS = self.support, self.support / 'status.json'
+            result = verdict.judge('x', questions, model='laya-english', check=False)
+            self.assertEqual(sorted(result.answers), sorted(questions))
+            self.assertEqual(result['\u00e9'].noul, .75); self.assertEqual(result['e\u0301'].choice, 'a')
+        finally:
+            verdict.SUPPORT, verdict.STATUS = old
+
     def test_shed_unload_settings_trim(self):
         self.call('POST', '/unload', {'model': 'laya-multilingual'})
         self.call('POST', '/unload', {'model': 'laya-english'})

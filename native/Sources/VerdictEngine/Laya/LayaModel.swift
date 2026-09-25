@@ -140,7 +140,7 @@ public final class LayaModel: DecisionModel, KernelPathReporting {
         let questionCount = prepared.map(\.count).max() ?? 0
         let templates = prepared.map(\.template)
         var results = Array(repeating: ItemResult.answers([:]), count: items.count)
-        var answers = Array(repeating: [String: Answer](), count: items.count)
+        var answers = Array(repeating: Answers(), count: items.count)
         var rows: [LayaPreparedRow] = [], metadata: [(Int, Question)] = []
         let states = encodeStates(items.map(\.text))
         for (i, _) in items.enumerated() {

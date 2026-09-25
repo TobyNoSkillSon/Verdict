@@ -181,16 +181,23 @@ final class Service {
         guard JSONSerialization.isValidJSONObject([obj]), let bytes = try? JSONSerialization.data(withJSONObject: [obj], options: [.fragmentsAllowed, .withoutEscapingSlashes, .sortedKeys]), let str = String(data: bytes, encoding: .utf8) else { return String(describing: obj) }
         return String(str.dropFirst().dropLast())
     }
+    /// Questions from the order-preserving parse, looked up by exact key bytes: Foundation/Swift dictionaries would
+    /// fold ids (and labels) that differ only by Unicode normalization into one.
     private func questions(_ raw: [String: Any], ordered: OrderedJSON?) throws -> [Question] {
-        let ids = ordered?.fields?.map(\.0) ?? raw.keys.sorted()
-        return try ids.map { id in
-            guard let q = raw[id] as? [String: Any], let name = q["type"] as? String, let kind = QuestionKind(rawValue: name) else { throw ServiceError("Unknown question type '\((raw[id] as? [String: Any])?["type"] ?? "")'") }
+        guard let fields = ordered?.fields else { throw ServiceError("questions must be a nonempty object") }
+        return try fields.map { id, q in
+            guard let name = q["type"]?.text, let kind = QuestionKind(rawValue: name) else {
+                throw ServiceError("Unknown question type '\(q["type"].map { $0.text ?? $0.render() } ?? "")'")
+            }
             var criteria: [(String, String)] = []
-            if let fields = ordered?[id]?["criteria"]?.fields {
-                criteria = fields.map { ($0.0, $0.1.text ?? $0.1.render()) }
-            } else if let values = q["criteria"] as? [String: String] { criteria = values.keys.sorted().map { ($0, values[$0]!) } }
-            else if let values = q["criteria"] as? [String] { criteria = values.map { ($0, $0) } }
-            return Question(id: id, kind: kind, instructions: q["instructions"] as? String ?? "", criteria: criteria, sourceJSON: ordered?[id]?.render())
+            if let entries = q["criteria"]?.fields {
+                // null means "no description" (the Von SDK and Laya's reference both use the bare label then).
+                criteria = entries.map { ($0.0, $0.1.isNull ? "" : ($0.1.text ?? $0.1.render())) }
+            } else if let values = q["criteria"]?.arrayValues {
+                let labels = values.compactMap(\.text)
+                if labels.count == values.count { criteria = labels.map { ($0, $0) } }
+            }
+            return Question(id: id, kind: kind, instructions: q["instructions"]?.text ?? "", criteria: criteria, sourceJSON: q.render())
         }
     }
     private func answer(_ a: Answer) -> [String: Any] {
@@ -257,7 +264,11 @@ final class Service {
     private func resultObject(_ result: ItemResult, _ id: String, _ ms: Double) -> [String: Any] {
         switch result {
         case .error(let message): return ["error": message, "model": id, "ms": 0]
-        case .answers(let answers): return ["answers": answers.mapValues(answer), "model": id, "ms": ms]
+        case .answers(let answers):
+            // NSString keys compare literally: question ids that differ only by normalization stay two keys.
+            let byID = NSMutableDictionary()
+            for (question, a) in answers { byID[NSString(string: question)] = answer(a) }
+            return ["answers": byID, "model": id, "ms": ms]
         }
     }
     private func integer(_ raw: Any?) -> Int? {

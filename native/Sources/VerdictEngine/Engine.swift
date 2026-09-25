@@ -79,8 +79,32 @@ public struct Probabilities: Sendable, Equatable, Sequence, CustomStringConverti
     public static func distinct(_ labels: [String]) -> Bool { Set(labels.map { Data($0.utf8) }).count == labels.count }
 }
 
+/// Question id -> Answer, in insertion order. Ids are distinct as exact UTF-8 bytes, like the request's JSON object
+/// keys: two questions whose ids differ only by Unicode normalization ("é" / "e\u{301}") keep separate answers
+/// (a `[String: Answer]` let the second overwrite the first).
+public struct Answers: Sendable, Sequence, ExpressibleByDictionaryLiteral {
+    public private(set) var ids: [String] = []
+    public private(set) var values: [Answer] = []
+    public init() {}
+    public init(dictionaryLiteral elements: (String, Answer)...) { for (id, answer) in elements { self[id] = answer } }
+    private func index(_ id: String) -> Int? { ids.firstIndex { $0.utf8.elementsEqual(id.utf8) } }
+    /// Byte-exact lookup; assigning nil removes.
+    public subscript(_ id: String) -> Answer? {
+        get { index(id).map { values[$0] } }
+        set {
+            if let i = index(id) {
+                if let newValue { values[i] = newValue } else { ids.remove(at: i); values.remove(at: i) }
+            } else if let newValue { ids.append(id); values.append(newValue) }
+        }
+    }
+    public var count: Int { ids.count }
+    public func makeIterator() -> IndexingIterator<[(key: String, value: Answer)]> {
+        zip(ids, values).map { (key: $0.0, value: $0.1) }.makeIterator()
+    }
+}
+
 public enum ItemResult: Sendable {
-    case answers([String: Answer])      // keyed by Question.id
+    case answers(Answers)               // keyed by Question.id (exact bytes)
     case error(String)                  // per-item failure; the batch continues
 }
 

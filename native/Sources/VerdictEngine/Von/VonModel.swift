@@ -264,7 +264,7 @@ public final class VonModel: DecisionModel, KernelPathReporting {
     public func predict(_ items: [Item], _ questions: [Question]) throws -> [ItemResult] {
         guard !questions.isEmpty else { throw VonError.invalid("Questions must be nonempty") }
         let clock = ContinuousClock(), t0 = clock.now
-        var results = [[String: Answer]](repeating: [:],count: items.count)
+        var results = [Answers](repeating: Answers(), count: items.count)
         var errors: [Int:String] = [:]
         var rows: [VonPreparedRow] = [], meta: [(item: Int, question: Int)] = []
         // Validation and tokenization first: no forward pass (not even the cached null pass) runs before every
