@@ -15,6 +15,11 @@ APP="$STAGE/Verdict.app"
 codesign --verify --deep --strict "$APP"
 ZIP="Verdict-$VERSION-arm64.zip"
 ditto -c -k --keepParent "$APP" "$STAGE/$ZIP"
+# The archive must carry the licences (Verdict's and every linked package's).
+LISTING="$(zipinfo -1 "$STAGE/$ZIP")"
+for f in LICENSE NOTICE THIRD_PARTY_NOTICES.txt; do
+  grep -qx "Verdict.app/Contents/Resources/$f" <<<"$LISTING" || { echo "Archive is missing Verdict.app/Contents/Resources/$f" >&2; exit 1; }
+done
 shasum -a 256 "$STAGE/$ZIP" | awk -v zip="$ZIP" '{print $1 "  " zip}' > "$STAGE/SHA256SUMS"
 mkdir -p "$(dirname "$OUT")"
 mkdir "$OUT"

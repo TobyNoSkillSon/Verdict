@@ -14,6 +14,7 @@ verdict: judge many items with the same typed questions, locally, in millisecond
     verdict load ID [--bits N] [--manual]  load on demand; --manual loads like the menu (launch set); --bits N reloads at N bits
     verdict unload ID
     verdict skill [--install DIR]          print the agent skill (named triage), or write DIR/triage/SKILL.md
+    verdict licenses                       Verdict's NOTICE and the licences of the code it bundles
 
 q.json: {"name": {"type": "noul"|"choice"|"score", "instructions": "…", "criteria": …}, …}
 Talks to the Verdict app over its local HTTP API (docs/API.md); starts the app if it is not running.
@@ -29,7 +30,8 @@ struct CLI {
     var readInput: () -> String = { String(decoding: FileHandle.standardInput.readDataToEndOfFile(), as: UTF8.self) }
 
     func run(_ argv: [String]) async -> Int32 {
-        guard let command = argv.first, !["-h", "--help", "help"].contains(command) else { write(usage); return 0 }
+        guard var command = argv.first, !["-h", "--help", "help"].contains(command) else { write(usage); return 0 }
+        if command == "--licenses" { command = "licenses" }
         do {
             try await dispatch(command, Array(argv.dropFirst()))
             return 0
@@ -111,6 +113,13 @@ struct CLI {
             } else {
                 write(text)
             }
+        case "licenses":
+            _ = try Arguments(rest, values: [], flags: [])
+            guard let notice = resourceText("NOTICE", source: "NOTICE"),
+                  let thirdParty = resourceText("THIRD_PARTY_NOTICES.txt", source: "Resources/THIRD_PARTY_NOTICES.txt") else {
+                throw CLIError("NOTICE not found; is Verdict installed?")
+            }
+            write(notice); write(thirdParty)
         default: throw CLIError("unknown command \(command)")
         }
     }
@@ -161,10 +170,13 @@ struct CLI {
     }
 
     /// The agent skill: from the app this command ships in, the installed app, or a source checkout.
-    func skillText() -> String? {
-        var candidates = verdict.appCandidates.map { $0.appendingPathComponent("Contents/Resources/SKILL.md") }
+    func skillText() -> String? { resourceText("SKILL.md", source: "Resources/SKILL.md") }
+
+    /// A file in the app's Contents/Resources (this command's app, then the installed one), else in a source checkout.
+    func resourceText(_ name: String, source: String) -> String? {
+        var candidates = verdict.appCandidates.map { $0.appendingPathComponent("Contents/Resources/\(name)") }
         candidates.append(URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().appendingPathComponent("Resources/SKILL.md"))   // Sources/VerdictCLI/CLI.swift -> root
+            .deletingLastPathComponent().appendingPathComponent(source))   // Sources/VerdictCLI/CLI.swift -> root
         for url in candidates { if let text = try? String(contentsOf: url, encoding: .utf8) { return text } }
         return nil
     }

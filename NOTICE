@@ -1,10 +1,78 @@
-Anubis — Copyright 2026 Toby NoSkillSon. Apache License 2.0.
+Verdict
+Copyright 2026 Toby NoSkillSon
+Licensed under the Apache License, Version 2.0 (LICENSE).
 
-Bundles no model weights. At runtime it downloads community MLX conversions
-(aac6fef/laya-mlx, aac6fef/laya-multilingual-mlx, aac6fef/laya-typed-decisions-mlx)
-of Laya by Convai Innovations (Apache-2.0), using the laya-mlx runtime by
-mizorewww (https://github.com/mizorewww/laya-mlx) and MLX by Apple.
+Verdict is a native Swift application. Its model inference runs on MLX through
+mlx-swift; no Python runs at runtime. Third-party code linked into the app is
+listed, with each licence text, in THIRD_PARTY_NOTICES.txt (shipped in
+Verdict.app/Contents/Resources next to this file).
 
-Von 1.1 and 1.2 by wfzyx (Apache-2.0) are optional runtime downloads from
-https://huggingface.co/wfzyx/von at pinned revisions. Verdict distributes no
-Von weights; its native inference code implements Von's option-marker model.
+Laya inference
+--------------
+Sources/VerdictEngine/Laya is a Swift port of laya-mlx 0.2.0
+(https://github.com/mizorewww/laya-mlx, Apache-2.0): the network (model.py) and
+the prompt, question rendering and calibration code (common.py, agent.py).
+laya-mlx carries this notice, reproduced as Apache-2.0 section 4(d) requires:
+
+    laya-mlx
+    Copyright 2026 laya-mlx contributors
+
+    This product includes software derived from Laya:
+    https://github.com/NandhaKishorM/laya
+    Copyright Convai Innovations and Laya contributors. Licensed under Apache-2.0.
+    Upstream source revision: 573e5b62696ba441230cd6be71d593331b5d23af
+
+    The token sequence construction, question rendering, confidence calculation,
+    presets, email utilities and language router are adapted from Laya.
+    The neural network is reimplemented using Apple's MLX, following Laya's
+    DecisionModel and the ModernBERT architecture in Hugging Face Transformers.
+    Model weights are downloaded separately from Convai Innovations on Hugging Face;
+    they are not included in this repository.
+
+Von inference
+-------------
+Sources/VerdictEngine/Von is a Swift port of the option-marker backend of
+von-sdk 1.1.1 and 1.2.2 (https://github.com/wfzyx/von), Copyright 2026 Victor
+Hugo Panisa, Apache-2.0.
+
+Tokenizers
+----------
+Sources/VerdictEngine/Tokenizer holds Verdict's own byte-level and Metaspace BPE
+tokenizers for the catalog models' tokenizer.json files, written from scratch to
+give the same token ids as Hugging Face tokenizers (checked against its Rust
+implementation on 4,200 fixed texts with no mismatch). A file they do not
+recognise falls back to swift-transformers' Tokenizers library.
+
+Models
+------
+Verdict bundles no model weights. On first use it downloads them from Hugging
+Face; each keeps its own licence:
+
+- Laya English, Laya Multilingual and Laya Typed decisions by Convai
+  Innovations (https://huggingface.co/convaiinnovations), Apache-2.0, in the
+  MLX conversions aac6fef/laya-mlx, aac6fef/laya-multilingual-mlx and
+  aac6fef/laya-typed-decisions-mlx (each with an Apache-2.0 LICENSE).
+- Von 1.1 and Von 1.2 by Victor Hugo Panisa (https://huggingface.co/wfzyx/von),
+  pinned revisions d8bb5e0745d8ee1fb65d536d6d4892d54d5a93fd and
+  5df8185a4f2327ad0a7cd117cc4f701ac557b9ae; the model card declares
+  Apache-2.0.
+- Jev by TypeSafe is a hosted API. Verdict does not run or download it; it
+  appears only as a measured reference in the benchmark table.
+
+Bundled third-party code (full texts in THIRD_PARTY_NOTICES.txt)
+-----------------------------------------------------------------
+- mlx-swift (MIT, Copyright 2023 ml-explore) with its vendored MLX (MIT,
+  Copyright 2023 Apple Inc.), mlx-c (MIT, Copyright 2023 ml-explore), fmt (MIT,
+  Copyright 2012-present Victor Zverovich and contributors), nlohmann/json (MIT,
+  Copyright 2013-2022 Niels Lohmann), metal-cpp (Apache-2.0, Apple Inc.),
+  pocketfft (BSD-3-Clause, Max-Planck-Society and Peter Bell), ThreadPool (zlib,
+  Jakob Progsch and Václav Zeman) and Metal complex-math code from NVIDIA CCCL
+  (Apache-2.0, NVIDIA Corporation and Filipe RNC Maia)
+- swift-numerics (Apache-2.0 with Runtime Library Exception, Apple Inc.)
+- swift-transformers (Apache-2.0, Hugging Face)
+- swift-huggingface and swift-jinja (Apache-2.0, Hugging Face)
+- EventSource (MIT, Copyright 2025 Mattt)
+- yyjson (MIT, Copyright 2020 YaoYuan)
+- swift-collections (Apache-2.0 with Runtime Library Exception, Apple Inc.)
+- swift-crypto and swift-asn1 (Apache-2.0, Apple Inc.), resolved dependencies
+  of swift-transformers; on macOS swift-crypto forwards to Apple's CryptoKit

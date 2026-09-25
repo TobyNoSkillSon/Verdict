@@ -27,6 +27,11 @@ if [[ -n "${VERDICT_RELEASE_VERSION:-}" ]]; then
   /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERDICT_RELEASE_VERSION" "$BUNDLE/Contents/Info.plist" >/dev/null
 fi
 cp Resources/models.json Resources/benchmarks.json Resources/SKILL.md "$BUNDLE/Contents/Resources/"
+# Licences: Verdict's own and every linked package's (scripts/third-party-notices.py writes the latter).
+cp LICENSE NOTICE Resources/THIRD_PARTY_NOTICES.txt "$BUNDLE/Contents/Resources/"
+for f in LICENSE NOTICE THIRD_PARTY_NOTICES.txt; do
+  [[ -s "$BUNDLE/Contents/Resources/$f" ]] || { echo "Missing Contents/Resources/$f; not signing an app without its notices" >&2; exit 1; }
+done
 cp clients/python/verdict.py "$BUNDLE/Contents/Resources/verdict.py"
 ICONSET="$STAGE/Verdict.iconset"; mkdir -p "$ICONSET"
 xcrun swift scripts/icon.swift "$ICONSET/icon_512x512@2x.png"

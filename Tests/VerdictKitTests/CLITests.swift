@@ -187,6 +187,12 @@ final class CLIBinaryTests: XCTestCase {
         XCTAssertTrue(r.out.hasPrefix("---\nname: triage"), r.out)
         r = try run(["skill", "--install", helper.support.appendingPathComponent("skills").path])
         XCTAssertTrue(FileManager.default.fileExists(atPath: helper.support.appendingPathComponent("skills/triage/SKILL.md").path))
+        r = try run(["licenses"])
+        XCTAssertEqual(r.code, 0, r.err)
+        XCTAssertTrue(r.out.hasPrefix("Verdict\n"), r.out)
+        XCTAssertTrue(r.out.contains("Third-party notices for Verdict"), "the bundled licences follow NOTICE")
+        XCTAssertTrue(r.out.contains("Copyright (c) 2023 ml-explore"))
+        XCTAssertEqual(try run(["--licenses"]).out, r.out)
         r = try run(["--help"])
         XCTAssertTrue(r.out.contains("verdict judge --questions"), r.out)
     }
