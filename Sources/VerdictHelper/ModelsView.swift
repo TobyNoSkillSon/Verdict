@@ -39,9 +39,16 @@ enum ModelsView {
         return recommendedBits(ModelBenchmark(default_bits: nil, precisions: decoded), native: native, options: options)
     }
 
-    /// `selected`: config.json precision choices (id -> bits, 0 = native).
+    /// The recommended precision (effective bits) for a benchmarks.json entry; nil when the native one is unmeasured.
+    static func recommended(_ entry: Any?, runtime: String) -> Int? {
+        let native = nativeBits(runtime: runtime)
+        return recommended(precisions(entry, native: native).1, native: native, options: precisionOptions(runtime: runtime))
+    }
+
+    /// `selected`: effective bits a load without bits uses, and `recommended`: the recommended effective bits, per
+    /// loadable model, both from the helper's one resolution rule (Service.implicitBits / recommendedBits).
     static func build(catalog: [[String: Any]], benchmarks: [String: Any], loaded: [String: Any], installed: [String: Any],
-                      selected: [String: Int]) -> [[String: Any]] {
+                      selected: [String: Int], recommended recommendedByID: [String: Int]) -> [[String: Any]] {
         catalog.compactMap { m in
             guard let id = m["id"] as? String else { return nil }
             let repository = m["repository"] as? String ?? ""
@@ -49,9 +56,9 @@ enum ModelsView {
             let runtime = m["runtime"] as? String
             let native = nativeBits(runtime: runtime), options = precisionOptions(runtime: runtime)
             var (defaultBits, results) = precisions(benchmarks[id], native: native)
-            if !hosted { defaultBits = recommended(results, native: native, options: options) ?? native }
+            if !hosted { defaultBits = recommendedByID[id] ?? recommended(results, native: native, options: options) ?? native }
             let effective = { (bits: Int) in bits == 0 ? native : bits }
-            let selection = hosted ? defaultBits : selected[id].map(effective) ?? defaultBits
+            let selection = hosted ? defaultBits : selected[id] ?? defaultBits
             let loadedEntry = loaded[id] as? [String: Any]
             let base = results[defaultBits]
             var all: [String: Any] = [:]

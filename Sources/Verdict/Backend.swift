@@ -216,7 +216,7 @@ import VerdictCore
     }
 
     /// A menu Load/Reload is a manual load: it joins the launch set (loads again at next launch) and follows the
-    /// "Manually loaded" Keep Hot window. Loads at the selected precision (the helper's own map may predate the selection).
+    /// "Manually loaded" Keep Hot window. Loads at the selected precision, sent explicitly so the reload happens even when the model is already loaded.
     func load(_ id: String) {
         busyModel = id; lastError = nil; onChange?()
         let bits = precision(id)

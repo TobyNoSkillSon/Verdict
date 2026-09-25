@@ -64,7 +64,7 @@ The port changes whenever the helper restarts (app relaunch, crash recovery, Res
 | `items` | nonempty list | Strings, or any JSON value. An object is judged as its JSON text (Laya) or `key: value` lines (Von), in the key order you send, so name the fields. A string stays a string even when it looks like JSON. An object with an `image`, `images`, `audio`, `video` or `videos` key gets a per-item error: Verdict judges text. |
 | `questions` | nonempty object | Question id → question. Every question is answered for every item in the same pass. Ids and labels are compared as exact strings. |
 | `model` | string, optional | `"auto"` (default) or a model id from `/v1/models`. `auto` sends an item whose letters are ≥ 99.5% ASCII to `laya-english` and anything else to `laya-multilingual`; one request can use both. |
-| `bits` | integer, optional | Run the model(s) at this precision: Laya 16, 8 or 4; Von 32, 16, 8 or 4; `0` means the model's native precision (Laya 16, Von 32). A model loaded at another precision is reloaded, and stays at the new precision. Checked for every model the request uses before anything loads. |
+| `bits` | integer, optional | A whole number (`4.9` is refused, not truncated; `null` is the same as leaving it out). Run the model(s) at this precision: Laya 16, 8 or 4; Von 32, 16, 8 or 4; `0` means the model's native precision (Laya 16, Von 32). A model loaded at another precision is reloaded and stays at the new precision while it stays loaded; after an unload, a load without `bits` uses `precision.selected` again. Checked for every model the request uses before anything loads. |
 
 A question is `{"type", "instructions", "criteria"}`:
 
@@ -150,7 +150,7 @@ Every catalog model with what you need to choose one. Figures are measured on Ve
 ```
 
 - `state`: `hot` (loaded), `downloaded`, `available` (downloads on first use) or `hosted` (a reference model that cannot be loaded; `loadable: false`, `precision: null`).
-- `precision` (bits): `selected` is what a load without `bits` uses (the app's Models table choice, else `default`); `default` is the recommended precision; `loaded` is the loaded one or `null`.
+- `precision` (bits): `selected` is what a load without `bits` uses: the app's Models table choice (read from `config.json` at each load, so a choice made while Verdict runs applies to the next load), else `default`. A loaded model is not reloaded when the choice changes; `loaded` shows what it runs at, or `null`. `default` is the recommended precision.
 - `benchmark` fields: `accuracy` (0–1; `accuracy_en`/`accuracy_ml` for the English and multilingual tasks, `sets` per task), `ece` (calibration error, lower is better), `ms` (single-item p50), `items_per_s` (batched), `j_per_1k` (energy per 1,000 judgements, batched), `memory_mb` (loaded footprint). A field that was not measured is absent.
 
 ## POST /v1/load
@@ -159,7 +159,7 @@ Every catalog model with what you need to choose one. Figures are measured on Ve
 {"model": "von-1.2", "bits": 8, "manual": true}      →      {"loaded": ["laya-multilingual", "von-1.2"]}
 ```
 
-Loads a model (downloading it the first time) and returns the loaded ids. `bits` (optional) reloads it at that precision even if it is loaded. `manual` (optional, default false) loads it like the menu's Load: it joins the launch set and follows the "Manually loaded" Keep Hot window; a reload keeps a manual model manual. Without `manual` it is an on-demand load, unloaded after the on-demand idle window. Errors: `400` (unknown model, invalid bits), `507` (does not fit in free memory). A refused precision change leaves the loaded model as it was.
+Loads a model (downloading it the first time) and returns the loaded ids. `bits` (optional, a whole number; `null` = omitted) reloads it at that precision even if it is loaded; without it, a model that is not loaded loads at `precision.selected` from `/v1/models`. `manual` (optional, default false) loads it like the menu's Load: it joins the launch set and follows the "Manually loaded" Keep Hot window; a reload keeps a manual model manual. Without `manual` it is an on-demand load, unloaded after the on-demand idle window. Errors: `400` (unknown model, invalid bits), `507` (does not fit in free memory). A refused precision change leaves the loaded model as it was.
 
 ## POST /v1/unload
 
@@ -176,13 +176,13 @@ Loads a model (downloading it the first time) and returns the loaded ids. `bits`
 → {"allow_swap": false, "idle_minutes": 0, "manual_idle_minutes": 0, "on_demand_idle_minutes": 15}
 ```
 
-Any subset of the fields. Idle windows are minutes without a request after which a model of that class unloads (`0` = never). `allow_swap: false` is "Fit in free memory": before a load, Verdict checks that the model fits in memory that is free at that moment, unloads idle models to make room (on-demand before manual, least recently used first, never one the current request needs) or refuses with 507. It avoids swap on a best-effort basis: memory use can change after the check. `allow_swap: true` skips the check. The change applies to the running helper only; the app's menu choices are saved and apply at the next launch.
+Any subset of the fields (`null` = omitted). Idle windows are whole minutes without a request after which a model of that class unloads (`0` = never). `allow_swap: false` is "Fit in free memory": before a load, Verdict checks that the model fits in memory that is free at that moment, unloads idle models to make room (on-demand before manual, least recently used first, never one the current request needs) or refuses with 507. It avoids swap on a best-effort basis: memory use can change after the check. `allow_swap: true` skips the check. The change applies to the running helper only; the app's menu choices are saved and apply at the next launch.
 
 ## Errors
 
 | Status | When | Example message |
 |---|---|---|
-| 400 | Malformed JSON, missing or invalid field, unknown model or question type, invalid precision | `laya-english: Laya precision must be 16, 8 or 4 bits` |
+| 400 | Malformed JSON, missing or invalid field, unknown model or question type, invalid precision, a fraction where a whole number is required | `laya-english: Laya precision must be 16, 8 or 4 bits`, `bits must be a whole number, not 4.9` |
 | 403 | An `Origin` header, or a `Host` other than `127.0.0.1:<port>` / `localhost:<port>` | `cross-origin requests are not accepted` |
 | 404 | Unknown path or wrong method | `not found: GET /v1/nothing`, `/v1/judge takes POST` |
 | 415 | POST without `Content-Type: application/json` | `Content-Type must be application/json` |

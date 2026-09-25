@@ -9,7 +9,11 @@ final class Service {
     private let lock = NSRecursiveLock()
     private var models: [String: DecisionModel] = [:]
     private var order: [String] = []
-    private var precision: [String: Int] = [:]
+    /// Precision each loaded model runs at (helper bits, 0 = native); set by its load, cleared by its unload.
+    private var loadedBits: [String: Int] = [:]
+    /// VERDICT_PRECISION (id -> bits, 0 = native): a launch override for test and benchmark harnesses. The app does
+    /// not set it; its Models table choice lives in config.json, which `implicitBits` rereads for every load.
+    private var launchPrecision: [String: Int] = [:]
     /// Models switched to the stock path after an optimized-path failure: id -> the failure. Cleared on unload
     /// (the switch lasts for that loaded model's lifetime).
     private var fallbacks: [String: String] = [:]
@@ -40,7 +44,7 @@ final class Service {
         cacheLimit = Int(env["VERDICT_CACHE_LIMIT_MB"] ?? "") ?? 1024
         shedPercent = Double(env["VERDICT_SHED_FREE_PCT"] ?? "") ?? 8
         trimPercent = Double(env["VERDICT_TRIM_FREE_PCT"] ?? "") ?? 15
-        if let data = env["VERDICT_PRECISION"]?.data(using: .utf8), let p = try? JSONSerialization.jsonObject(with: data) as? [String: Int] { precision = p }
+        if let data = env["VERDICT_PRECISION"]?.data(using: .utf8), let p = try? JSONSerialization.jsonObject(with: data) as? [String: Int] { launchPrecision = p }
         let now = Date().timeIntervalSince1970
         // VERDICT_IDLE_MINUTES (older launchers and test harnesses) sets both classes unless the per-class
         // variables are given; the app passes all three.
@@ -194,7 +198,8 @@ final class Service {
     func flushStatus() { statusQueue.sync {} }
     /// Loads `id` (or returns it loaded). A manual request promotes an on-demand model to manual; an on-demand request
     /// never demotes. In "Fit in free memory" mode the load must fit without swapping (see `admit`).
-    private func load(_ id: String, as requested: Residency) throws -> DecisionModel {
+    /// `bits`: an explicit precision for this load (validated by the caller); nil loads at `implicitBits`.
+    private func load(_ id: String, as requested: Residency, bits explicit: Int? = nil) throws -> DecisionModel {
         if let existing = models[id] {
             if requested == .manual && residency[id] != .manual {
                 residency[id] = .manual; updateEntry(id); writeStatus(refreshInstalled: false)
@@ -204,15 +209,14 @@ final class Service {
         let spec = try catalog.spec(id)
         // Do not download weights if no production loader is registered.
         let type = try loader(runtime: spec.runtime)
-        let estimate = try admit(spec, bits: precision[id] ?? spec.defaultBits)
+        let bits = explicit ?? implicitBits(spec)
+        let estimate = try admit(spec, bits: bits)
         let downloading = catalog.cached(spec) == nil
         state["loading"] = id; state["downloading"] = downloading; state["error"] = NSNull(); writeStatus()
         let start = Date()
         do {
             let stub = ProcessInfo.processInfo.environment["VERDICT_STUB_MODELS"] == "1"
             let snapshot = stub ? support : try catalog.snapshot(spec)
-            // Explicit choice (VERDICT_PRECISION or /load bits; 0 = native) wins; else the catalog's recommended default.
-            let bits = precision[id] ?? spec.defaultBits
             // A download can take minutes and memory moves meanwhile: check again right before allocating weights.
             if downloading && !stub { installedCache = nil; try admit(spec, bits: bits) }
             let agent = try type.load(id: id, snapshot: snapshot, bits: bits)
@@ -220,7 +224,7 @@ final class Service {
             if Self.stockRequested, let paths = agent as? InferencePathSwitching { try paths.useStockPath(true) }
             // Stub models take the catalog's context (real models read their own config).
             if let stub = agent as? CatalogContextAdopting { stub.adoptContext(spec.context) }
-            models[id] = agent; order.append(id)
+            models[id] = agent; order.append(id); loadedBits[id] = bits
             residency[id] = requested; lastUsed[id] = Date().timeIntervalSince1970; footprint[id] = estimate
             var active = state["models"] as? [String: Any] ?? [:]
             active[id] = ["device": "mlx", "load_s": (Date().timeIntervalSince(start) * 10).rounded() / 10, "bits": bits,
@@ -239,7 +243,7 @@ final class Service {
         }
     }
     private func unload(_ id: String) {
-        models.removeValue(forKey: id); order.removeAll { $0 == id }; fallbacks[id] = nil
+        models.removeValue(forKey: id); order.removeAll { $0 == id }; fallbacks[id] = nil; loadedBits[id] = nil
         residency[id] = nil; lastUsed[id] = nil; footprint[id] = nil
         var active = state["models"] as? [String: Any] ?? [:]; active.removeValue(forKey: id); state["models"] = active
         Memory.clearCache(); writeStatus()
@@ -419,11 +423,11 @@ final class Service {
             if groups[id] == nil { modelOrder.append(id) }
             groups[id, default: []].append(index)
         }
-        // bits: the precision every model this request uses runs at (like /load bits; it stays until changed). Validated
-        // for all of them before anything loads.
+        // bits: the precision every model this request uses runs at (like /load bits: a model stays at it while it
+        // stays loaded). Validated for all of them before anything loads; null is the same as omitted.
         var requestedBits: [String: Int] = [:]
-        if let raw = body["bits"], !(raw is NSNull) {
-            for id in modelOrder { requestedBits[id] = try validBits(raw, for: id) }
+        if let raw = body["bits"], let bits = try wholeNumber(raw, "bits") {
+            for id in modelOrder { requestedBits[id] = try validBits(bits, for: id) }
         }
         // Every model this request needs is in flight until it returns: loading a later one never evicts an earlier one.
         pinned = Set(modelOrder); defer { pinned = [] }
@@ -431,10 +435,8 @@ final class Service {
             if let bits = requestedBits[id] {
                 let spec = try catalog.spec(id)
                 if models[id] == nil {
-                    let previous = precision[id]
-                    precision[id] = bits
-                    do { _ = try load(id, as: .onDemand) } catch { precision[id] = previous; throw error }
-                } else if spec.effectiveBits(precision[id] ?? spec.defaultBits) != spec.effectiveBits(bits) {
+                    _ = try load(id, as: .onDemand, bits: bits)
+                } else if spec.effectiveBits(loadedBits[id] ?? 0) != spec.effectiveBits(bits) {
                     try reload(id, bits: bits, as: residency[id] == .manual ? .manual : .onDemand)
                 }
             }
@@ -508,11 +510,31 @@ final class Service {
             return ["answers": byID, "model": id, "ms": ms]
         }
     }
-    private func integer(_ raw: Any?) -> Int? {
-        if raw is NSNull { return 0 }
-        if let number = raw as? NSNumber { return number.intValue }
-        if let string = raw as? String { return Int(string.trimmingCharacters(in: .whitespacesAndNewlines)) }
-        return nil
+    /// A whole number from a request field: a JSON integer (4, 4.0 and 4e0 are the same number) or its string form
+    /// (the app's control bodies are strings). null is nil (the field is treated as omitted). Fractions (4.9), booleans,
+    /// arrays, objects and out-of-range values are refused, never truncated.
+    func wholeNumber(_ raw: Any, _ name: String) throws -> Int? {
+        if raw is NSNull { return nil }
+        let refused = ServiceError("\(name) must be a whole number, not \(Self.literal(raw))")
+        if let number = raw as? NSNumber {
+            guard CFGetTypeID(number) != CFBooleanGetTypeID() else { throw refused }
+            if let exact = Int(exactly: number.int64Value), NSNumber(value: exact) == number { return exact }
+            let value = number.doubleValue
+            guard value.isFinite, value == value.rounded(), let exact = Int(exactly: value) else { throw refused }
+            return exact
+        }
+        if let string = raw as? String, let value = Int(string.trimmingCharacters(in: .whitespacesAndNewlines)) { return value }
+        throw refused
+    }
+    /// A request value as the client wrote it, for error messages: 4.9, true, "4.5", [4].
+    static func literal(_ raw: Any) -> String {
+        if let number = raw as? NSNumber {
+            if CFGetTypeID(number) == CFBooleanGetTypeID() { return number.boolValue ? "true" : "false" }
+            return number.stringValue
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: raw, options: [.fragmentsAllowed, .sortedKeys, .withoutEscapingSlashes]),
+              let text = String(data: data, encoding: .utf8) else { return String(describing: raw) }
+        return text
     }
     /// Public API version, reported in /v1/status as "api". Bumped only for incompatible changes to /v1.
     static let apiVersion = 1
@@ -530,15 +552,30 @@ final class Service {
         }
         return publicRoutes.contains(bare) || internalRoutes.contains(bare) ? bare : nil
     }
-    /// config.json precision choices (id -> bits, 0 = native), as the app's Models table last saved them.
+    /// config.json precision choices (id -> bits, 0 = native), as the app's Models table last saved them. Reread on
+    /// every call, so a choice made while the helper runs applies to the next load.
     private func selectedPrecision() -> [String: Int] {
         guard let data = try? Data(contentsOf: support.appendingPathComponent("config.json")),
               let config = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return [:] }
-        return (config["precision"] as? [String: Any] ?? [:]).compactMapValues { ($0 as? NSNumber)?.intValue }
+        return (config["precision"] as? [String: Any] ?? [:]).compactMapValues { try? wholeNumber($0, "bits") }
     }
-    /// Parses and validates a precision for `id` without touching state.
-    private func validBits(_ raw: Any, for id: String) throws -> Int {
-        guard let bits = integer(raw) else { throw ServiceError("invalid literal for int() with base 10: '\(raw)'") }
+    /// The recommended precision (effective bits): VerdictCore's rule over benchmarks.json, else models.json default_bits.
+    private func recommendedBits(_ spec: ModelSpec) -> Int {
+        ModelsView.recommended(catalog.benchmarks[spec.id], runtime: spec.runtime) ?? spec.effectiveBits(spec.defaultBits)
+    }
+    /// The one rule for a load without bits (helper bits, 0 = native), which /v1/models reports as precision.selected:
+    /// the launch override (VERDICT_PRECISION), else the app's saved choice (config.json), else the recommended
+    /// precision. A choice this model cannot run is skipped. Explicit bits (/load, /judge) apply to that load only.
+    private func implicitBits(_ spec: ModelSpec, config: [String: Int]? = nil) -> Int {
+        let allowed = Self.precisions[spec.runtime]?.0
+        for choice in [launchPrecision[spec.id], (config ?? selectedPrecision())[spec.id]] {
+            if let bits = choice, allowed?.contains(bits) ?? true { return bits }
+        }
+        let recommended = recommendedBits(spec)
+        return recommended == spec.nativeBits ? 0 : recommended   // helper bits store the native precision as 0
+    }
+    /// Validates a precision for `id` without touching state.
+    private func validBits(_ bits: Int, for id: String) throws -> Int {
         let spec = try catalog.spec(id)
         if let rule = Self.precisions[spec.runtime], !rule.0.contains(bits) { throw ServiceError("\(id): \(rule.1)") }
         return bits
@@ -549,13 +586,11 @@ final class Service {
     /// and the original failure is reported.
     private func reload(_ id: String, bits: Int, as cls: Residency) throws {
         let spec = try catalog.spec(id)
-        let loadedClass = residency[id]
+        let loadedClass = residency[id], previous = loadedBits[id]
         if models[id] != nil { try admit(spec, bits: bits, credit: reclaim(id)) }
-        let previous = precision[id]
-        precision[id] = bits; unload(id)
-        do { _ = try load(id, as: cls) } catch {
-            precision[id] = previous
-            if let loadedClass { restore(id, as: loadedClass) }
+        unload(id)
+        do { _ = try load(id, as: cls, bits: bits) } catch {
+            if let loadedClass { restore(id, as: loadedClass, bits: previous) }
             throw error
         }
     }
@@ -567,8 +602,14 @@ final class Service {
                     switch route {
                     case "/status": return (200, state.merging(["catalog": catalog.raw, "installed": catalog.installed(), "memory": memory()]) { _, new in new })
                     case "/models":
+                        let config = selectedPrecision()
+                        var selected: [String: Int] = [:], recommended: [String: Int] = [:]
+                        for spec in catalog.entries where !spec.repository.isEmpty {
+                            selected[spec.id] = spec.effectiveBits(implicitBits(spec, config: config))
+                            recommended[spec.id] = recommendedBits(spec)
+                        }
                         let view = ModelsView.build(catalog: catalog.raw, benchmarks: catalog.benchmarks, loaded: state["models"] as? [String: Any] ?? [:],
-                                                    installed: catalog.installed(), selected: selectedPrecision())
+                                                    installed: catalog.installed(), selected: selected, recommended: recommended)
                         return (200, ["models": view])
                     default: return (404, ["error": "\(path) takes POST"])
                     }
@@ -583,10 +624,10 @@ final class Service {
                     guard let manual = flag(body["manual"] ?? false) else { throw ServiceError("manual must be true or false") }
                     // The app's menu sends manual; agents and scripts load on demand. A reload keeps a manual model manual.
                     let cls: Residency = manual || residency[id] == .manual ? .manual : .onDemand
-                    if let raw = body["bits"] {
+                    if let raw = body["bits"], let bits = try wholeNumber(raw, "bits") {
                         // Validate model and precision before touching state: a bad request must neither unload the
                         // working model nor leave an unusable precision behind.
-                        try reload(id, bits: try validBits(raw, for: id), as: cls)
+                        try reload(id, bits: try validBits(bits, for: id), as: cls)
                         return (200, ["loaded": order])
                     }
                     _ = try load(id, as: cls); return (200, ["loaded": order])
@@ -604,7 +645,8 @@ final class Service {
                     var minutes: [String: Int] = [:]
                     for key in ["idle_minutes", "manual_idle_minutes", "on_demand_idle_minutes"] {
                         guard let raw = body[key] else { continue }
-                        guard let value = integer(raw), value >= 0 else { throw ServiceError("invalid literal for int() with base 10: '\(raw)'") }
+                        guard let value = try wholeNumber(raw, key) else { continue }
+                        guard value >= 0 else { throw ServiceError("\(key) must be 0 or more, not \(value)") }
                         minutes[key] = value
                     }
                     var swap: Bool?
@@ -632,9 +674,9 @@ final class Service {
     }
     /// Reloads a model at its previous precision after a failed reload, keeping the failed attempt's refusal/error
     /// in /status. If that fails too, the model stays unloaded and the log says why.
-    private func restore(_ id: String, as cls: Residency) {
+    private func restore(_ id: String, as cls: Residency, bits: Int?) {
         let refused = state["refused"], failure = state["error"]
-        do { _ = try load(id, as: cls) }
+        do { _ = try load(id, as: cls, bits: bits) }
         catch { fputs("{\"restore_failed\":\(jsonString(id)),\"error\":\(jsonString(Self.message(error)))}\n", stderr) }
         state["refused"] = refused; state["error"] = failure; writeStatus(refreshInstalled: false)
     }

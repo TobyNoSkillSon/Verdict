@@ -186,6 +186,97 @@ final class HelperTests: XCTestCase {
         XCTAssertEqual(models["laya-english"]?.precision?.selected, 8)
     }
 
+    /// Review 3 R3.3: /v1/models precision.selected is exactly what a load without bits uses, including a selection
+    /// the app's table saves while the helper runs; explicit bits last while that model stays loaded.
+    func testSelectedPrecisionIsWhatALoadWithoutBitsUses() async throws {
+        let config = helper.support.appendingPathComponent("config.json")
+        func selected(_ id: String) async throws -> Model.Precision? { try await verdict.models().first { $0.id == id }?.precision }
+        func loadedBits(_ id: String) async throws -> Int? { try await verdict.status().models[id]?.bits }
+        // Nothing chosen: the recommended precision (Laya 16 = native, reported as 0 by /status).
+        var p = try await selected("laya-english")
+        XCTAssertEqual(p?.selected, p?.default)
+        try await verdict.load("laya-english")
+        let got1 = try await selected("laya-english")?.loaded
+        XCTAssertEqual(got1, p?.selected)
+        try await verdict.unload("laya-english")
+        // The table picks 4-bit while the helper runs.
+        try Data(#"{"precision":{"laya-english":4}}"#.utf8).write(to: config)
+        let got2 = try await selected("laya-english")?.selected
+        XCTAssertEqual(got2, 4)
+        try await verdict.load("laya-english")
+        let got3 = try await loadedBits("laya-english")
+        XCTAssertEqual(got3, 4)
+        // Explicit bits: that load only. After an unload, a plain load is back at the selection.
+        try await verdict.load("laya-english", bits: 8)
+        p = try await selected("laya-english")
+        XCTAssertEqual(p?.selected, 4); XCTAssertEqual(p?.loaded, 8)
+        try await verdict.unload("laya-english")
+        try await verdict.load("laya-english")
+        let got4 = try await loadedBits("laya-english")
+        XCTAssertEqual(got4, 4)
+        let got5 = try await selected("laya-english")?.selected
+        XCTAssertEqual(got5, 4)
+        // A judge's on-demand load follows the selection too; a loaded model is not reloaded because the choice changed.
+        try await verdict.unload("laya-english")
+        try Data(#"{"precision":{"laya-english":8}}"#.utf8).write(to: config)
+        _ = try await verdict.judge("x", ["x": .noul("Is it?")], model: "laya-english")
+        let got6 = try await loadedBits("laya-english")
+        XCTAssertEqual(got6, 8)
+        try Data(#"{"precision":{"laya-english":4}}"#.utf8).write(to: config)
+        _ = try await verdict.judge("x", ["x": .noul("Is it?")], model: "laya-english")
+        p = try await selected("laya-english")
+        XCTAssertEqual(p?.selected, 4); XCTAssertEqual(p?.loaded, 8)
+        // A saved choice the model cannot run is ignored by both, not half-applied.
+        try await verdict.unload("laya-english")
+        try Data(#"{"precision":{"laya-english":7}}"#.utf8).write(to: config)
+        p = try await selected("laya-english")
+        XCTAssertEqual(p?.selected, p?.default)
+        try await verdict.load("laya-english")
+        let got7 = try await selected("laya-english")?.loaded
+        XCTAssertEqual(got7, p?.default)
+    }
+
+    /// A launch environment choice (VERDICT_PRECISION: test and benchmark harnesses) wins over config.json in both.
+    func testLaunchPrecisionOverridesConfigInModelsAndLoads() async throws {
+        helper.stop()
+        helper = try StubHelper(environment: ["VERDICT_PRECISION": #"{"von-1.2":8}"#])
+        verdict = try await Verdict(launch: false, supportDirectory: helper.support)
+        try Data(#"{"precision":{"von-1.2":4}}"#.utf8).write(to: helper.support.appendingPathComponent("config.json"))
+        let got8 = try await verdict.models().first { $0.id == "von-1.2" }?.precision?.selected
+        XCTAssertEqual(got8, 8)
+        try await verdict.load("von-1.2")
+        let got9 = try await verdict.status().models["von-1.2"]?.bits
+        XCTAssertEqual(got9, 8)
+    }
+
+    /// Review 3 R3.6: precisions and minutes are whole numbers; 4.9 is refused (400), never truncated to 4, and the
+    /// loaded model is unchanged.
+    func testFractionalAndNonNumericIntegersAreRefused() async throws {
+        try await verdict.load("laya-english", bits: 8)
+        for bad in ["4.9", "16.9", "true", "\"4.5\"", "[4]"] {
+            var (code, body) = try await helper.raw("POST", "/v1/load", body: #"{"model":"laya-english","bits":"# + bad + "}")
+            XCTAssertEqual(code, 400, bad); XCTAssertEqual(body["error"] as? String, "bits must be a whole number, not \(bad)")
+            (code, body) = try await helper.raw("POST", "/v1/judge", body: #"{"items":["x"],"questions":{"x":{"type":"noul","instructions":"q"}},"model":"laya-english","bits":"# + bad + "}")
+            XCTAssertEqual(code, 400, bad)
+            (code, _) = try await helper.raw("POST", "/v1/settings", body: #"{"on_demand_idle_minutes":"# + bad + "}")
+            XCTAssertEqual(code, 400, bad)
+        }
+        let status = try await verdict.status()
+        XCTAssertEqual(status.models["laya-english"]?.bits, 8, "a refused precision changes nothing")
+        XCTAssertEqual(status.on_demand_idle_minutes, 15)
+        // Integral values in any JSON spelling are whole numbers; the app's string form still works; null bits = omitted.
+        for good in ["4", "4.0", "\"4\"", "4e0"] {
+            let (code, body) = try await helper.raw("POST", "/v1/load", body: #"{"model":"laya-english","bits":"# + good + "}")
+            XCTAssertEqual(code, 200, "\(good): \(body)")
+            let got10 = try await verdict.status().models["laya-english"]?.bits
+            XCTAssertEqual(got10, 4, good)
+        }
+        let (code, _) = try await helper.raw("POST", "/v1/load", body: #"{"model":"laya-english","bits":null}"#)
+        XCTAssertEqual(code, 200)
+        let got11 = try await verdict.status().models["laya-english"]?.bits
+        XCTAssertEqual(got11, 4, "null bits leaves a loaded model as it is")
+    }
+
     func testRoutesStatusCodesAndSecurity() async throws {
         var (code, body) = try await helper.raw("GET", "/status")
         XCTAssertEqual(code, 200); XCTAssertEqual(body["api"] as? Int, 1, "the unversioned alias serves the same status")

@@ -145,7 +145,8 @@ public struct Verdict: Sendable {
     /// Answers every question for every item, in order. Items over a model's context (nothing is truncated) or with
     /// media come back with `error` set; the rest still run. `model`: "auto" routes plain English to laya-english and
     /// other scripts to laya-multilingual. `bits`: run the model(s) at this precision (reloads a model loaded at
-    /// another; it stays at the new precision). Requests go out in batches of `batch` items.
+    /// another; it stays at the new precision while it stays loaded, and a later load without bits uses the selected
+    /// precision, `Model.precision.selected`). Requests go out in batches of `batch` items.
     public func judge(_ items: [Item], _ questions: Questions, model: String = "auto", bits: Int? = nil, batch: Int = 256) async throws -> [Judgement] {
         struct Reply: Decodable { let results: [Judgement] }
         var out: [Judgement] = []

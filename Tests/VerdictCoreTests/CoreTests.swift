@@ -299,7 +299,10 @@ final class CoreTests: XCTestCase {
         config.precision = ["von-1.2": 0]
         XCTAssertEqual(config.helperEnvironment, ["VERDICT_PRELOAD": "laya-english,von-1.2", "VERDICT_IDLE_MINUTES": "0",
                                                   "VERDICT_MANUAL_IDLE_MINUTES": "0", "VERDICT_ON_DEMAND_IDLE_MINUTES": "15",
-                                                  "VERDICT_ALLOW_SWAP": "0", "VERDICT_PRECISION": #"{"von-1.2":0}"#])
+                                                  "VERDICT_ALLOW_SWAP": "0"])
+        // Precision choices are not a launch-time snapshot: the helper rereads config.json for each load, so a choice
+        // made while it runs is what the next load (and /v1/models precision.selected) uses.
+        XCTAssertNil(config.helperEnvironment["VERDICT_PRECISION"])
         config = applying(.keepHot(.manual, minutes: 60), to: config)
         config = applying(.keepHot(.onDemand, minutes: 5), to: config)
         config = applying(.memory(allowSwap: true), to: config)

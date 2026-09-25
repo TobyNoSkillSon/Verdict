@@ -145,6 +145,12 @@ final class CLIBinaryTests: XCTestCase {
         XCTAssertEqual(r.code, 0, r.err); XCTAssertEqual(r.out, "['laya-english']\n")
         r = try run(["load", "laya-english", "--bits", "5"])
         XCTAssertEqual(r.code, 1); XCTAssertEqual(r.err, "error: laya-english: Laya precision must be 16, 8 or 4 bits\n")
+        // Fractional precisions are refused, never truncated (4.9 is not 4).
+        r = try run(["load", "laya-english", "--bits", "4.9"])
+        XCTAssertEqual(r.code, 1); XCTAssertEqual(r.err, "error: --bits takes a whole number, not '4.9'\n")
+        r = try run(["judge", "--questions", questions.path, "--bits", "4.9"], input: items)
+        XCTAssertEqual(r.code, 1); XCTAssertEqual(r.err, "error: --bits takes a whole number, not '4.9'\n")
+        XCTAssertTrue(try run(["status"]).out.contains("laya-english"), "still loaded at 8")
         r = try run(["load", "von-1.2", "--manual"])
         XCTAssertEqual(r.out, "['laya-english', 'von-1.2']\n")
         r = try run(["status"])

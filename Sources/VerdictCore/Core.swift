@@ -27,16 +27,15 @@ public struct Configuration: Codable, Equatable {
     }
     public var onDemandIdle: Int { onDemandIdleMinutes ?? defaultOnDemandIdleMinutes }
     public var swapAllowed: Bool { allowSwap ?? false }
-    /// The helper's launch environment for these settings (launch set, Keep Hot, Memory, precision choices).
+    /// The helper's launch environment for these settings (launch set, Keep Hot, Memory).
     public var helperEnvironment: [String: String] {
-        var env = ["VERDICT_PRELOAD": hotModels.joined(separator: ","),
+        let env = ["VERDICT_PRELOAD": hotModels.joined(separator: ","),
                    "VERDICT_IDLE_MINUTES": String(manualIdle),
                    "VERDICT_MANUAL_IDLE_MINUTES": String(manualIdle),
                    "VERDICT_ON_DEMAND_IDLE_MINUTES": String(onDemandIdle),
                    "VERDICT_ALLOW_SWAP": swapAllowed ? "1" : "0"]
-        if let data = try? JSONSerialization.data(withJSONObject: precision ?? [:], options: [.sortedKeys]) {
-            env["VERDICT_PRECISION"] = String(data: data, encoding: .utf8)
-        }
+        // No VERDICT_PRECISION: the helper reads the precision choices from config.json at every load, so a Models
+        // table choice made while it runs applies to the next load without a restart (a launch snapshot would not).
         return env
     }
     /// The /settings body that applies these settings to a running helper.

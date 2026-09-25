@@ -228,6 +228,15 @@ def _call(method, path, body=None, timeout=600):
         raise VerdictError(msg) from None
 
 
+def _whole(bits):
+    """bits as a whole number: 4 and 4.0 are fine; 4.9, True and '4' are refused, never truncated."""
+    if isinstance(bits, int) and not isinstance(bits, bool):
+        return bits
+    if isinstance(bits, float) and bits.is_integer():
+        return int(bits)
+    raise VerdictError(f'bits must be a whole number, not {bits!r}')
+
+
 def ensure_running(wait=90):
     """Return the worker port, launching the Verdict app if needed."""
     port = _port()
@@ -273,7 +282,7 @@ def load(model, bits=None, manual=False):
     """Load a model (downloading it the first time); returns the loaded ids. bits reloads it at that precision
     (0 = native); manual=True loads it like the menu's Load (launch set, "Manually loaded" Keep Hot)."""
     body = {'model': model}
-    if bits is not None: body['bits'] = bits
+    if bits is not None: body['bits'] = _whole(bits)
     if manual: body['manual'] = True
     ensure_running()
     return _call('POST', '/v1/load', body)['loaded']
@@ -293,9 +302,11 @@ def judge(items, questions, model='auto', batch=256, check=True, bits=None):
     Items are strings or dicts (Laya sees a dict as JSON, Von as key: value lines), so name the fields.
     Question ids and choice labels are distinct as exact strings, as in any Python dict.
     Verdict judges text; an item with image/audio/video paths, or over a model's context, comes back as a Result with .error set; the rest still run.
-    bits runs the model(s) at that precision (a loaded model at another precision is reloaded and stays at it).
+    bits runs the model(s) at that precision, a whole number (a loaded model at another precision is reloaded and stays at it
+    while loaded; a later load without bits uses models()'s precision['selected']).
     Raises VerdictError when the worker is unavailable — never returns made-up answers."""
     questions = {k: dict(v) for k, v in questions.items()}
+    bits = None if bits is None else _whole(bits)
     if check:
         lint(questions)
     single = isinstance(items, (str, dict))
