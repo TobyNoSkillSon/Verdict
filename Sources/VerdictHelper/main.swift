@@ -95,8 +95,8 @@ final class HTTPServer {
         }
     }
     private func respond(_ connection: NWConnection, _ code: Int, _ body: [String: Any]) {
-        // Sorted keys: stable output for clients and docs (models, answers and probabilities by name).
-        let data = (try? JSONSerialization.data(withJSONObject: body, options: [.fragmentsAllowed, .withoutEscapingSlashes, .sortedKeys])) ?? Data("{}".utf8)
+        // Sorted keys (stable output for clients and docs), shortest round-trip numbers.
+        let data = ResponseJSON.data(body)
         let reason = [200: "OK", 403: "Forbidden", 404: "Not Found", 415: "Unsupported Media Type", 507: "Insufficient Storage"][code] ?? "Bad Request"
         let header = "HTTP/1.1 \(code) \(reason)\r\nContent-Type: application/json\r\nContent-Length: \(data.count)\r\nConnection: close\r\n\r\n"
         connection.send(content: Data(header.utf8) + data, completion: .contentProcessed { [self] _ in

@@ -134,3 +134,36 @@ struct OrderedJSONParser {
         }
     }
 }
+
+/// Response bodies: keys sorted, numbers in their shortest round-trip form (0.8828, not JSONSerialization's
+/// 0.88280000000000003), non-ASCII as UTF-8, `/` unescaped. Keys that differ only by Unicode normalization stay
+/// two keys (NSString keys, compared as written).
+enum ResponseJSON {
+    static func data(_ value: Any) -> Data { var out = ""; write(value, &out); return Data(out.utf8) }
+    private static func string(_ s: String, _ out: inout String) { out += OrderedJSON.string(s).render() }
+    private static func write(_ value: Any, _ out: inout String) {
+        switch value {
+        case is NSNull: out += "null"
+        case let s as String: string(s, &out)
+        case let n as NSDecimalNumber: out += n.stringValue
+        case let n as NSNumber:
+            if CFGetTypeID(n) == CFBooleanGetTypeID() { out += n.boolValue ? "true" : "false" }
+            else if CFNumberIsFloatType(n) { let d = n.doubleValue; out += d.isFinite ? "\(d)" : "null" }
+            else { out += n.stringValue }
+        case let d as NSDictionary:
+            let keys = d.allKeys.map { "\($0)" }.sorted { Array($0.utf8).lexicographicallyPrecedes(Array($1.utf8)) }
+            out += "{"
+            for (i, key) in keys.enumerated() {
+                if i > 0 { out += "," }
+                string(key, &out); out += ":"
+                write(d[key as NSString] ?? NSNull(), &out)
+            }
+            out += "}"
+        case let a as NSArray:
+            out += "["
+            for (i, v) in a.enumerated() { if i > 0 { out += "," }; write(v, &out) }
+            out += "]"
+        default: string(String(describing: value), &out)
+        }
+    }
+}
