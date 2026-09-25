@@ -208,7 +208,8 @@ def _port():
 
 
 def _call(method, path, body=None, timeout=600):
-    """One API call (path like '/v1/judge'); raises VerdictError with the API's message on any error status."""
+    """One API call (path like '/v1/judge'). Raises VerdictError with the API's message on any error status, and
+    for a connection failure, timeout or unreadable answer. Never retried: a judgement may already have run."""
     port = _port()
     if port is None:
         raise VerdictError('Verdict worker is not running')
@@ -217,7 +218,10 @@ def _call(method, path, body=None, timeout=600):
                                  headers={'Content-Type': 'application/json'})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
-            return json.loads(r.read())
+            data = r.read()
+        return json.loads(data)
+    except ValueError as e:     # JSONDecodeError and UnicodeDecodeError
+        raise VerdictError(f'Unexpected answer from Verdict: {e}') from None
     except urllib.error.HTTPError as e:
         try:
             msg = json.loads(e.read()).get('error')
@@ -226,6 +230,9 @@ def _call(method, path, body=None, timeout=600):
         if e.code == 404 and msg == 'not found' and path.startswith('/v1/'):
             msg = 'the running Verdict predates the v1 API; update it (git pull && scripts/install.sh)'
         raise VerdictError(msg) from None
+    except (urllib.error.URLError, OSError) as e:    # refused, reset, timeout (socket.timeout is an OSError)
+        reason = getattr(e, 'reason', None) or e
+        raise VerdictError(f'Verdict did not answer: {reason}') from None
 
 
 def _whole(bits):
@@ -336,7 +343,8 @@ def gate(state, checks, allow_if, model='auto', on_error='raise'):
 
     checks: questions about `state`; allow_if: function of the Result returning True to allow.
     Returns a Verdict. on_error='raise' (default) surfaces an unavailable worker; on_error='allow'
-    or 'deny' fails open/closed and marks the verdict escalated so the caller can log it."""
+    or 'deny' fails open/closed and marks the verdict escalated so the caller can log it. Unavailable includes a
+    refused connection, a timeout and an unreadable answer (a helper restarting mid-request)."""
     try:
         r = judge(state, checks, model=model)
     except VerdictError as e:
