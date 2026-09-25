@@ -285,7 +285,7 @@ def _precisions(entry, native):
 
 def engine_label(loaded, chip=None):
     """The app's engine label for a loaded model (/status models[id]): 'Optimized · <chip>' on Verdict's optimized
-    path (fast tokenizer + windowed attention, self-tested at load), else 'MLX' (the stock path; engine_reason says why).
+    path (fast tokenizer + windowed attention, self-tested at load), else 'MLX' (not fully optimized: the stock path, or only one of the two active; engine_reason says why).
     Mirrors VerdictCore.engineLabel."""
     engine = loaded.get('engine')
     if engine is None:   # helpers before the engine field

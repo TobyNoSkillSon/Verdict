@@ -223,6 +223,34 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(status.models["von-1.2"]?.engine_reason, "tokenizer format not recognised")
     }
 
+    /// Review 2 R2.4: a model on the MLX label with the fast tokenizer still active is partly optimized, not stock.
+    func testEngineTooltipForAPartlyOptimizedModel() {
+        let partial = LoadedModel(device: "mlx", load_s: 1, bits: 16,
+                                  optimizations: Optimizations(tokenizer: "fast", attention: "stock", matmul: "neural accelerators", optimized: false),
+                                  engine: "mlx", engine_reason: "windowed attention disabled (VERDICT_LAYA_WINDOW=0)")
+        XCTAssertEqual(engineLabel(partial, chip: "M5 Max"), "MLX")
+        let help = engineHelp(partial, chip: "M5 Max", effectiveBits: 16)
+        XCTAssertFalse(help.contains("without Verdict's optimizations"), help)
+        XCTAssertFalse(help.contains("Stock MLX path"), help)
+        for part in ["Partly optimized", "active: Verdict fast tokenizer", "stock: MLX attention", "Why: windowed attention disabled (VERDICT_LAYA_WINDOW=0).",
+                     "Tokenizer: Verdict fast tokenizer", "Attention: stock MLX attention"] { XCTAssertTrue(help.contains(part), part + " in " + help) }
+        // Library tokenizer with windowed attention that passed its self-test: also partial.
+        let other = LoadedModel(device: "mlx", load_s: 1, bits: 16,
+                                optimizations: Optimizations(tokenizer: "library", attention: "windowed", optimized: false),
+                                engine: "mlx", engine_reason: "tokenizer format not recognised")
+        let otherHelp = engineHelp(other, chip: nil, effectiveBits: 16)
+        for part in ["Partly optimized", "active: windowed attention", "stock: library tokenizer"] { XCTAssertTrue(otherHelp.contains(part), part + " in " + otherHelp) }
+        // A runtime switch to stock (both off) is still described as the stock path.
+        let switched = LoadedModel(device: "mlx", load_s: 1, bits: 16,
+                                   optimizations: Optimizations(tokenizer: "library", attention: "stock", optimized: false),
+                                   engine: "mlx", engine_reason: "the optimized path failed during inference (boom); switched to the stock MLX path")
+        XCTAssertTrue(engineHelp(switched, chip: nil, effectiveBits: 16).hasPrefix("Stock MLX path: the same model without Verdict's optimizations"))
+        // The one-line summary no longer invents a cause for a stock component.
+        let summary = Optimizations(tokenizer: "fast", attention: "stock", optimized: false).summary
+        XCTAssertFalse(summary.contains("self-test did not pass"), summary)
+        XCTAssertTrue(summary.contains("fast tokenizer"), summary)
+    }
+
     func testReloadStateWithRecommendedDefault() {
         // Von, nothing explicit: selection is the recommended 16 (config bits 16). The helper loaded its default 16.
         let selected = configBits(effective: selectedBits(config: nil, recommended: 16, native: 32), native: 32)

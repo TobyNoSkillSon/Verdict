@@ -104,7 +104,8 @@ final class Service {
     }
     static let stockRequested = ProcessInfo.processInfo.environment["VERDICT_STOCK_PATH"] == "1"
     /// The engine label's facts: "optimized" when Verdict's optimized path (fast tokenizer + windowed attention that
-    /// passed its load-time self-test on this Mac) serves the model, else "mlx" (stock path) with the reason.
+    /// passed its load-time self-test on this Mac) serves the model, else "mlx" with the reason: the stock path, or
+    /// partly optimized when one of the two is still active (optimizations says which; the app's tooltip lists both).
     /// Neural-accelerator matmuls and precision are reported separately (optimizations.matmul); they do not decide it.
     static func engine(_ agent: Any, runtime: String, fallback: String?) -> (engine: String, reason: String?) {
         if let fallback { return ("mlx", "the optimized path failed during inference (\(fallback)); switched to the stock MLX path") }

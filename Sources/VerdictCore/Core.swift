@@ -282,8 +282,9 @@ public struct Optimizations: Codable, Equatable {
     /// One line for a tooltip: what is fast, and what fell back and why.
     public var summary: String {
         var fast: [String] = [], fallback: [String] = []
-        if let t = tokenizer { t == "fast" ? fast.append("fast tokenizer") : fallback.append("library tokenizer (tokenizer format not recognised)") }
-        if let a = attention { a == "windowed" ? fast.append("windowed attention") : fallback.append("stock attention (kernel self-test did not pass)") }
+        // The cause of a stock component is the helper's engine_reason; this line only says what is active.
+        if let t = tokenizer { t == "fast" ? fast.append("fast tokenizer") : fallback.append("library tokenizer") }
+        if let a = attention { a == "windowed" ? fast.append("windowed attention") : fallback.append("stock attention") }
         if let m = matmul {
             if m == "neural accelerators" { fast.append("GPU neural accelerators") }
             else if m == "standard GPU" { fallback.append("standard GPU matmul (neural accelerators need an M5-class GPU and macOS 26.2+)") }
@@ -329,7 +330,8 @@ public struct GPUStatus: Codable, Equatable {
     public init(chip: String? = nil, neural_accelerators: Bool? = nil) { self.chip = chip; self.neural_accelerators = neural_accelerators }
 }
 
-/// The engine label next to a hot model: "Optimized · M5 Max" on Verdict's optimized path, else "MLX" (stock path).
+/// The engine label next to a hot model: "Optimized · M5 Max" on Verdict's optimized path, else "MLX" (not fully
+/// optimized: the stock path or partly optimized; `engineHelp` says which).
 /// Both work; the label says which path answers. client/verdict.py `engine_label` mirrors it.
 public func engineLabel(_ model: LoadedModel, chip: String?) -> String {
     guard model.optimizedEngine else { return "MLX" }
@@ -338,14 +340,23 @@ public func engineLabel(_ model: LoadedModel, chip: String?) -> String {
 }
 
 /// Tooltip for the engine label: what is active (tokenizer, attention, neural-accelerator matmuls, precision) and,
-/// on the stock path, why.
+/// off the optimized path, why. "MLX" covers two states: every Verdict optimization off (the stock path: a runtime
+/// switch, VERDICT_STOCK_PATH, or none reported) and partly optimized (one of the fast tokenizer / windowed attention
+/// still active); the first line says which.
 public func engineHelp(_ model: LoadedModel, chip: String?, effectiveBits bits: Int) -> String {
     let o = model.optimizations
     var lines: [String] = []
+    let why = model.engine_reason.map { " Why: \($0)." } ?? ""
+    var active: [String] = [], stock: [String] = []
+    if let t = o?.tokenizer { t == "fast" ? active.append("Verdict fast tokenizer") : stock.append("library tokenizer") }
+    if let a = o?.attention { a == "windowed" ? active.append("windowed attention") : stock.append("MLX attention") }
     if model.optimizedEngine {
         lines.append("Verdict's optimized path, self-tested at load on this Mac" + (chip.map { " (\($0))" } ?? "") + ".")
+    } else if !active.isEmpty {
+        lines.append("Partly optimized, slower than Verdict's full optimized path \u{2014} "
+                     + "active: " + active.joined(separator: ", ") + "; stock: " + (stock.isEmpty ? "none" : stock.joined(separator: ", ")) + "." + why)
     } else {
-        lines.append("Stock MLX path: the same model without Verdict's optimizations; slower." + (model.engine_reason.map { " Why: \($0)." } ?? ""))
+        lines.append("Stock MLX path: the same model without Verdict's optimizations; slower." + why)
     }
     if let t = o?.tokenizer { lines.append("Tokenizer: " + (t == "fast" ? "Verdict fast tokenizer" : "swift-transformers (library)")) }
     if let a = o?.attention { lines.append("Attention: " + (a == "windowed" ? "windowed kernel (self-test passed)" : "stock MLX attention")) }
