@@ -279,11 +279,16 @@ final class Service {
                     guard let id = body["model"] as? String else { throw ServiceError("'model'") }
                     if body["bits"] != nil {
                         guard let bits = integer(body["bits"]) else { throw ServiceError("invalid literal for int() with base 10: '\(body["bits"]!)'") }
-                        // Von: reject an unsupported precision before unloading the current one (Laya keeps its engine check).
-                        if catalog.entries.first(where: { $0.id == id })?.runtime == "von", !VonModel.precisions.contains(bits) {
-                            throw ServiceError("\(id): \(VonModel.precisionMessage)")
+                        // Validate model and precision before touching state: a bad request must neither unload the
+                        // working model nor leave an unusable precision behind.
+                        let spec = try catalog.spec(id)
+                        if let rule = Self.precisions[spec.runtime], !rule.0.contains(bits) {
+                            throw ServiceError("\(id): \(rule.1)")
                         }
+                        let previous = precision[id]
                         precision[id] = bits; unload(id)
+                        do { _ = try load(id) } catch { precision[id] = previous; throw error }
+                        return (200, ["loaded": order])
                     }
                     _ = try load(id); return (200, ["loaded": order])
                 case "/unload":
@@ -305,6 +310,13 @@ final class Service {
                 default: return (404, ["error": "not found"])
                 }
             }
-        } catch { return (400, ["error": String(describing: error).prefix(500).description]) }
+        } catch { return (400, ["error": Self.message(error).prefix(500).description]) }
+    }
+    /// Precisions each loader accepts, checked before a /load mutates anything.
+    static let precisions: [String: (Set<Int>, String)] = ["laya": (LayaModel.precisions, LayaModel.precisionMessage),
+                                                          "von": (VonModel.precisions, VonModel.precisionMessage)]
+    /// Engine errors carry their own text (`invalid("…")` would otherwise leak into the message).
+    static func message(_ error: Error) -> String {
+        (error as? LocalizedError)?.errorDescription ?? String(describing: error)
     }
 }

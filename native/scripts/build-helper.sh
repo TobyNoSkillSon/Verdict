@@ -58,7 +58,7 @@ with tempfile.TemporaryDirectory(prefix='verdict-helper-smoke-') as support:
         listing = subprocess.check_output(['/usr/bin/lsappinfo', 'list'], text=True, timeout=8)
         assert not re.search(r'\bpid\s*=\s*' + str(process.pid) + r'\b', listing), 'helper registered as a desktop app'
         subprocess.run([env['VERDICT_HELPER_UI_CHECK'], str(process.pid)], check=True, timeout=8)
-        with urllib.request.urlopen(urllib.request.Request(base + '/quit', data=b'{}'), timeout=8): pass
+        with urllib.request.urlopen(urllib.request.Request(base + '/quit', data=b'{}', headers={'Content-Type': 'application/json'}), timeout=8): pass
         process.wait(timeout=8)
         assert process.returncode == 0
     finally:

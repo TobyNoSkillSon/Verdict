@@ -25,6 +25,7 @@ final class HTTPServer {
             switch state {
             case .ready:
                 guard let port = listener.port?.rawValue else { return }
+                boundPort = Int(port)
                 service.start(port: Int(port))
                 let line = "{\"port\":\(port),\"pid\":\(getpid())}\n"
                 FileHandle.standardOutput.write(Data(line.utf8))
@@ -41,6 +42,21 @@ final class HTTPServer {
         dispatchMain()
     }
     private var timer: DispatchSourceTimer?
+    private var boundPort = 0
+    /// Loopback is not a browser trust boundary. Local clients (the app, verdict.py, the bench) never send Origin, address
+    /// the helper as 127.0.0.1/localhost:<port> and post JSON. Refuse anything else before reading the body: a web page's
+    /// request (Origin), DNS rebinding (foreign Host), and form/text "simple" POSTs that skip CORS preflight.
+    static func refusal(method: String, headers: [String: String], port: Int) -> (Int, String)? {
+        if headers["origin"] != nil { return (403, "cross-origin requests are not accepted") }
+        guard let host = headers["host"]?.lowercased(), ["127.0.0.1:\(port)", "localhost:\(port)"].contains(host) else {
+            return (403, "Host must be 127.0.0.1:\(port) or localhost:\(port)")
+        }
+        if method == "POST" {
+            let type = headers["content-type"]?.split(separator: ";").first?.trimmingCharacters(in: .whitespaces).lowercased()
+            guard type == "application/json" else { return (415, "Content-Type must be application/json") }
+        }
+        return nil
+    }
     private func read(_ connection: NWConnection, _ buffer: Data) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [self] chunk, _, done, error in
             if error != nil || done { connection.cancel(); return }
@@ -50,11 +66,23 @@ final class HTTPServer {
             if let range = data.range(of: delimiter) {
                 let head = String(decoding: data[..<range.lowerBound], as: UTF8.self)
                 let lines = head.components(separatedBy: "\r\n")
+                var headers: [String: String] = [:]
+                for line in lines.dropFirst() {
+                    guard let colon = line.firstIndex(of: ":") else { continue }
+                    let name = line[..<colon].trimmingCharacters(in: .whitespaces).lowercased()
+                    let value = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+                    // A repeated Origin/Host/Content-Type is never legitimate here; keep a marker that fails the checks.
+                    headers[name] = headers[name] == nil ? value : "\u{0}duplicate"
+                }
                 let length = lines.dropFirst().first(where: { $0.lowercased().hasPrefix("content-length:") }).flatMap { Int($0.split(separator: ":", maxSplits: 1).last?.trimmingCharacters(in: .whitespaces) ?? "") } ?? 0
                 guard length >= 0 && length <= 64 * 1024 * 1024 else { respond(connection, 400, ["error": "invalid Content-Length"]); return }
-                if data.count < range.upperBound + length { read(connection, data); return }
                 let parts = (lines.first ?? "").split(separator: " ")
                 guard parts.count >= 2 else { respond(connection, 400, ["error": "bad request"]); return }
+                // Checked before waiting for the body.
+                if let refused = Self.refusal(method: String(parts[0]), headers: headers, port: boundPort) {
+                    respond(connection, refused.0, ["error": refused.1]); return
+                }
+                if data.count < range.upperBound + length { read(connection, data); return }
                 do {
                     let rawBody = data.subdata(in: range.upperBound..<(range.upperBound + length))
                     let body = length == 0 ? [:] : try JSONSerialization.jsonObject(with: rawBody) as? [String: Any] ?? [:]
@@ -66,7 +94,8 @@ final class HTTPServer {
     }
     private func respond(_ connection: NWConnection, _ code: Int, _ body: [String: Any]) {
         let data = (try? JSONSerialization.data(withJSONObject: body, options: [.fragmentsAllowed, .withoutEscapingSlashes])) ?? Data("{}".utf8)
-        let header = "HTTP/1.1 \(code) \(code == 200 ? "OK" : code == 404 ? "Not Found" : "Bad Request")\r\nContent-Type: application/json\r\nContent-Length: \(data.count)\r\nConnection: close\r\n\r\n"
+        let reason = [200: "OK", 403: "Forbidden", 404: "Not Found", 415: "Unsupported Media Type"][code] ?? "Bad Request"
+        let header = "HTTP/1.1 \(code) \(reason)\r\nContent-Type: application/json\r\nContent-Length: \(data.count)\r\nConnection: close\r\n\r\n"
         connection.send(content: Data(header.utf8) + data, completion: .contentProcessed { [self] _ in
             connection.cancel()
             if service.quitting { listener.cancel(); service.finish(); exit(0) }
