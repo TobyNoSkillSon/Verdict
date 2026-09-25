@@ -19,6 +19,11 @@ public struct Question: Sendable, Hashable, Codable {
         public var label: String
         public var description: String?
         public init(_ label: String, _ description: String?) { self.label = label; self.description = description }
+        /// Labels and descriptions compare by exact bytes, as the API does.
+        public static func == (a: Criterion, b: Criterion) -> Bool {
+            exactlyEqual(a.label, b.label) && a.description.map { d in b.description.map { exactlyEqual(d, $0) } ?? false } ?? (b.description == nil)
+        }
+        public func hash(into hasher: inout Hasher) { hashExactly(label, into: &hasher); hashExactly(description ?? "", into: &hasher); hasher.combine(description == nil) }
     }
 
     public var kind: Kind
@@ -96,6 +101,8 @@ public struct Questions: Sendable, Hashable, Codable, ExpressibleByDictionaryLit
     public struct Entry: Sendable, Hashable {
         public var id: String
         public var question: Question
+        public static func == (a: Entry, b: Entry) -> Bool { exactlyEqual(a.id, b.id) && a.question == b.question }
+        public func hash(into hasher: inout Hasher) { hashExactly(id, into: &hasher); hasher.combine(question) }
     }
     public private(set) var entries: [Entry]
 
@@ -110,7 +117,8 @@ public struct Questions: Sendable, Hashable, Codable, ExpressibleByDictionaryLit
         entries = try members.map { Entry(id: $0.key, question: try Question(json: $0.value)) }
     }
 
-    public subscript(id: String) -> Question? { entries.first { $0.id == id }?.question }
+    /// The question with exactly this id (UTF-8 bytes: "é" and "e\u{301}" are two ids, as in the API).
+    public subscript(id: String) -> Question? { entries.first { exactlyEqual($0.id, id) }?.question }
     public var ids: [String] { entries.map(\.id) }
     public var isEmpty: Bool { entries.isEmpty }
     public var json: JSON { .object(entries.map { .init($0.id, $0.question.json) }) }

@@ -63,6 +63,41 @@ final class WireTests: XCTestCase {
         XCTAssertEqual(results[1].error, "too long"); XCTAssertNil(results[1].model); XCTAssertFalse(results[1].ok)
     }
 
+    /// Review 3 R3.2: ids and labels that differ only by Unicode normalization are distinct, as the API sends them.
+    /// Swift's String == and Dictionary fold "é" (U+00E9) and "e\u{301}"; VerdictKit compares exact UTF-8 bytes.
+    func testNormalizationDistinctIdsAndLabelsStayDistinct() throws {
+        let composed = "\u{E9}", decomposed = "e\u{301}"
+        let text = #"{"answers":{"\#u{E9}":{"noul":0.1},"e\u0301":{"noul":0.9},"c":{"choice":"\#u{E9}","confidence":0.7,"probabilities":{"\#u{E9}":0.7,"e\u0301":0.3}}},"model":"m","ms":1}"#
+        let judgement = try Judgement(json: try JSON.parse(text))
+        XCTAssertEqual(judgement.answers.count, 3)
+        XCTAssertEqual(judgement.answers.keys.map { Array($0.utf8) }, [Array(composed.utf8), Array(decomposed.utf8), Array("c".utf8)])
+        XCTAssertEqual(judgement[composed]?.noul, 0.1)
+        XCTAssertEqual(judgement[decomposed]?.noul, 0.9)
+        let probabilities = try XCTUnwrap(judgement["c"]?.probabilities)
+        XCTAssertEqual(probabilities.count, 2)
+        XCTAssertEqual(probabilities[composed], 0.7); XCTAssertEqual(probabilities[decomposed], 0.3)
+        // The raw JSON keeps both members and looks each up by its own bytes.
+        let raw = try JSON.parse(text)
+        XCTAssertEqual(raw["answers"]?.members?.count, 3)
+        XCTAssertEqual(raw["answers"]?[decomposed]?["noul"]?.compact, "0.9")
+        XCTAssertEqual(raw["answers"]?[composed]?["noul"]?.compact, "0.1")
+        XCTAssertNotEqual(JSON.string(composed), JSON.string(decomposed))
+        XCTAssertNotEqual(JSON.object([.init(composed, 1)]), JSON.object([.init(decomposed, 1)]))
+        XCTAssertEqual(Set([JSON.string(composed), JSON.string(decomposed)]).count, 2)
+        // Questions: two ids, each found by its own bytes.
+        let questions: Questions = [composed: .noul("one"), decomposed: .noul("two")]
+        XCTAssertEqual(questions.ids.count, 2)
+        XCTAssertEqual(questions[decomposed]?.instructions, "two")
+        XCTAssertEqual(questions[composed]?.instructions, "one")
+        XCTAssertEqual(questions.json.members?.count, 2)
+        let file = try Questions(json: try JSON.parse(#"{"\#u{E9}":{"type":"noul","instructions":"one"},"e\u0301":{"type":"noul","instructions":"two"}}"#))
+        XCTAssertEqual(file[decomposed]?.instructions, "two")
+        // Answers built in code keep both too.
+        let built = Judgement(answers: [composed: Answer(noul: 0.1), decomposed: Answer(noul: 0.9)])
+        XCTAssertEqual(built.answers.count, 2); XCTAssertEqual(built[decomposed]?.noul, 0.9)
+        XCTAssertNotEqual(built, Judgement(answers: [composed: Answer(noul: 0.1), composed: Answer(noul: 0.9)]))
+    }
+
     func testNotRunningWithoutLaunch() async throws {
         let empty = FileManager.default.temporaryDirectory.appendingPathComponent("verdictkit-empty-\(UUID().uuidString)")
         do {
@@ -122,6 +157,16 @@ final class HelperTests: XCTestCase {
         // Batches are split and order is kept.
         let many = try await verdict.judge((0..<10).map { "item \($0)" }, ["x": .noul("Is it?")], batch: 3)
         XCTAssertEqual(many.count, 10)
+    }
+
+    /// The live API returns both normalization-distinct ids; the typed and raw results keep both.
+    func testLiveJudgeKeepsNormalizationDistinctIds() async throws {
+        let questions: Questions = ["\u{E9}": .noul("one"), "e\u{301}": .noul("two")]
+        let typed = try await verdict.judge("hello", questions)
+        XCTAssertEqual(typed.answers.count, 2, "\(typed)")
+        XCTAssertNotNil(typed["e\u{301}"]); XCTAssertNotNil(typed["\u{E9}"])
+        let raw = try await verdict.judgeJSON(["hello"], questions: questions.json)
+        XCTAssertEqual(raw[0]["answers"]?.members?.count, 2)
     }
 
     func testJudgeBitsLoadsAtThatPrecision() async throws {

@@ -59,6 +59,17 @@ final class CLIFormatTests: XCTestCase {
         XCTAssertEqual(Format.line(index: 0, item: .string(long), result: result, field: nil, order: ["a"]).hasSuffix("| " + String(repeating: "é", count: 60)), true)
     }
 
+    /// Review 3 R3.2: --sort and the answer order find ids by their exact bytes ("é" and "e\u{301}" are two ids).
+    func testJudgeLineAndSortKeepNormalizationDistinctIds() throws {
+        let result = try JSON.parse(#"{"answers":{"e\u0301":{"noul":0.9},"\#u{E9}":{"noul":0.1}},"model":"m","ms":1}"#)
+        XCTAssertEqual(Format.sortKey(result, "e\u{301}"), 0.9)
+        XCTAssertEqual(Format.sortKey(result, "\u{E9}"), 0.1)
+        XCTAssertEqual(Format.line(index: 0, item: "x", result: result, field: nil, order: ["\u{E9}", "e\u{301}"]),
+                       "#0  \u{E9}=0.10  e\u{301}=0.90  | x")
+        XCTAssertEqual(Format.line(index: 0, item: "x", result: result, field: nil, order: ["e\u{301}"]),
+                       "#0  e\u{301}=0.90  \u{E9}=0.10  | x")
+    }
+
     func testPrecisionRowsAndInfo() throws {
         let model = try JSONDecoder().decode(Model.self, from: Data(#"""
         {"id":"von-1.2","name":"Von 1.2","family":"Von","inputs":["text"],"params":"0.4B","context":8192,"languages":"en","license":"apache-2.0",

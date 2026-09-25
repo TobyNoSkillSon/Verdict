@@ -147,7 +147,9 @@ enum Format {
     static func line(index: Int, item: JSON, result: JSON, field: String?, order: [String]) -> String {
         if let error = result["error"], !error.isNull { return "#\(index)  error: \(error.string ?? error.compact)" }
         let answers = result["answers"]?.members ?? []
-        let ordered = order.compactMap { id in answers.first { $0.key == id } } + answers.filter { !order.contains($0.key) }
+        // Ids by exact bytes: "é" and "e\u{301}" are two questions (Swift's == would equate them).
+        func same(_ a: String, _ b: String) -> Bool { a.utf8.elementsEqual(b.utf8) }
+        let ordered = order.compactMap { id in answers.first { same($0.key, id) } } + answers.filter { a in !order.contains { same($0, a.key) } }
         let text = field.flatMap { item.members != nil ? (item[$0] ?? .null) : nil } ?? item
         let snippet = (text.string ?? text.spaced).replacingOccurrences(of: "\n", with: " ")
         return "#\(index)  " + ordered.map { "\($0.key)=\(answer($0.value))" }.joined(separator: "  ") + "  | " + String(String.UnicodeScalarView(snippet.unicodeScalars.prefix(60)))

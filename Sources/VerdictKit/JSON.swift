@@ -3,6 +3,9 @@ import Foundation
 /// A JSON value that keeps object key order and number literals exactly as written. Item text depends on both: the
 /// models read a JSON object item as its rendered text, so `{"b":1,"a":2.0}` must reach them as written, not
 /// reordered or with `2.0` turned into `2`.
+///
+/// Strings and object keys compare by their exact UTF-8 bytes (Swift's `String ==` would equate "é" and "e\u{301}";
+/// the API keeps them distinct).
 public indirect enum JSON: Sendable, Hashable {
     case null
     case bool(Bool)
@@ -16,15 +19,39 @@ public indirect enum JSON: Sendable, Hashable {
         public var key: String
         public var value: JSON
         public init(_ key: String, _ value: JSON) { self.key = key; self.value = value }
+        public static func == (a: Member, b: Member) -> Bool { exactlyEqual(a.key, b.key) && a.value == b.value }
+        public func hash(into hasher: inout Hasher) { hashExactly(key, into: &hasher); hasher.combine(value) }
+    }
+
+    public static func == (a: JSON, b: JSON) -> Bool {
+        switch (a, b) {
+        case (.null, .null): return true
+        case let (.bool(x), .bool(y)): return x == y
+        case let (.number(x), .number(y)): return exactlyEqual(x, y)
+        case let (.string(x), .string(y)): return exactlyEqual(x, y)
+        case let (.array(x), .array(y)): return x == y
+        case let (.object(x), .object(y)): return x == y
+        default: return false
+        }
+    }
+    public func hash(into hasher: inout Hasher) {
+        switch self {
+        case .null: hasher.combine(0)
+        case .bool(let b): hasher.combine(1); hasher.combine(b)
+        case .number(let n): hasher.combine(2); hashExactly(n, into: &hasher)
+        case .string(let s): hasher.combine(3); hashExactly(s, into: &hasher)
+        case .array(let a): hasher.combine(4); hasher.combine(a)
+        case .object(let m): hasher.combine(5); hasher.combine(m)
+        }
     }
 
     public init(_ value: Int) { self = .number(String(value)) }
     public init(_ value: Double) { self = .number(value.isFinite ? "\(value)" : "null") }
 
-    /// Member lookup (first match) for objects; nil otherwise.
+    /// Member lookup (first member with exactly these key bytes) for objects; nil otherwise.
     public subscript(key: String) -> JSON? {
         guard case .object(let members) = self else { return nil }
-        return members.first { $0.key == key }?.value
+        return members.first { exactlyEqual($0.key, key) }?.value
     }
     public var string: String? { if case .string(let s) = self { return s }; return nil }
     public var double: Double? { if case .number(let n) = self { return Double(n) }; return nil }

@@ -20,39 +20,60 @@ public enum VerdictError: Error, LocalizedError, Sendable, Equatable {
 /// level 0…n-1) for a score; `confidence` for all three.
 public struct Answer: Sendable, Hashable, Codable {
     public var choice: String?
-    public var probabilities: [String: Double]?
+    /// Label -> probability, in the API's order; labels are compared by their exact bytes.
+    public var probabilities: ExactKeyed<Double>?
     public var noul: Double?
     public var score: Double?
     public var confidence: Double?
     /// False when the model's calibration does not cover this question shape.
     public var calibrated: Bool?
 
-    public init(choice: String? = nil, probabilities: [String: Double]? = nil, noul: Double? = nil, score: Double? = nil,
+    public init(choice: String? = nil, probabilities: ExactKeyed<Double>? = nil, noul: Double? = nil, score: Double? = nil,
                 confidence: Double? = nil, calibrated: Bool? = nil) {
         self.choice = choice; self.probabilities = probabilities; self.noul = noul; self.score = score
         self.confidence = confidence; self.calibrated = calibrated
     }
     /// The number to sort or threshold on: the score, else P(true), else the choice's confidence.
     public var value: Double { score ?? noul ?? confidence ?? 0 }
+
+    /// From the API's JSON (`{"choice", "probabilities", "confidence", "noul", "score", "calibrated"}`).
+    public init(json: JSON) throws {
+        guard json.members != nil else { throw VerdictError.unavailable("Unexpected answer from Verdict: an answer is not an object") }
+        choice = json["choice"]?.string
+        probabilities = json["probabilities"]?.members.map { members in ExactKeyed(members.compactMap { m in m.value.double.map { (m.key, $0) } }) }
+        noul = json["noul"]?.double; score = json["score"]?.double; confidence = json["confidence"]?.double
+        calibrated = json["calibrated"]?.bool
+    }
 }
 
 /// Answers for one item, or the reason it was not judged (`error`: over the model's context, a media item, …).
 /// The other items of a request are unaffected by one item's error.
 public struct Judgement: Sendable, Hashable, Codable {
-    public var answers: [String: Answer]
+    /// Question id -> answer, in the API's order; ids are compared by their exact bytes ("é" and "e\u{301}" are two).
+    public var answers: ExactKeyed<Answer>
     public var error: String?
     /// The model that judged it (nil for an item refused before routing).
     public var model: String?
     /// Milliseconds per item for its model's group in this request.
     public var ms: Double
 
-    public init(answers: [String: Answer] = [:], error: String? = nil, model: String? = nil, ms: Double = 0) {
+    public init(answers: ExactKeyed<Answer> = [:], error: String? = nil, model: String? = nil, ms: Double = 0) {
         self.answers = answers; self.error = error; self.model = model; self.ms = ms
     }
+    /// From the API's JSON, keeping every id exactly as sent (what `Verdict.judge` uses).
+    public init(json: JSON) throws {
+        guard json.members != nil else { throw VerdictError.unavailable("Unexpected answer from Verdict: a result is not an object") }
+        answers = ExactKeyed(try (json["answers"]?.members ?? []).map { ($0.key, try Answer(json: $0.value)) })
+        error = json["error"]?.string
+        model = json["model"]?.string
+        ms = json["ms"]?.double ?? 0
+    }
     enum CodingKeys: String, CodingKey { case answers, error, model, ms }
+    /// Decodable for convenience; note that JSONDecoder folds canonically equivalent ids into one before this runs.
+    /// `Judgement(json: try JSON.parse(data))` keeps them.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        answers = try c.decodeIfPresent([String: Answer].self, forKey: .answers) ?? [:]
+        answers = try c.decodeIfPresent(ExactKeyed<Answer>.self, forKey: .answers) ?? [:]
         error = try c.decodeIfPresent(String.self, forKey: .error)
         model = try c.decodeIfPresent(String.self, forKey: .model)
         ms = try c.decodeIfPresent(Double.self, forKey: .ms) ?? 0

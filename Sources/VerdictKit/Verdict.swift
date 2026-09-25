@@ -148,12 +148,12 @@ public struct Verdict: Sendable {
     /// another; it stays at the new precision while it stays loaded, and a later load without bits uses the selected
     /// precision, `Model.precision.selected`). Requests go out in batches of `batch` items.
     public func judge(_ items: [Item], _ questions: Questions, model: String = "auto", bits: Int? = nil, batch: Int = 256) async throws -> [Judgement] {
-        struct Reply: Decodable { let results: [Judgement] }
-        var out: [Judgement] = []
-        for body in try bodies(items.map(\.json), questions.json, model: model, bits: bits, batch: batch) {
-            out += try decode(Reply.self, try await request("POST", "/v1/judge", body: body)).results
+        // Parsed with VerdictKit's JSON, not JSONDecoder: that would fold ids differing only by normalization.
+        try await judgeJSON(items.map(\.json), questions: questions.json, model: model, bits: bits, batch: batch).map {
+            do { return try Judgement(json: $0) }
+            catch let error as VerdictError { throw error }
+            catch { throw VerdictError.unavailable("Unexpected answer from Verdict: \(error)") }
         }
-        return out
     }
     public func judge(_ items: [String], _ questions: Questions, model: String = "auto", bits: Int? = nil, batch: Int = 256) async throws -> [Judgement] {
         try await judge(items.map { Item($0) }, questions, model: model, bits: bits, batch: batch)
@@ -171,7 +171,9 @@ public struct Verdict: Sendable {
     public func judgeJSON(_ items: [JSON], questions: JSON, model: String = "auto", bits: Int? = nil, batch: Int = 256) async throws -> [JSON] {
         var out: [JSON] = []
         for body in try bodies(items, questions, model: model, bits: bits, batch: batch) {
-            let reply = try JSON.parse(try await request("POST", "/v1/judge", body: body))
+            let data = try await request("POST", "/v1/judge", body: body)
+            let reply: JSON
+            do { reply = try JSON.parse(data) } catch { throw VerdictError.unavailable("Unexpected answer from Verdict: \(error.localizedDescription)") }
             guard let results = reply["results"]?.array else { throw VerdictError.unavailable("Unexpected answer from Verdict: no results") }
             out += results
         }
