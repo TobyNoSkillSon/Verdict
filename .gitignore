@@ -1,19 +1,18 @@
+# Local development workspace: benchmarks, reference worker, perf notes, dev tests (never committed)
+lab/
+
+# Build outputs and caches
 .build/
+.swiftpm/
 dist/
+*.xcodeproj/
+xcuserdata/
+DerivedData/
+
+# Results, logs, caches
+results/
+logs/
+*.log
 *.pyc
 __pycache__/
 .DS_Store
-
-# native build QA outputs
-native/.build*/
-native/.build*.log
-native/.swiftpm/
-native/dist/
-bench/results/
-bench/research/
-bench/__pycache__/
-bench/tasks/__pycache__/
-native/perf/scratch/*.log
-native/perf/scratch/tokcli
-native/perf/scratch/BenchPackage/.build/
-native/perf/logs/
