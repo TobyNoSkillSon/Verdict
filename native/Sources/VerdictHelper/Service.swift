@@ -184,7 +184,7 @@ final class Service {
     /// Block until queued status writes reach disk (shutdown).
     func flushStatus() { statusQueue.sync {} }
     /// Loads `id` (or returns it loaded). A manual request promotes an on-demand model to manual; an on-demand request
-    /// never demotes. In Automatic memory mode the load must fit without swapping (see `admit`).
+    /// never demotes. In "Fit in free memory" mode the load must fit without swapping (see `admit`).
     private func load(_ id: String, as requested: Residency) throws -> DecisionModel {
         if let existing = models[id] {
             if requested == .manual && residency[id] != .manual {
@@ -260,7 +260,7 @@ final class Service {
         }
         return lru(.onDemand) + lru(.manual)
     }
-    /// Automatic memory mode: a load must fit in what macOS can give without swapping (MemoryProbe): need = the
+    /// "Fit in free memory" mode: a load must fit in what macOS can give without swapping (MemoryProbe): need = the
     /// model's estimate + activation headroom. Too little: unload idle models (on-demand LRU first, then manual; never
     /// a model the current request uses), re-checking after each. If even unloading every candidate would not free
     /// enough by their estimates, nothing is unloaded. Still short: MemoryRefusal (HTTP 507). Allow-swap skips all of

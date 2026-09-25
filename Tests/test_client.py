@@ -156,10 +156,25 @@ class EngineLabelTests(unittest.TestCase):
                 self.assertEqual(verdict._main(['status']), 0)
             text = out.getvalue()
             self.assertIn('laya-english (Optimized \u00b7 M5 Max) [manual]', text)
-            self.assertIn('~0.9 GB free without swapping', text)
-            self.assertIn('keep hot: manual always, on demand 15 min idle  memory: automatic (never swap)', text)
+            self.assertIn('~0.9 GB free now', text)
+            self.assertIn('keep hot: manual always, on demand 15 min idle  memory: fit in free memory', text)
             self.assertIn('unloaded laya-multilingual (on demand): memory: made room for von-1.2 at 16-bit', text)
             self.assertIn('refused: ' + refusal, text)
+        finally:
+            verdict.status = saved
+
+    def test_status_with_nothing_loaded_reads_plainly(self):
+        import io, contextlib
+        saved = verdict.status
+        try:
+            verdict.status = lambda: {'port': 1, 'calls': 0, 'last_ms': None, 'memory': {'rss_mb': 31, 'mlx_active_mb': 0, 'available_mb': 84_900},
+                                      'models': {}, 'manual_idle_minutes': 0, 'on_demand_idle_minutes': 15, 'allow_swap': True}
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(verdict._main(['status']), 0)
+            self.assertEqual(out.getvalue().splitlines(), [
+                'port 1  models: none loaded (a judge loads its model on demand)  calls: 0  memory: 31 MB rss, 0 MB weights, ~84.9 GB free now',
+                'keep hot: manual always, on demand 15 min idle  memory: allow swap'])
         finally:
             verdict.status = saved
 

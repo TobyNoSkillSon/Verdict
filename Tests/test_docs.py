@@ -61,6 +61,17 @@ class DocsTests(unittest.TestCase):
         registry = (ROOT / 'native/Sources/VerdictHelper/Registry.swift').read_text()
         self.assertNotIn('Python worker remains the production', registry)
 
+    def test_fresh_install_loads_nothing_and_memory_names(self):
+        docs = {name: (ROOT / name).read_text() for name in ('README.md', 'AGENTS.md', 'docs/USAGE.md')}
+        for name, text in docs.items():
+            for stale in ('downloads Laya English automatically', 'waits until a model is loaded', 'First run downloads',
+                          'Automatic (never swap)', 'Allow loading into swap', 'Memory → Automatic'):
+                self.assertNotIn(stale, text, name)
+        self.assertIn('Fit in free memory', docs['README.md']); self.assertIn('Allow swap (slower)', docs['README.md'])
+        self.assertIn('Fit in free memory', docs['docs/USAGE.md']); self.assertIn('Allow swap (slower)', docs['docs/USAGE.md'])
+        self.assertIn('`models: none loaded`', docs['AGENTS.md'])
+        self.assertIn('verdict load <id> --manual', docs['AGENTS.md'])
+
 
 if __name__ == '__main__':
     unittest.main()

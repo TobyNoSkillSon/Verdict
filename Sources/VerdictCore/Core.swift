@@ -8,14 +8,14 @@ public enum VerdictError: LocalizedError {
 /// Persisted in ~/Library/Application Support/Verdict/config.json.
 public struct Configuration: Codable, Equatable {
     public var executable: String            // the bundled verdict-helper (informational)
-    public var hotModels: [String]           // loaded at launch, kept resident
+    public var hotModels: [String]           // the launch set: models the user loaded manually; empty on a fresh install
     public var launchAtLogin: Bool
     public var idleMinutes: Int?             // before Keep Hot per class: one window for every model (0 or nil = always)
     public var precision: [String: Int]?     // model id -> 0 (native: Laya fp16, Von fp32), 16, 8 or 4
     public var manualIdleMinutes: Int?       // Keep Hot, manually loaded models; nil = from idleMinutes, else Always (0)
     public var onDemandIdleMinutes: Int?     // Keep Hot, models loaded on demand; nil = 15
-    public var allowSwap: Bool?              // Memory: nil/false = Automatic (never swap)
-    public init(executable: String, hotModels: [String] = ["laya-english"], launchAtLogin: Bool = false, idleMinutes: Int? = 0) {
+    public var allowSwap: Bool?              // Memory: nil/false = Fit in free memory (never swap)
+    public init(executable: String, hotModels: [String] = [], launchAtLogin: Bool = false, idleMinutes: Int? = 0) {
         self.executable = executable; self.hotModels = hotModels; self.launchAtLogin = launchAtLogin; self.idleMinutes = idleMinutes
     }
     /// Keep Hot window for manually loaded models. A config from before per-class Keep Hot keeps its single choice
@@ -385,7 +385,7 @@ public struct Eviction: Codable, Equatable {
     public init(model: String, residency: String? = nil, reason: String, at: Double) { self.model = model; self.residency = residency; self.reason = reason; self.at = at }
 }
 
-/// The last load refused because it would have needed swap (Automatic memory mode).
+/// The last load refused because it would have needed swap (Fit in free memory).
 public struct Refusal: Codable, Equatable {
     public var model: String
     public var message: String
@@ -486,10 +486,11 @@ public let defaultOnDemandIdleMinutes = 15
 
 public enum ResidencyClass: String, Equatable { case manual, onDemand = "on_demand" }
 
-/// One entry of the Keep Hot or Memory submenu: a section header, a choice, or a disabled caption.
+/// One entry of the Keep Hot or Memory submenu: a section header, a choice, or a disabled caption. `help` is the
+/// item's tooltip: one sentence for anything that is not self-explanatory at a glance.
 public enum MenuEntry: Equatable {
-    case header(String)
-    case choice(title: String, checked: Bool, action: MenuAction)
+    case header(String, help: String? = nil)
+    case choice(title: String, checked: Bool, action: MenuAction, help: String? = nil)
     case caption(String)
     case separator
 }
@@ -498,25 +499,37 @@ public enum MenuAction: Equatable {
     case memory(allowSwap: Bool)
 }
 
+public let manualLoadHelp = "You loaded these yourself (Load in Models…, or verdict load --manual); they load again when Verdict starts."
+public let onDemandLoadHelp = "An agent's request needed these, so Verdict loaded them; they are not loaded again when Verdict starts."
+public let keepHotAlwaysHelp = "Never unloaded for being idle; only Unload, or Memory making room for another model, unloads them."
+public let fitInFreeMemoryTitle = "Fit in free memory"
+public let fitInFreeMemoryHelp = "Loads a model only if it fits in memory that is free right now; otherwise unloads idle models (least recently used, on-demand first) or refuses with the reason. Never pushes the Mac into swap."
+public let allowSwapTitle = "Allow swap (slower)"
+public let allowSwapHelp = "Loads even when memory is short; macOS moves data to disk and everything, including other apps, can slow down."
+
 /// Keep Hot submenu: manually loaded (menu Load/Reload, the launch set) and loaded on demand (a request needed it).
 public func keepHotMenu(_ config: Configuration) -> [MenuEntry] {
-    var entries: [MenuEntry] = [.header("Manually loaded")]
-    entries += manualKeepHotChoices.map { .choice(title: $0.title, checked: config.manualIdle == $0.minutes, action: .keepHot(.manual, minutes: $0.minutes)) }
-    entries += [.separator, .header("Loaded on demand")]
-    entries += onDemandKeepHotChoices.map { .choice(title: $0.title, checked: config.onDemandIdle == $0.minutes, action: .keepHot(.onDemand, minutes: $0.minutes)) }
+    func choices(_ list: [(minutes: Int, title: String)], _ kind: ResidencyClass, _ current: Int) -> [MenuEntry] {
+        list.map { .choice(title: $0.title, checked: current == $0.minutes, action: .keepHot(kind, minutes: $0.minutes),
+                           help: $0.minutes == 0 ? keepHotAlwaysHelp : nil) }
+    }
+    var entries: [MenuEntry] = [.header("Manually loaded", help: manualLoadHelp)]
+    entries += choices(manualKeepHotChoices, .manual, config.manualIdle)
+    entries += [.separator, .header("Loaded on demand", help: onDemandLoadHelp)]
+    entries += choices(onDemandKeepHotChoices, .onDemand, config.onDemandIdle)
     entries += [.separator, .caption("Unloaded models reload on the next request")]
     return entries
 }
 
-/// Memory submenu. Automatic: a load must fit in memory macOS can give without swapping, unloading idle models
-/// (on demand first) to make room, else it is refused with the reason. Allow loading into swap skips the check.
+/// Memory submenu. Fit in free memory: a load must fit in memory macOS can give without swapping, unloading idle
+/// models (on demand first) to make room, else it is refused with the reason. Allow swap skips the check.
 public func memoryMenu(_ config: Configuration, status: WorkerStatus?) -> [MenuEntry] {
     var entries: [MenuEntry] = [
-        .choice(title: "Automatic (never swap)", checked: !config.swapAllowed, action: .memory(allowSwap: false)),
-        .choice(title: "Allow loading into swap", checked: config.swapAllowed, action: .memory(allowSwap: !config.swapAllowed)),
+        .choice(title: fitInFreeMemoryTitle, checked: !config.swapAllowed, action: .memory(allowSwap: false), help: fitInFreeMemoryHelp),
+        .choice(title: allowSwapTitle, checked: config.swapAllowed, action: .memory(allowSwap: !config.swapAllowed), help: allowSwapHelp),
     ]
     var captions: [String] = []
-    if let mb = status?.memory?["available_mb"] { captions.append(String(format: "~%.1f GB free without swapping", Swift.max(0, mb) / 1000)) }
+    if let mb = status?.memory?["available_mb"] { captions.append(String(format: "~%.1f GB free now", Swift.max(0, mb) / 1000)) }
     if let last = status?.evictions?.last(where: { $0.reason.hasPrefix("memory") }) { captions.append("Unloaded \(last.model) to make room") }
     if !captions.isEmpty { entries.append(.separator); entries += captions.map { .caption($0) } }
     return entries

@@ -58,14 +58,19 @@ chmod 755 "$HOME/.local/bin/verdict"
 echo "Installed $DEST/Verdict.app and CLI ~/.local/bin/verdict"
 open -g "$DEST/Verdict.app"
 export VERDICT_APP="$DEST/Verdict.app"
-ready_check() {  # helper answering and not loading; a model loaded, or none configured hot
+ready_check() {  # helper answering and not loading; a model loaded, or none in the launch set (a fresh install has none)
   python3 - "$HOME/Library/Application Support/Verdict" <<'PYEOF' 2>/dev/null
 import json, sys, urllib.request
 d = sys.argv[1]
 try:
     s = json.load(open(d + '/status.json'))
     with urllib.request.urlopen(f"http://127.0.0.1:{s['port']}/status", timeout=5) as r: s = json.load(r)
-    hot = json.load(open(d + '/config.json')).get('hotModels', ['laya-english'])
+except Exception:
+    sys.exit(1)
+try:
+    hot = json.load(open(d + '/config.json')).get('hotModels', [])
+except FileNotFoundError:
+    hot = []                    # the app writes config.json on the first change; until then nothing is loaded at launch
 except Exception:
     sys.exit(1)
 sys.exit(0 if not s.get('loading') and (s.get('models') or not hot) else 1)

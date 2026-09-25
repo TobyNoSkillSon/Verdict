@@ -282,6 +282,18 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(again, current)
     }
 
+    /// A fresh install loads nothing at launch: the launch set starts empty and grows only by manual loads.
+    func testFreshConfigurationPreloadsNothing() throws {
+        let fresh = Configuration(executable: "/Applications/Verdict.app/Contents/MacOS/verdict-helper")
+        XCTAssertEqual(fresh.hotModels, [])
+        XCTAssertEqual(fresh.helperEnvironment["VERDICT_PRELOAD"], "")
+        let saved = try JSONDecoder().decode(Configuration.self, from: JSONEncoder().encode(fresh))
+        XCTAssertEqual(saved.hotModels, [])
+        // An existing config keeps its launch set.
+        let existing = try JSONDecoder().decode(Configuration.self, from: Data(#"{"executable":"/x","hotModels":["laya-multilingual","laya-english"],"launchAtLogin":false}"#.utf8))
+        XCTAssertEqual(existing.helperEnvironment["VERDICT_PRELOAD"], "laya-multilingual,laya-english")
+    }
+
     func testHelperEnvironmentAndSettings() {
         var config = Configuration(executable: "/x", hotModels: ["laya-english", "von-1.2"])
         config.precision = ["von-1.2": 0]
@@ -301,8 +313,8 @@ final class CoreTests: XCTestCase {
         let menu = keepHotMenu(Configuration(executable: "/x"))
         let titles: [String] = menu.map {
             switch $0 {
-            case .header(let t): return "# " + t
-            case .choice(let t, let checked, _): return t + (checked ? " ✓" : "")
+            case .header(let t, _): return "# " + t
+            case .choice(let t, let checked, _, _): return t + (checked ? " ✓" : "")
             case .caption(let t): return "(" + t + ")"
             case .separator: return "—"
             }
@@ -310,11 +322,17 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(titles, ["# Manually loaded", "Always ✓", "15 min idle", "30 min idle", "60 min idle", "—",
                                 "# Loaded on demand", "5 min idle", "15 min idle ✓", "30 min idle", "60 min idle", "Always", "—",
                                 "(Unloaded models reload on the next request)"])
-        guard case .choice(_, _, let action) = menu[11] else { return XCTFail("on-demand Always") }
+        guard case .choice(_, _, let action, let help) = menu[11] else { return XCTFail("on-demand Always") }
         XCTAssertEqual(action, .keepHot(.onDemand, minutes: 0))
+        XCTAssertEqual(help, keepHotAlwaysHelp)
+        // Tooltips: each group header says what puts a model in it; Always says what can still unload it.
+        XCTAssertEqual(menu[0], .header("Manually loaded", help: manualLoadHelp))
+        XCTAssertEqual(menu[6], .header("Loaded on demand", help: onDemandLoadHelp))
+        let helped = menu.compactMap { entry -> String? in if case .choice(let t, _, _, let h?) = entry { return t + ": " + h }; return nil }
+        XCTAssertEqual(helped, ["Always: " + keepHotAlwaysHelp, "Always: " + keepHotAlwaysHelp])
         var custom = Configuration(executable: "/x"); custom.manualIdleMinutes = 30; custom.onDemandIdleMinutes = 0
         let checked = keepHotMenu(custom).compactMap { entry -> MenuAction? in
-            if case .choice(_, true, let action) = entry { return action }; return nil
+            if case .choice(_, true, let action, _) = entry { return action }; return nil
         }
         XCTAssertEqual(checked, [.keepHot(.manual, minutes: 30), .keepHot(.onDemand, minutes: 0)])
     }
@@ -324,13 +342,15 @@ final class CoreTests: XCTestCase {
         status.evictions = [Eviction(model: "von-1.2", reason: "idle: unused for 15 min (loaded on demand)", at: 1),
                             Eviction(model: "laya-multilingual", reason: "memory: made room for von-1.2 at 16-bit", at: 2)]
         let automatic = memoryMenu(Configuration(executable: "/x"), status: status)
-        XCTAssertEqual(automatic, [.choice(title: "Automatic (never swap)", checked: true, action: .memory(allowSwap: false)),
-                                   .choice(title: "Allow loading into swap", checked: false, action: .memory(allowSwap: true)),
-                                   .separator, .caption("~86.9 GB free without swapping"), .caption("Unloaded laya-multilingual to make room")])
+        XCTAssertEqual(automatic, [.choice(title: "Fit in free memory", checked: true, action: .memory(allowSwap: false), help: fitInFreeMemoryHelp),
+                                   .choice(title: "Allow swap (slower)", checked: false, action: .memory(allowSwap: true), help: allowSwapHelp),
+                                   .separator, .caption("~86.9 GB free now"), .caption("Unloaded laya-multilingual to make room")])
+        XCTAssertEqual(fitInFreeMemoryHelp, "Loads a model only if it fits in memory that is free right now; otherwise unloads idle models (least recently used, on-demand first) or refuses with the reason. Never pushes the Mac into swap.")
+        XCTAssertEqual(allowSwapHelp, "Loads even when memory is short; macOS moves data to disk and everything, including other apps, can slow down.")
         var swap = Configuration(executable: "/x"); swap.allowSwap = true
         // The swap item is a toggle: checked, choosing it again turns it off.
-        XCTAssertEqual(memoryMenu(swap, status: nil), [.choice(title: "Automatic (never swap)", checked: false, action: .memory(allowSwap: false)),
-                                                       .choice(title: "Allow loading into swap", checked: true, action: .memory(allowSwap: false))])
+        XCTAssertEqual(memoryMenu(swap, status: nil), [.choice(title: "Fit in free memory", checked: false, action: .memory(allowSwap: false), help: fitInFreeMemoryHelp),
+                                                       .choice(title: "Allow swap (slower)", checked: true, action: .memory(allowSwap: false), help: allowSwapHelp)])
     }
 
     func testLaunchSetFollowsManualLoadsOnly() throws {

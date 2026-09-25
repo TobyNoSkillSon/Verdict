@@ -134,7 +134,7 @@ The menu shows which models are hot, memory use and judgement count. **Copy Skil
   <img src="docs/images/menu-current.png" alt="Verdict menu with model status, memory use and Copy Skill for Your Agent" width="322">
 </p>
 
-**Models…** opens the catalog. With nothing downloaded, local models show **Get**. First launch downloads Laya English automatically; use **Get** for additional models. The grey hosted row is a reference, not a service Verdict calls.
+**Models…** opens the catalog. With nothing downloaded, local models show **Get**. A fresh install downloads and loads nothing: the first request that needs a model downloads and loads it on demand, and **Get** downloads one ahead of time. The grey hosted row is a reference, not a service Verdict calls.
 
 <p align="center">
   <img src="docs/images/models-fresh.png" alt="Model catalog before any weights are downloaded, with Get buttons" width="900">
@@ -152,9 +152,9 @@ A flame marks a hot model. Here English and Multilingual are ready; **Unload** f
   <img src="docs/images/models-current.png" alt="English and Multilingual hot, with precision controls and benchmark columns" width="900">
 </p>
 
-**Keep Hot** sets an idle window per kind of load. **Manually loaded** models (Load or Reload in the table; they also load again at the next launch) stay resident by default, or unload after 15, 30 or 60 idle minutes. Models **loaded on demand** (an agent's request needed one that was not hot) unload after 15 idle minutes by default; 5, 30, 60 minutes or Always are the other choices. Idle is counted per model from its last request, and an unloaded model loads again on the next request that needs it.
+**Keep Hot** sets an idle window per kind of load. **Manually loaded** models (Load or Reload in the table, or `verdict load <id> --manual`; only these load again at the next launch) stay resident by default, or unload after 15, 30 or 60 idle minutes. Models **loaded on demand** (an agent's request needed one that was not hot) unload after 15 idle minutes by default; 5, 30, 60 minutes or Always are the other choices. Idle is counted per model from its last request, and an unloaded model loads again on the next request that needs it.
 
-**Memory → Automatic (never swap)**, the default, checks before every load that the model fits in memory macOS can hand out without swapping. If it does not, Verdict unloads idle models to make room — on-demand ones first, least recently used first, never one that is serving the current request — and otherwise refuses the load with the numbers and the ways out, for example `von-1.2 at 16-bit needs ~2.0 GB; ~0.9 GB free without swapping. Unload laya-multilingual, pick 8-bit, or allow swap in Verdict → Memory.` Agents and the CLI get that text as the error (HTTP 507); the models table shows it in its footer. **Allow loading into swap** skips the check. Under memory pressure Verdict still drops its cache first, then sheds models. The need is the model's measured memory at the selected precision plus 0.5 GB for activations; free memory is macOS's free, file-backed (cached files) and purgeable pages, counted once each and capped by the kernel's own memory-pressure level, minus a safety margin of 10% of RAM, at least 1 GB; a download is checked again before the weights load. This is best-effort swap avoidance at load time, not a guarantee: other apps and inference itself can still push macOS into swap.
+**Memory → Fit in free memory**, the default, checks before every load that the model fits in memory macOS can hand out right now without swapping. If it does not, Verdict unloads idle models to make room — on-demand ones first, least recently used first, never one that is serving the current request — and otherwise refuses the load with the numbers and the ways out, for example `von-1.2 at 16-bit needs ~2.0 GB; ~0.9 GB free without swapping. Unload laya-multilingual, pick 8-bit, or allow swap in Verdict → Memory.` Agents and the CLI get that text as the error (HTTP 507); the models table shows it in its footer. **Allow swap (slower)** skips the check: the load goes ahead, macOS moves data to disk, and everything on the Mac, other apps included, can slow down. Under memory pressure Verdict still drops its cache first, then sheds models. The need is the model's measured memory at the selected precision plus 0.5 GB for activations; free memory is macOS's free, file-backed (cached files) and purgeable pages, counted once each and capped by the kernel's own memory-pressure level, minus a safety margin of 10% of RAM, at least 1 GB; a download is checked again before the weights load. This is best-effort swap avoidance at load time, not a guarantee: other apps and inference itself can still push macOS into swap.
 
 <p align="center">
   <img src="docs/images/keep-hot.png" alt="Keep Hot menu: idle windows for manually loaded models and for models loaded on demand" width="360">
@@ -171,7 +171,7 @@ A flame marks a hot model. Here English and Multilingual are ready; **Unload** f
 |---|---|---|
 | Apple Silicon, macOS 14+ | MLX runs on the Apple GPU | — |
 | `python3` (any, incl. macOS's own) | only for the `verdict` CLI and Python client, which use the standard library | `xcode-select --install` |
-| Internet, first run only | ~20 MB app download, ~0.8 GB for Laya English | — |
+| Internet | ~20 MB app download; each model downloads the first time it is needed (~0.8 GB for Laya English) | — |
 | Disk | ~1 GB; +0.6–0.8 GB per extra Laya model | — |
 
 Verdict is a native Swift app with an MLX helper: no Python runtime, no PyTorch, no Xcode, no Apple developer account. Building from source instead needs Xcode and its Metal Toolchain (`xcodebuild -downloadComponent MetalToolchain`).
@@ -184,7 +184,7 @@ Tell your agent:
 Install Verdict from https://github.com/TobyNoSkillSon/Verdict — follow its AGENTS.md, then install its skill into your harness.
 ```
 
-It clones the repository, runs the installer — which downloads the prebuilt app for this version, checks its SHA-256 and installs it — waits until a model is loaded, installs the skill wherever its harness keeps skills, and reports back. First run downloads about 0.8 GB (Laya English). Turn on **Launch at Login** in the menu afterwards if you want Verdict always there.
+It clones the repository, runs the installer — which downloads the prebuilt app for this version, checks its SHA-256 and installs it — waits until it is ready, installs the skill wherever its harness keeps skills, and reports back. Nothing is loaded after install: the first judgement downloads (about 0.8 GB for Laya English) and loads its model on demand. `verdict load <id> --manual`, or Load in the menu, keeps a model hot across restarts. Turn on **Launch at Login** in the menu afterwards if you want Verdict always there.
 
 <details>
 <summary>Installing by hand</summary>
@@ -249,7 +249,7 @@ Judgement inputs stay local. The helper listens on `127.0.0.1`; the only network
 <details>
 <summary>Does it keep using memory when I am not working?</summary>
 
-Models an agent's request loaded unload after 15 idle minutes by default; models you loaded from the menu stay resident unless you pick an idle window under **Keep Hot → Manually loaded**. The next request pays the load time again. **Memory → Automatic** keeps Verdict from loading a model into swap. The menu shows live memory use. Quitting Verdict stops the worker.
+Models an agent's request loaded unload after 15 idle minutes by default; models you loaded from the menu stay resident unless you pick an idle window under **Keep Hot → Manually loaded**. The next request pays the load time again. **Memory → Fit in free memory** keeps Verdict from loading a model into swap. The menu shows live memory use. Quitting Verdict stops the worker.
 
 </details>
 

@@ -43,6 +43,7 @@ class Helper:
         for key in ('VERDICT_IDLE_MINUTES', 'VERDICT_MANUAL_IDLE_MINUTES', 'VERDICT_ON_DEMAND_IDLE_MINUTES', 'VERDICT_ALLOW_SWAP'):
             full.pop(key, None)
         full.update(env)
+        full = {k: v for k, v in full.items() if v is not None}          # None: leave the variable unset
         self.proc = subprocess.Popen([str(BINARY)], env=full, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         self.port = json.loads(self.proc.stdout.readline())['port']
         if full.get('VERDICT_PRELOAD'):
@@ -89,6 +90,16 @@ class ResidencyTests(unittest.TestCase):
         h = Helper(*args, **kwargs)
         self.addCleanup(lambda: h.proc.poll() is None and h.stop())
         return h
+
+    def test_empty_launch_set_loads_nothing(self):
+        # A fresh install's config has no launch set: the app passes VERDICT_PRELOAD='' (and an unset variable means
+        # the same); nothing loads until a request or a manual load asks for a model.
+        for preload in ('', None):
+            h = self.helper(VERDICT_PRELOAD=preload)
+            time.sleep(.5)
+            status = h.status()
+            self.assertEqual((status['models'], status.get('loading')), ({}, None), preload)
+            h.stop()
 
     def test_residency_class_tracking(self):
         h = self.helper(VERDICT_PRELOAD='laya-english')

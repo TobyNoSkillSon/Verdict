@@ -79,14 +79,16 @@ import VerdictCore
         let sub = NSMenu(); sub.autoenablesItems = false
         for entry in entries {
             switch entry {
-            case .header(let text): sub.addItem(.sectionHeader(title: text))
+            case .header(let text, let help):
+                let header = NSMenuItem.sectionHeader(title: text); header.toolTip = help
+                sub.addItem(header)
             case .separator: sub.addItem(.separator())
             case .caption(let text):
                 let line = NSMenuItem(title: text, action: nil, keyEquivalent: ""); line.isEnabled = false
                 sub.addItem(line)
-            case .choice(let text, let checked, let action):
+            case .choice(let text, let checked, let action, let help):
                 let choice = NSMenuItem(title: text, action: #selector(choose(_:)), keyEquivalent: "")
-                choice.target = self; choice.state = checked ? .on : .off
+                choice.target = self; choice.state = checked ? .on : .off; choice.toolTip = help
                 choice.representedObject = MenuActionBox(action)
                 sub.addItem(choice)
             }
@@ -242,6 +244,29 @@ final class MenuMock: NSView {
         }
         next(0)
     }
+    /// tooltips.png: every Keep Hot and Memory item that has a tooltip, its title above the tooltip text as macOS
+    /// shows it on hover (a static capture cannot hover).
+    static func renderTooltips(of menu: NSMenu, to url: URL, done: @escaping () -> Void) {
+        let pairs = ["Keep Hot", "Memory"].flatMap { title -> [(String, String)] in
+            let items = menu.items.first(where: { $0.title == title })?.submenu?.items ?? []
+            var seen = Set<String>()
+            return items.compactMap { item in
+                guard let tip = item.toolTip, seen.insert(tip).inserted else { return nil }
+                return ("\(title) → \(item.title)", tip)
+            }
+        }
+        let view = TooltipSheet(pairs: pairs, width: 460)
+        let window = NSWindow(contentRect: view.frame, styleMask: .borderless, backing: .buffered, defer: false)
+        window.backgroundColor = .clear; window.contentView = view; window.appearance = NSAppearance(named: .darkAqua)
+        window.orderFrontRegardless(); window.setFrameOrigin(NSPoint(x: -5000, y: -5000))
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            if let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+                view.cacheDisplay(in: view.bounds, to: rep)
+                try? rep.representation(using: .png, properties: [:])?.write(to: url)
+            }
+            window.orderOut(nil); done()
+        }
+    }
     override func draw(_ dirtyRect: NSRect) {
         let panel = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: 10, yRadius: 10)
         NSColor(calibratedRed: 0.14, green: 0.14, blue: 0.15, alpha: 1).setFill(); panel.fill()
@@ -282,6 +307,38 @@ final class MenuMock: NSView {
     }
 }
 
+
+/// Menu item titles with their tooltip text in macOS's tooltip style (documentation captures only).
+final class TooltipSheet: NSView {
+    let blocks: [(NSAttributedString, NSAttributedString)]
+    static let pad: CGFloat = 14, gap: CGFloat = 12
+    init(pairs: [(String, String)], width: CGFloat) {
+        blocks = pairs.map { title, tip in
+            (NSAttributedString(string: title, attributes: [.font: NSFont.systemFont(ofSize: 12, weight: .semibold), .foregroundColor: NSColor.white.withAlphaComponent(0.55)]),
+             NSAttributedString(string: tip, attributes: [.font: NSFont.toolTipsFont(ofSize: 0), .foregroundColor: NSColor.white]))
+        }
+        let inner = width - 2 * Self.pad - 16
+        let height = blocks.reduce(Self.pad) { sum, block in
+            sum + 18 + ceil(block.1.boundingRect(with: NSSize(width: inner, height: 1000), options: [.usesLineFragmentOrigin]).height) + 10 + Self.gap
+        }
+        super.init(frame: NSRect(x: 0, y: 0, width: width, height: height))
+    }
+    required init?(coder: NSCoder) { nil }
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor(calibratedRed: 0.11, green: 0.11, blue: 0.12, alpha: 1).setFill(); NSBezierPath(roundedRect: bounds, xRadius: 10, yRadius: 10).fill()
+        let inner = bounds.width - 2 * Self.pad - 16
+        var y = bounds.height - Self.pad
+        for (title, tip) in blocks {
+            y -= 16; title.draw(at: NSPoint(x: Self.pad, y: y)); y -= 2
+            let h = ceil(tip.boundingRect(with: NSSize(width: inner, height: 1000), options: [.usesLineFragmentOrigin]).height)
+            let bubble = NSRect(x: Self.pad, y: y - h - 10, width: inner + 16, height: h + 10)
+            NSColor(calibratedRed: 0.22, green: 0.22, blue: 0.23, alpha: 1).setFill(); NSBezierPath(roundedRect: bubble, xRadius: 5, yRadius: 5).fill()
+            NSColor.white.withAlphaComponent(0.15).setStroke(); NSBezierPath(roundedRect: bubble.insetBy(dx: 0.5, dy: 0.5), xRadius: 5, yRadius: 5).stroke()
+            tip.draw(with: NSRect(x: bubble.minX + 8, y: bubble.minY + 5, width: inner, height: h), options: [.usesLineFragmentOrigin])
+            y = bubble.minY - Self.gap
+        }
+    }
+}
 
 /// Carries a VerdictCore menu action through NSMenuItem.representedObject.
 final class MenuActionBox: NSObject {

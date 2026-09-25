@@ -9,7 +9,7 @@ enum Residency: String {
     case onDemand = "on_demand"
 }
 
-/// A load that would push macOS into swap in Automatic memory mode. HTTP 507; the message is shown verbatim by the
+/// A load that would push macOS into swap in the "Fit in free memory" mode. HTTP 507; the message is shown verbatim by the
 /// client, the CLI and the app's models table.
 struct MemoryRefusal: Error, LocalizedError {
     let message: String

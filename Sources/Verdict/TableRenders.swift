@@ -109,6 +109,10 @@ import VerdictCore
         app.rebuildMenu()
         MenuMock.render(app.menu.items, width: 322, to: directory.appendingPathComponent("\(prefix)menu.png")) { [self] in
             MenuMock.renderSubmenus(of: app.menu, into: directory, prefix: prefix) { [self] in
+                if prefix == "default-" {
+                    MenuMock.renderTooltips(of: app.menu, to: directory.appendingPathComponent("tooltips.png")) { [self] in render(states, index + 1) }
+                    return
+                }
                 guard prefix == "tight-" else { render(states, index + 1); return }
                 // The models table with the refusal in its footer.
                 let table = MenuTableHostingView(rootView: ModelTable(backend: backend))
