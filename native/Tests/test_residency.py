@@ -22,7 +22,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 BINARY = Path(os.environ.get('VERDICT_HELPER', ROOT / 'native/.build/release-helper/verdict-helper'))
 # Estimates in MB; need = estimate + 512 MB activation headroom.
-BENCH = {'laya-english': {'precisions': {'16': {'memory_mb': 1000}, '8': {'memory_mb': 600}}},
+BENCH = {'laya-english': {'precisions': {'16': {'memory_mb': 1000}, '8': {'memory_mb': 600}, '4': {'memory_mb': 400}}},
          'laya-multilingual': {'precisions': {'16': {'memory_mb': 1000}}},
          'laya-typed-decisions': {'precisions': {'16': {'memory_mb': 400}}},
          'von-1.2': {'precisions': {'16': {'memory_mb': 1500}, '8': {'memory_mb': 1000}}},
@@ -171,6 +171,42 @@ class ResidencyTests(unittest.TestCase):
         self.assertEqual(reply['error'], 'laya-multilingual at 16-bit needs ~1.5 GB; ~1.0 GB free without swapping. '
                                          'Unload laya-english, pick 8-bit, or allow swap in Verdict → Memory.')
         self.assertEqual(h.loaded(), {'laya-english'})
+
+    def test_reload_under_negative_headroom_keeps_the_model(self):
+        """Review 2 R2.2: the loaded model's credit is added to the raw (negative) headroom, not to a clamped zero."""
+        h = self.helper(available_mb=3000)
+        h.ok('/load', {'model': 'laya-english', 'bits': 16, 'manual': True})       # 1000 MB; 2000 left
+        h.set_available(800)                                                     # raw headroom 800 − 1000 = −200
+        self.assertEqual(h.status()['memory']['available_mb'], 0)
+        # 4-bit needs 400 + 512 = 912; after unloading 16-bit only 800 would be free: refuse before unloading anything.
+        code, reply = h.call('/load', {'model': 'laya-english', 'bits': 4, 'manual': True})
+        self.assertEqual(code, 507, reply)
+        self.assertTrue(reply['error'].startswith('laya-english at 4-bit needs ~0.9 GB; ~0.8 GB free without swapping.'), reply)
+        status = h.status()
+        self.assertEqual(set(status['models']), {'laya-english'})
+        entry = status['models']['laya-english']
+        self.assertEqual((entry['bits'], entry['residency']), (16, 'manual'))
+        self.assertEqual(status['refused']['model'], 'laya-english')
+        self.assertIsNone(status['error'])
+        self.assertEqual(h.evicted(), [])
+        self.assertEqual(h.judge(['x'], model='laya-english')['results'][0]['model'], 'laya-english')
+        self.assertEqual(h.status()['models']['laya-english']['bits'], 16)       # served by the untouched model
+        # With enough raw headroom the same reload fits: −50 + 1000 = 950 ≥ 912.
+        h.set_available(950)
+        h.ok('/load', {'model': 'laya-english', 'bits': 4, 'manual': True})
+        self.assertEqual((h.status()['models']['laya-english']['bits'], h.residency('laya-english')), (4, 'manual'))
+
+    def test_reload_that_fails_after_unloading_restores_the_model(self):
+        h = self.helper(VERDICT_TEST_LOAD_FAULT='laya-english@8')
+        h.ok('/load', {'model': 'laya-english', 'bits': 16, 'manual': True})
+        code, reply = h.call('/load', {'model': 'laya-english', 'bits': 8})
+        self.assertEqual((code, reply['error']), (400, 'test load fault'))
+        status = h.status()
+        entry = status['models']['laya-english']
+        self.assertEqual((entry['bits'], entry['residency']), (16, 'manual'))
+        self.assertEqual(status['error'], 'laya-english: test load fault')     # the failure stays visible
+        h.ok('/unload', {'model': 'laya-english'}); h.ok('/load', {'model': 'laya-english'})
+        self.assertEqual(h.status()['models']['laya-english']['bits'], 16)     # the failed 8 did not stick
 
     def test_refusal_unloads_nothing_and_reads_clearly(self):
         h = self.helper(available_mb=2000)
@@ -348,7 +384,6 @@ class ProbeTests(unittest.TestCase):
         finally:
             urllib.request.urlopen(urllib.request.Request(f'http://127.0.0.1:{port}/quit', data=b'{}', headers={'Content-Type': 'application/json'}), timeout=5).close()
             proc.wait(timeout=10); proc.stdout.close(); proc.stderr.close()
-
 
 
 if __name__ == '__main__': unittest.main()

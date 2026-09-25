@@ -261,22 +261,18 @@ final class Service {
     /// model's estimate + activation headroom. Too little: unload idle models (on-demand LRU first, then manual; never
     /// a model the current request uses), re-checking after each. If even unloading every candidate would not free
     /// enough by their estimates, nothing is unloaded. Still short: MemoryRefusal (HTTP 507). Allow-swap skips all of
-    /// it. `credit`: memory the caller frees before loading (the same model at another precision). Returns the estimate.
+    /// it. `credit`: memory the caller frees before loading (the same model at another precision, `reclaim`); it is
+    /// added to the raw headroom before clamping, so a deficit already present is not forgotten. Returns the estimate.
     @discardableResult
     private func admit(_ spec: ModelSpec, bits: Int, credit: Double = 0) throws -> Double {
         let estimate = memoryEstimateMB(spec, bits: bits, measured: catalog.measuredMemory, diskBytes: installedBytes(spec.id))
         if allowSwap { return estimate }
         let need = estimate + MemoryProbe.headroomMB
         Memory.clearCache()   // our own reusable buffers are not free pages yet
-        func available() -> Double { probe.availableMB(loadedMB: loadedEstimateMB) + credit }
+        func available() -> Double { max(0, probe.rawAvailableMB(loadedMB: loadedEstimateMB) + credit) }
         var free = available()
         if free >= need { return estimate }
         let candidates = evictionOrder().filter { $0 != spec.id && !pinned.contains($0) }
-        // What an unload is expected to free: the weights MLX holds, else the load estimate (stub models).
-        func reclaim(_ id: String) -> Double {
-            let resident = Double(models[id]?.residentBytes ?? 0) / 1e6
-            return resident > 0 ? resident : footprint[id] ?? 0
-        }
         if free + candidates.reduce(0, { $0 + reclaim($1) }) >= need {
             for victim in candidates {
                 evict(victim, reason: "memory: made room for \(spec.id) at \(spec.effectiveBits(bits))-bit (needs ~\(gigabytes(need)) GB; ~\(gigabytes(free)) GB was free without swapping)")
@@ -288,6 +284,12 @@ final class Service {
         state["refused"] = ["model": spec.id, "message": message, "at": Date().timeIntervalSince1970]; writeStatus(refreshInstalled: false)
         fputs("{\"refused\":\(jsonString(spec.id)),\"message\":\(jsonString(message))}\n", stderr)
         throw MemoryRefusal(message: message)
+    }
+    /// What unloading a model is expected to free: the weights MLX holds (not the whole-process footprint, which
+    /// includes overhead that stays), else the load estimate (stub models).
+    private func reclaim(_ id: String) -> Double {
+        let resident = Double(models[id]?.residentBytes ?? 0) / 1e6
+        return resident > 0 ? resident : footprint[id] ?? 0
     }
     private func installedBytes(_ id: String) -> Int? {
         ((installedCache ?? catalog.installed())[id] as? [String: Any])?["bytes"] as? Int
@@ -501,11 +503,19 @@ final class Service {
                         if let rule = Self.precisions[spec.runtime], !rule.0.contains(bits) {
                             throw ServiceError("\(id): \(rule.1)")
                         }
-                        // Memory is checked before the loaded precision is dropped (its estimate counts as freed).
-                        if models[id] != nil { try admit(spec, bits: bits, credit: footprint[id] ?? 0) }
+                        // Memory is checked before the loaded precision is dropped (what unloading it frees counts):
+                        // a refusal here changes nothing.
+                        let loadedClass = residency[id]
+                        if models[id] != nil { try admit(spec, bits: bits, credit: reclaim(id)) }
                         let previous = precision[id]
                         precision[id] = bits; unload(id)
-                        do { _ = try load(id, as: cls) } catch { precision[id] = previous; throw error }
+                        do { _ = try load(id, as: cls) } catch {
+                            // The new precision failed after the old one was unloaded (a refusal on re-measure, a
+                            // load error): put the working model back as it was, and report the original failure.
+                            precision[id] = previous
+                            if let loadedClass { restore(id, as: loadedClass) }
+                            throw error
+                        }
                         return (200, ["loaded": order])
                     }
                     _ = try load(id, as: cls); return (200, ["loaded": order])
@@ -548,6 +558,14 @@ final class Service {
             }
         } catch let refusal as MemoryRefusal { return (507, ["error": refusal.message]) }
         catch { return (400, ["error": Self.message(error).prefix(500).description]) }
+    }
+    /// Reloads a model at its previous precision after a failed reload, keeping the failed attempt's refusal/error
+    /// in /status. If that fails too, the model stays unloaded and the log says why.
+    private func restore(_ id: String, as cls: Residency) {
+        let refused = state["refused"], failure = state["error"]
+        do { _ = try load(id, as: cls) }
+        catch { fputs("{\"restore_failed\":\(jsonString(id)),\"error\":\(jsonString(Self.message(error)))}\n", stderr) }
+        state["refused"] = refused; state["error"] = failure; writeStatus(refreshInstalled: false)
     }
     /// JSON true/false, 1/0 or the strings "true"/"false"/"1"/"0" (the app's control body is strings).
     private func flag(_ raw: Any) -> Bool? {

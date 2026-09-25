@@ -1,9 +1,13 @@
 import Foundation
 import VerdictEngine
 
-/// Test-only stand-in. Never selected for normal production loads.
+/// Test-only stand-in. Never selected for normal production loads. VERDICT_TEST_LOAD_FAULT=<id>@<bits> makes that
+/// load throw (a failed reload after the old precision was unloaded).
 struct StubLoader: ModelLoader {
-    static func load(id: String, snapshot: URL, bits: Int) throws -> DecisionModel { StubModel(id: id) }
+    static func load(id: String, snapshot: URL, bits: Int) throws -> DecisionModel {
+        if ProcessInfo.processInfo.environment["VERDICT_TEST_LOAD_FAULT"] == "\(id)@\(bits)" { throw ServiceError("test load fault") }
+        return StubModel(id: id)
+    }
 }
 
 /// Reports an optimized path (fast tokenizer, windowed attention) so the helper's engine reporting and stock fallback
