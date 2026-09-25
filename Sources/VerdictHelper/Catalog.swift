@@ -39,7 +39,7 @@ final class Catalog {
     init() throws {
         let env = ProcessInfo.processInfo.environment
         let executable = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL
-        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()   // Sources/VerdictHelper/Catalog.swift -> project root
         let executableDirectory = executable.deletingLastPathComponent()
         let candidates = [
             env["VERDICT_CATALOG"].map { URL(fileURLWithPath: $0) },
