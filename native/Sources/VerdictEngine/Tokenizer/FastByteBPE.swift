@@ -36,10 +36,13 @@ public final class FastByteBPE: @unchecked Sendable {
     }
     private static func pair(_ a: Int, _ b: Int) -> UInt64 { UInt64(a) << 32 | UInt64(b) }
 
-    public init?(data: Data) {
+    /// `ignoringTruncationAndPadding`: accept a tokenizer.json whose `truncation`/`padding` are set (Von's). They are
+    /// call-time options in HF: transformers disables both unless the caller asks (Von SDK: 1.1's max_length 512 still
+    /// encodes 10,003 tokens), and this encoder never truncates or pads.
+    public init?(data: Data, ignoringTruncationAndPadding: Bool = false) {
         guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               Self.keys(root, ["version", "truncation", "padding", "normalizer", "pre_tokenizer", "post_processor", "decoder", "model", "added_tokens"]),
-              Self.equal(root, "version", "1.0"), root["truncation"] is NSNull, root["padding"] is NSNull,
+              Self.equal(root, "version", "1.0"), ignoringTruncationAndPadding || (root["truncation"] is NSNull && root["padding"] is NSNull),
               let norm = Self.dict(root["normalizer"]), Self.keys(norm, ["type"]), Self.equal(norm, "type", "NFC"),
               let pre = Self.dict(root["pre_tokenizer"]), Self.byteLevel(pre),
               let decoder = Self.dict(root["decoder"]), Self.byteLevel(decoder),
