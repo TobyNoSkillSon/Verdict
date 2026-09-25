@@ -66,7 +66,7 @@ for hit, result in zip(hits, judge(hits, questions)):
         raise RuntimeError(result.error)            # never silently drop a failed item
     if result.relevant > 0.6 and result.kind == "source":
         shortlist.append((float(result.risk), hit))
-shortlist.sort(reverse=True)                        # the agent reads these, not every hit
+shortlist.sort(key=lambda row: row[0], reverse=True)  # read these, not every hit; ties keep input order
 ```
 
 | Question | Answer |
