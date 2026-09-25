@@ -15,7 +15,7 @@ public struct LayaPreparedRow: Codable, Sendable {
     public init(ids: [Int], markers: [Int], qtype: Int) { self.ids = ids; self.markers = markers; self.qtype = qtype }
 }
 
-public final class LayaModel: DecisionModel, KernelPathReporting {
+public final class LayaModel: DecisionModel, KernelPathReporting, InferencePathSwitching {
     public let id: String
     public let contextLimit = 8192
     private let bits: Int
@@ -26,6 +26,12 @@ public final class LayaModel: DecisionModel, KernelPathReporting {
     private var sorted: Bool { Self.sortByLength && (fp16 || Self.quantizedSorted) }
     public var residentBytes: Int { network.residentBytes }
     public var kernelPath: String { network.kernelPath }
+    public var optimizedPathActive: Bool { prompt.hasFastTokenizer || network.windowedActive }
+    public func useStockPath(_ stock: Bool) throws {
+        try prompt.useLibraryTokenizer(stock)
+        network.useStockAttention(stock)
+        questionCache.removeAll()   // templates hold token ids from the previous tokenizer
+    }
     private let prompt: LayaPrompt
     private let temperatures: [Double]
     private let temperatureBuckets: [String: Double]
@@ -123,7 +129,8 @@ public final class LayaModel: DecisionModel, KernelPathReporting {
     /// Wait for a launched chunk and split its logits per row.
     private func collect(_ output: MLXArray, rows: [LayaPreparedRow]) throws -> [[Float]] {
         let count = max(2, rows.map { $0.markers.count }.max()!)
-        let flat = output.asArray(Float.self)
+        var flat = output.asArray(Float.self)
+        if OptimizedPathFault.poisons(optimized: optimizedPathActive) { flat[0] = .nan }
         guard flat.allSatisfy(\.isFinite) else { throw LayaError.invalid("Non-finite model outputs; retry with dtype='float32'") }
         return rows.indices.map { Array(flat[($0 * count)..<($0 * count + count)]) }
     }
@@ -135,6 +142,7 @@ public final class LayaModel: DecisionModel, KernelPathReporting {
 
     public func predict(_ items: [Item], _ questions: [Question]) throws -> [ItemResult] {
         guard !questions.isEmpty else { throw LayaError.invalid("questions must be a nonempty object") }
+        try OptimizedPathFault.check(optimized: optimizedPathActive)
         let clock = ContinuousClock(), t0 = clock.now
         let prepared = try questions.map(cachedQuestion)
         let questionCount = prepared.map(\.count).max() ?? 0

@@ -73,7 +73,8 @@ class VonValidationTests(unittest.TestCase):
         self.url = f'http://127.0.0.1:{json.loads(proc.stdout.readline())["port"]}'
         self.proc, self.stderr = proc, stderr
         self.model = 'von-' + version
-        self.assertIn(self.model, self.post('/load', {'model': self.model})['loaded'])
+        # SDK comparisons are f32: request native explicitly (an unset precision loads the recommended 16-bit).
+        self.assertIn(self.model, self.post('/load', {'model': self.model, 'bits': 0})['loaded'])
 
     def post(self, route, obj):
         req = urllib.request.Request(self.url + route, data=json.dumps(obj, ensure_ascii=False).encode(),

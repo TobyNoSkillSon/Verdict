@@ -116,4 +116,29 @@ class PrecisionTests(unittest.TestCase):
         finally:
             verdict.status, verdict._selected_precision = saved
 
+class EngineLabelTests(unittest.TestCase):
+    def test_label_matches_the_app(self):
+        from verdict import engine_label
+        self.assertEqual(engine_label({'engine': 'optimized'}, 'M5 Max'), 'Optimized \u00b7 M5 Max')
+        self.assertEqual(engine_label({'engine': 'optimized'}, None), 'Optimized')
+        self.assertEqual(engine_label({'engine': 'mlx', 'engine_reason': 'tokenizer format not recognised'}, 'M5 Max'), 'MLX')
+        self.assertEqual(engine_label({'optimizations': {'tokenizer': 'fast', 'attention': 'windowed'}}, 'M4'), 'Optimized \u00b7 M4')
+        self.assertEqual(engine_label({'optimizations': {'tokenizer': 'library', 'attention': 'windowed'}}, 'M4'), 'MLX')
+        self.assertEqual(engine_label({'device': 'mlx'}), 'MLX')
+
+    def test_status_line_shows_the_label_and_reason(self):
+        import io, contextlib
+        saved = verdict.status
+        try:
+            verdict.status = lambda: {'port': 1, 'calls': 0, 'last_ms': None, 'memory': {}, 'gpu': {'chip': 'M5 Max'},
+                                      'models': {'laya-english': {'device': 'mlx', 'engine': 'optimized'},
+                                                 'von-1.2': {'device': 'mlx', 'engine': 'mlx', 'engine_reason': 'kernel self-test did not pass on this chip'}}}
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(verdict._main(['status']), 0)
+            self.assertIn('laya-english (Optimized \u00b7 M5 Max)', out.getvalue())
+            self.assertIn('von-1.2 (MLX: kernel self-test did not pass on this chip)', out.getvalue())
+        finally:
+            verdict.status = saved
+
 if __name__ == '__main__': unittest.main()

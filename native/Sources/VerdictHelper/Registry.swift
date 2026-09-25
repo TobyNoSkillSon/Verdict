@@ -6,9 +6,16 @@ struct StubLoader: ModelLoader {
     static func load(id: String, snapshot: URL, bits: Int) throws -> DecisionModel { StubModel(id: id) }
 }
 
-private final class StubModel: DecisionModel {
+/// Reports an optimized path (fast tokenizer, windowed attention) so the helper's engine reporting and stock fallback
+/// can be tested without weights; VERDICT_TEST_OPTIMIZED_FAULT makes that path fail like the real models'.
+private final class StubModel: DecisionModel, TokenizerPathReporting, KernelPathReporting, InferencePathSwitching {
     let id: String
     init(id: String) { self.id = id }
+    private var stock = false
+    var tokenizerPath: String { stock ? "library" : "fast" }
+    var kernelPath: String { stock ? "stock (windowed attention switched off after an inference failure)" : "windowed-attention (stub)" }
+    var optimizedPathActive: Bool { !stock }
+    func useStockPath(_ stock: Bool) throws { self.stock = stock }
     var contextLimit: Int { 8192 }
     var residentBytes: Int { 0 }
     func tokenCount(_ item: Item, _ questions: [Question]) throws -> Int {
@@ -16,7 +23,9 @@ private final class StubModel: DecisionModel {
         (questions.map { $0.instructions.split(whereSeparator: \.isWhitespace).count }.max() ?? 0) + 8
     }
     func predict(_ items: [Item], _ questions: [Question]) throws -> [ItemResult] {
-        try items.map { item in
+        try OptimizedPathFault.check(optimized: optimizedPathActive)
+        let poison = OptimizedPathFault.poisons(optimized: optimizedPathActive)
+        return try items.map { item in
             let need = try tokenCount(item, questions)
             if need > contextLimit {
                 return .error("Item needs about \(need) tokens; \(id) accepts \(contextLimit). Shorten it or split it.")
@@ -25,7 +34,7 @@ private final class StubModel: DecisionModel {
             for q in questions {
                 var a = Answer()
                 switch q.kind {
-                case .noul: a.noul = 0.75; a.confidence = 0.75
+                case .noul: a.noul = poison ? .nan : 0.75; a.confidence = 0.75
                 case .choice:
                     a.choice = q.criteria.first?.0
                     a.confidence = 0.9

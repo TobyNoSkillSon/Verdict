@@ -10,6 +10,9 @@ final class Service {
     private var models: [String: DecisionModel] = [:]
     private var order: [String] = []
     private var precision: [String: Int] = [:]
+    /// Models switched to the stock path after an optimized-path failure: id -> the failure. Cleared on unload
+    /// (the switch lasts for that loaded model's lifetime).
+    private var fallbacks: [String: String] = [:]
     private var state: [String: Any]
     private let cacheLimit: Int
     private let shedPercent: Double
@@ -70,6 +73,37 @@ final class Service {
         out["optimized"] = fast
         return out
     }
+    static let stockRequested = ProcessInfo.processInfo.environment["VERDICT_STOCK_PATH"] == "1"
+    /// The engine label's facts: "optimized" when Verdict's optimized path (fast tokenizer + windowed attention that
+    /// passed its load-time self-test on this Mac) serves the model, else "mlx" (stock path) with the reason.
+    /// Neural-accelerator matmuls and precision are reported separately (optimizations.matmul); they do not decide it.
+    static func engine(_ agent: Any, runtime: String, fallback: String?) -> (engine: String, reason: String?) {
+        if let fallback { return ("mlx", "the optimized path failed during inference (\(fallback)); switched to the stock MLX path") }
+        if stockRequested, agent is InferencePathSwitching { return ("mlx", "stock path requested (VERDICT_STOCK_PATH=1)") }
+        var why: [String] = []
+        let tokenizer = (agent as? TokenizerPathReporting)?.tokenizerPath
+        let kernel = (agent as? KernelPathReporting)?.kernelPath
+        if tokenizer == nil && kernel == nil { return ("mlx", "no optimized path for this runtime") }
+        if let t = tokenizer, t != "fast" {
+            why.append(runtime == "von" && ProcessInfo.processInfo.environment["VERDICT_VON_TOKENIZER"] == "library"
+                       ? "library tokenizer requested (VERDICT_VON_TOKENIZER=library)" : "tokenizer format not recognised")
+        }
+        if let k = kernel, !k.hasPrefix("windowed") {
+            why.append(k.contains("self-test failed") ? "kernel self-test did not pass on this chip"
+                       : "windowed attention disabled (VERDICT_\(runtime == "von" ? "VON" : "LAYA")_WINDOW=0)")
+        }
+        return why.isEmpty ? ("optimized", nil) : ("mlx", why.joined(separator: "; "))
+    }
+    /// Recompute a loaded model's optimizations and engine entry in state (after load or a stock fallback).
+    private func describe(_ id: String, _ agent: DecisionModel, runtime: String, bits: Int) {
+        var active = state["models"] as? [String: Any] ?? [:]
+        guard var entry = active[id] as? [String: Any] else { return }
+        entry["optimizations"] = Self.optimizations(agent, runtime: runtime, bits: bits)
+        if let path = (agent as? KernelPathReporting)?.kernelPath { entry["kernel"] = path }
+        let engine = Self.engine(agent, runtime: runtime, fallback: fallbacks[id])
+        entry["engine"] = engine.engine; entry["engine_reason"] = engine.reason ?? NSNull()
+        active[id] = entry; state["models"] = active
+    }
     /// GPU facts for the compatibility indicator. Neural-accelerator matmuls: MLX core 0.32 uses them on
     /// macOS 26.2+ when the GPU generation is >= 17 (Mac) / >= 18 (phone class) — mirrors mlx is_nax_available().
     static let gpu: [String: Any] = {
@@ -83,7 +117,14 @@ final class Service {
         }
         let osOK = os.majorVersion > 26 || (os.majorVersion == 26 && os.minorVersion >= 2)
         let nax = osOK && gen >= (cls == "p" ? 18 : 17)
-        return ["architecture": arch, "generation": gen, "macos": "\(os.majorVersion).\(os.minorVersion).\(os.patchVersion)", "neural_accelerators": nax]
+        // "Apple M5 Max" -> "M5 Max", for the engine label ("Optimized · M5 Max").
+        var size = 0; var chip = ""
+        if sysctlbyname("machdep.cpu.brand_string", nil, &size, nil, 0) == 0, size > 0 {
+            var bytes = [CChar](repeating: 0, count: size)
+            if sysctlbyname("machdep.cpu.brand_string", &bytes, &size, nil, 0) == 0 { chip = String(cString: bytes) }
+        }
+        if chip.hasPrefix("Apple ") { chip = String(chip.dropFirst(6)) }
+        return ["chip": chip, "architecture": arch, "generation": gen, "macos": "\(os.majorVersion).\(os.minorVersion).\(os.patchVersion)", "neural_accelerators": nax]
     }()
 
     /// Disk scan of downloaded snapshots; only load/download/delete change it, so judgements reuse it.
@@ -122,12 +163,14 @@ final class Service {
             // Explicit choice (VERDICT_PRECISION or /load bits; 0 = native) wins; else the catalog's recommended default.
             let bits = precision[id] ?? spec.defaultBits
             let agent = try type.load(id: id, snapshot: snapshot, bits: bits)
+            // VERDICT_STOCK_PATH=1: serve every model on the stock MLX path (diagnosis; the fallback tests' reference).
+            if Self.stockRequested, let paths = agent as? InferencePathSwitching { try paths.useStockPath(true) }
             models[id] = agent; order.append(id)
             var active = state["models"] as? [String: Any] ?? [:]
             active[id] = ["device": "mlx", "load_s": (Date().timeIntervalSince(start) * 10).rounded() / 10, "bits": bits]
-            if let path = (agent as? KernelPathReporting)?.kernelPath, var entry = active[id] as? [String: Any] { entry["kernel"] = path; active[id] = entry }
-            if var entry = active[id] as? [String: Any] { entry["optimizations"] = Self.optimizations(agent, runtime: spec.runtime, bits: bits); active[id] = entry }
-            state["models"] = active; state["loading"] = NSNull(); state["downloading"] = false; writeStatus()
+            state["models"] = active; fallbacks[id] = nil
+            describe(id, agent, runtime: spec.runtime, bits: bits)
+            state["loading"] = NSNull(); state["downloading"] = false; writeStatus()
             return agent
         } catch {
             state["loading"] = NSNull(); state["downloading"] = false
@@ -136,7 +179,7 @@ final class Service {
         }
     }
     private func unload(_ id: String) {
-        models.removeValue(forKey: id); order.removeAll { $0 == id }
+        models.removeValue(forKey: id); order.removeAll { $0 == id }; fallbacks[id] = nil
         var active = state["models"] as? [String: Any] ?? [:]; active.removeValue(forKey: id); state["models"] = active
         Memory.clearCache(); writeStatus()
     }
@@ -244,7 +287,7 @@ final class Service {
             let agent = try load(id), indexes = groups[id]!
             func modelItem(_ index: Int) -> Item { item(items[index], ordered: orderedItems.indices.contains(index) ? orderedItems[index] : nil) }
             let start = Date()
-            let answers = try agent.predict(indexes.map(modelItem), qs)
+            let answers = try predict(agent, id, indexes.map(modelItem), qs)
             guard answers.count == indexes.count else { throw ServiceError("Model returned wrong result count") }
             let accepted = answers.reduce(0) { count, result in
                 if case .answers = result { return count + 1 }
@@ -261,6 +304,44 @@ final class Service {
         writeStatus(refreshInstalled: false, background: true)
         if ProcessInfo.processInfo.environment["VERDICT_PROFILE"] == "1" { FileHandle.standardError.write(Data("profile status-write \(ContinuousClock.now - w)\n".utf8)) }
         return ["results": results]
+    }
+    /// Runs a request. If the optimized path throws or returns non-finite outputs, the request reruns on the stock
+    /// path. When that succeeds the optimized path was at fault: the model stays on stock for the rest of its loaded
+    /// lifetime (status engine "mlx" with the reason) and the switch is logged. When the stock run fails too, the
+    /// request itself was at fault: the model returns to its optimized path and the stock run's error is reported.
+    private func predict(_ agent: DecisionModel, _ id: String, _ items: [Item], _ qs: [Question]) throws -> [ItemResult] {
+        guard let paths = agent as? InferencePathSwitching, paths.optimizedPathActive else { return try Self.finite(agent.predict(items, qs)) }
+        let failure: Error
+        do { return try Self.finite(agent.predict(items, qs)) } catch { failure = error }
+        do { try paths.useStockPath(true) } catch {
+            fputs("{\"stock_fallback\":\"\(id)\",\"unavailable\":\(jsonString(Self.message(error)))}\n", stderr)
+            throw failure
+        }
+        do {
+            let answers = try Self.finite(agent.predict(items, qs))
+            let reason = String(Self.message(failure).prefix(200))
+            fallbacks[id] = reason
+            if let spec = try? catalog.spec(id) {
+                let bits = ((state["models"] as? [String: Any])?[id] as? [String: Any])?["bits"] as? Int ?? 0
+                describe(id, agent, runtime: spec.runtime, bits: bits)
+            }
+            writeStatus(refreshInstalled: false)
+            fputs("{\"stock_fallback\":\"\(id)\",\"reason\":\(jsonString(reason))}\n", stderr)
+            return answers
+        } catch {
+            try? paths.useStockPath(false)
+            throw error
+        }
+    }
+    /// Every answer value must be finite: a NaN is a failed run, never a probability.
+    static func finite(_ results: [ItemResult]) throws -> [ItemResult] {
+        for case .answers(let answers) in results {
+            for (_, a) in answers {
+                let values = [a.confidence, a.noul, a.score].compactMap { $0 } + (a.probabilities?.values ?? [])
+                guard values.allSatisfy(\.isFinite) else { throw ServiceError("Non-finite model outputs") }
+            }
+        }
+        return results
     }
     private func resultObject(_ result: ItemResult, _ id: String, _ ms: Double) -> [String: Any] {
         switch result {

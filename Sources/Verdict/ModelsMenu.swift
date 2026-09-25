@@ -163,11 +163,15 @@ struct ModelTable: View {
             HStack(spacing: 5) {
                 Image(systemName: hot ? "flame.fill" : reference ? "cloud" : "circle").font(.system(size: 10))
                     .foregroundStyle(hot ? Color.orange : .secondary).frame(width: 12)
-                Text(model.name).font(.system(size: 11)).lineLimit(1)
-                if let o = loaded?.optimizations {
-                    Text(o.optimized ? "optimized" : "standard").font(.system(size: 9, weight: .medium))
-                        .foregroundStyle(o.optimized ? Color.green : .secondary).lineLimit(1).fixedSize()
-                        .help(o.summary)
+                // Engine label beneath the name, like the deltas beneath the figures. Both paths work, so both labels
+                // are green; the tooltip says what is active and, on the stock path, why.
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(model.name).font(.system(size: 11)).lineLimit(1)
+                    if let loaded {
+                        Text(engineLabel(loaded, chip: status?.gpu?.chip)).font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(Self.tone(.better, hot: hot)).lineLimit(1)
+                            .help(engineHelp(loaded, chip: status?.gpu?.chip, effectiveBits: effectiveBits(config: loaded.bits ?? 0, native: native(model))))
+                    }
                 }
             }.frame(width: W.model, alignment: .leading)
                 .help(reference ? model.recommendation : "\(model.backbone) · \(model.languages) · \(model.context) tokens. \(model.recommendation) License: \(model.license).")

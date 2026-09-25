@@ -10,8 +10,11 @@ public final class LayaPrompt {
         let qtype: Int
     }
 
-    private let tokenizer: (any Tokenizer)?
+    private var tokenizer: (any Tokenizer)?
     private let fastEncode: ((String, Bool) -> [Int])?
+    /// Stock path: the swift-transformers tokenizer even when the fast one validated (after an optimized-path failure).
+    private var stock = false
+    private let configData: Data, tokenData: Data
     private let clsID: Int, sepID: Int, maskID: Int
     let padID: Int
     private let maskToken: String
@@ -26,6 +29,7 @@ public final class LayaPrompt {
         let dir = snapshot.appendingPathComponent("tokenizer")
         let configData = try Data(contentsOf: dir.appendingPathComponent("tokenizer_config.json"))
         let tokenData = try Data(contentsOf: dir.appendingPathComponent("tokenizer.json"))
+        self.configData = configData; self.tokenData = tokenData
         let config = try JSONSerialization.jsonObject(with: configData) as? [String: Any] ?? [:]
         func text(_ name: String) -> String? {
             config[name] as? String ?? (config[name] as? [String: Any])?["content"] as? String
@@ -56,8 +60,7 @@ public final class LayaPrompt {
             singleSpecialTokenCount = 2
             (clsID, sepID, padID, maskID) = ids; maskToken = text("mask_token")!
         } else {
-            let decoder = JSONDecoder()
-            let loaded = try AutoTokenizer.from(tokenizerConfig: decoder.decode(Config.self, from: configData), tokenizerData: decoder.decode(Config.self, from: tokenData))
+            let loaded = try Self.library(configData, tokenData)
             tokenizer = loaded
             fastEncode = nil
             singleSpecialTokenCount = loaded.encode(text: "", addSpecialTokens: true).count
@@ -73,10 +76,27 @@ public final class LayaPrompt {
             (_, padID) = try special("pad_token"); (maskToken, maskID) = try special("mask_token")
         }
     }
-    var hasFastTokenizer: Bool { fastEncode != nil }
+    private static func library(_ configData: Data, _ tokenData: Data) throws -> any Tokenizer {
+        let decoder = JSONDecoder()
+        return try AutoTokenizer.from(tokenizerConfig: decoder.decode(Config.self, from: configData), tokenizerData: decoder.decode(Config.self, from: tokenData))
+    }
+    /// The fast tokenizer serves requests (validated at load and not switched off).
+    var hasFastTokenizer: Bool { fastEncode != nil && !stock }
+    /// Switch to (or back from) the library tokenizer. It is loaded on first use and must agree with the special
+    /// token ids the fast tokenizer resolved; otherwise the switch is refused.
+    func useLibraryTokenizer(_ on: Bool) throws {
+        if on && tokenizer == nil {
+            let loaded = try Self.library(configData, tokenData)
+            guard loaded.convertTokenToId(maskToken) == maskID,
+                  loaded.encode(text: "", addSpecialTokens: true).count - loaded.encode(text: "", addSpecialTokens: false).count == singleSpecialTokenCount
+            else { throw LayaError.invalid("Library tokenizer disagrees with the fast tokenizer's special tokens") }
+            tokenizer = loaded
+        }
+        stock = on
+    }
     public func encode(_ text: String, addSpecialTokens: Bool = false) -> [Int] {
-        fastEncode?(text, addSpecialTokens)
-            ?? tokenizer!.encode(text: text, addSpecialTokens: addSpecialTokens)
+        if !stock, let fastEncode { return fastEncode(text, addSpecialTokens) }
+        return tokenizer!.encode(text: text, addSpecialTokens: addSpecialTokens)
     }
     /// Encode the state once for all of its question rows. Context counting
     /// uses the original text; only sequence construction removes a literal

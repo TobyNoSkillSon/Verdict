@@ -17,15 +17,25 @@ import VerdictCore
         var base = WorkerStatus(); base.port = 1
         base.installed = ["laya-english": InstalledModel(bytes: 842_600_000), "laya-multilingual": InstalledModel(bytes: 643_800_000),
                           "von-1.2": InstalledModel(bytes: 1_580_000_000)]
+        base.gpu = GPUStatus(chip: "M5 Max", neural_accelerators: true)
         let fast = Optimizations(tokenizer: "fast", attention: "windowed", matmul: "neural accelerators", optimized: true)
-        var laya = base; laya.models["laya-english"] = LoadedModel(device: "mlx", load_s: 0.6, bits: 0, optimizations: fast)
-        var von = base; von.models["von-1.2"] = LoadedModel(device: "mlx", load_s: 1.1, bits: 16, optimizations: fast)
+        let stock = Optimizations(tokenizer: "library", attention: "stock", matmul: "neural accelerators", optimized: false)
+        var laya = base; laya.models["laya-english"] = LoadedModel(device: "mlx", load_s: 0.6, bits: 0, optimizations: fast, engine: "optimized")
+        var von = base; von.models["von-1.2"] = LoadedModel(device: "mlx", load_s: 1.1, bits: 16, optimizations: fast, engine: "optimized")
+        var fallback = base
+        fallback.models["laya-english"] = LoadedModel(device: "mlx", load_s: 0.6, bits: 0, optimizations: stock, engine: "mlx",
+            engine_reason: "the optimized path failed during inference (Non-finite model outputs); switched to the stock MLX path")
         // Selections are config bits (0 = native); models without one show their recommended precision.
         let states: [(String, WorkerStatus, [String: Int])] = [
             ("nothing-loaded", base, [:]),
-            ("laya-16-loaded-8-selected", laya, ["laya-english": 8]),
+            ("laya-english-loaded", laya, [:]),
             ("von-16-loaded-32-selected", von, ["von-1.2": 0]),
+            ("laya-english-mlx-fallback", fallback, [:]),
         ]
+        // Tooltips are not visible in a PNG: write the engine tooltips next to the renders.
+        let help = states.flatMap { name, status, _ in status.models.sorted { $0.key < $1.key }.map { id, m in
+            "\(name) / \(id): \(engineLabel(m, chip: status.gpu?.chip))\n\(engineHelp(m, chip: status.gpu?.chip, effectiveBits: m.bits == 0 ? (id.hasPrefix("von") ? 32 : 16) : m.bits ?? 16))\n" } }
+        try? help.joined(separator: "\n").write(to: directory.appendingPathComponent("engine-tooltips.txt"), atomically: true, encoding: .utf8)
         render(states, 0)
     }
 

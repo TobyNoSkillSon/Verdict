@@ -271,7 +271,60 @@ public struct LoadedModel: Codable, Equatable {
     public var load_s: Double
     public var bits: Int?
     public var optimizations: Optimizations?
-    public init(device: String, load_s: Double, bits: Int? = nil, optimizations: Optimizations? = nil) { self.device = device; self.load_s = load_s; self.bits = bits; self.optimizations = optimizations }
+    /// "optimized" (Verdict's fast tokenizer + windowed attention, self-tested at load) or "mlx" (stock path).
+    public var engine: String?
+    /// Why the model is on the stock path (nil when optimized).
+    public var engine_reason: String?
+    public init(device: String, load_s: Double, bits: Int? = nil, optimizations: Optimizations? = nil, engine: String? = nil, engine_reason: String? = nil) {
+        self.device = device; self.load_s = load_s; self.bits = bits; self.optimizations = optimizations; self.engine = engine; self.engine_reason = engine_reason
+    }
+    /// True on Verdict's optimized path. Helpers before the engine field: fast tokenizer and windowed attention.
+    public var optimizedEngine: Bool {
+        if let engine { return engine == "optimized" }
+        guard let o = optimizations else { return false }
+        return o.tokenizer == "fast" && o.attention == "windowed"
+    }
+}
+
+/// GPU facts from the helper (/status gpu).
+public struct GPUStatus: Codable, Equatable {
+    public var chip: String?
+    public var neural_accelerators: Bool?
+    public init(chip: String? = nil, neural_accelerators: Bool? = nil) { self.chip = chip; self.neural_accelerators = neural_accelerators }
+}
+
+/// The engine label next to a hot model: "Optimized · M5 Max" on Verdict's optimized path, else "MLX" (stock path).
+/// Both work; the label says which path answers. client/verdict.py `engine_label` mirrors it.
+public func engineLabel(_ model: LoadedModel, chip: String?) -> String {
+    guard model.optimizedEngine else { return "MLX" }
+    guard let chip, !chip.isEmpty else { return "Optimized" }
+    return "Optimized \u{00b7} " + chip
+}
+
+/// Tooltip for the engine label: what is active (tokenizer, attention, neural-accelerator matmuls, precision) and,
+/// on the stock path, why.
+public func engineHelp(_ model: LoadedModel, chip: String?, effectiveBits bits: Int) -> String {
+    let o = model.optimizations
+    var lines: [String] = []
+    if model.optimizedEngine {
+        lines.append("Verdict's optimized path, self-tested at load on this Mac" + (chip.map { " (\($0))" } ?? "") + ".")
+    } else {
+        lines.append("Stock MLX path: the same model without Verdict's optimizations; slower." + (model.engine_reason.map { " Why: \($0)." } ?? ""))
+    }
+    if let t = o?.tokenizer { lines.append("Tokenizer: " + (t == "fast" ? "Verdict fast tokenizer" : "swift-transformers (library)")) }
+    if let a = o?.attention { lines.append("Attention: " + (a == "windowed" ? "windowed kernel (self-test passed)" : "stock MLX attention")) }
+    if let m = o?.matmul {
+        let text: String
+        switch m {
+        case "neural accelerators": text = "GPU neural accelerators"
+        case "standard GPU": text = "regular GPU path (neural accelerators need an M5-class GPU and macOS 26.2+)"
+        case "f32 (by design)": text = "regular GPU path (f32; neural accelerators run 16-bit only)"
+        default: text = "regular GPU path (\(m.replacingOccurrences(of: " (regular GPU path)", with: "")) quantized weights)"
+        }
+        lines.append("Matmuls: " + text)
+    }
+    lines.append("Precision: \(bits)-bit")
+    return lines.joined(separator: "\n")
 }
 
 public struct InstalledModel: Codable, Equatable {
@@ -295,6 +348,7 @@ public struct WorkerStatus: Codable, Equatable {
     public var memory: [String: Double]? = nil
     public var idle_minutes: Int? = nil
     public var error: String? = nil
+    public var gpu: GPUStatus? = nil
     public var updated: Double = 0
     public init() {}
 }

@@ -282,6 +282,19 @@ def _precisions(entry, native):
     return default, {entry.get('default_bits') or 16: entry}
 
 
+def engine_label(loaded, chip=None):
+    """The app's engine label for a loaded model (/status models[id]): 'Optimized · <chip>' on Verdict's optimized
+    path (fast tokenizer + windowed attention, self-tested at load), else 'MLX' (the stock path; engine_reason says why).
+    Mirrors VerdictCore.engineLabel."""
+    engine = loaded.get('engine')
+    if engine is None:   # helpers before the engine field
+        o = loaded.get('optimizations') or {}
+        engine = 'optimized' if o.get('tokenizer') == 'fast' and o.get('attention') == 'windowed' else 'mlx'
+    if engine != 'optimized':
+        return 'MLX'
+    return f'Optimized \u00b7 {chip}' if chip else 'Optimized'
+
+
 def _eff(bits, native):
     return native if not bits else int(bits)
 
@@ -500,12 +513,10 @@ def _main(argv):
     try:
         if cmd == 'status':
             s = status()
+            chip = (s.get('gpu') or {}).get('chip')
             def opt(v):
-                o = v.get('optimizations')
-                if not o: return v['device']
-                if o.get('optimized'): return f"{v['device']}, optimized"
-                slow = [k for k, want in (('tokenizer', 'fast'), ('attention', 'windowed'), ('matmul', 'neural accelerators')) if k in o and o[k] != want]
-                return f"{v['device']}, standard: {'/'.join(slow)}"
+                label = engine_label(v, chip)
+                return label + (f": {v['engine_reason']}" if label == 'MLX' and v.get('engine_reason') else '')
             hot = ', '.join(f"{k} ({opt(v)})" for k, v in s['models'].items()) or 'none loaded'
             mem = s.get('memory', {})
             print(f"port {s['port']}  models: {hot}  calls: {s['calls']}  last: {s['last_ms']} ms  memory: {mem.get('rss_mb', 0):.0f} MB rss, {mem.get('mlx_active_mb', 0):.0f} MB weights"

@@ -51,7 +51,15 @@ final class VonNetwork {
     private var graph: VonGraph!
     let residentBytes: Int
     /// Active attention path for the sliding-window layers, reported in /status.
-    private(set) var kernelPath = "stock"
+    var kernelPath: String { stockForced && windowedValidated ? "stock (windowed attention switched off after an inference failure)" : validatedKernelPath }
+    private var validatedKernelPath = "stock"
+    /// Windowed attention passed its load-time self-test.
+    private(set) var windowedValidated = false
+    private var stockForced = false
+    /// True while long rows take the windowed path.
+    var windowedActive: Bool { windowedValidated && !stockForced }
+    /// Stock attention (true) or back to the validated windowed path (false).
+    func useStockAttention(_ on: Bool) { stockForced = on; graph.windowed = windowedActive }
 
     init(snapshot: URL, id: String, bits: Int) throws {
         config = try LayaEncoderConfiguration(data: Data(contentsOf: snapshot.appendingPathComponent("config.json")))
@@ -117,9 +125,10 @@ final class VonNetwork {
             let heads = config.num_attention_heads
             if let diff = VonWindowedAttention.selfTest(half: config.local_attention / 2, heads: heads, dims: config.hidden_size / heads, independent: independent, dtype: dtype) {
                 windowed = true
-                kernelPath = String(format: "windowed-attention%@ (L>=%d, self-test max diff %.1e)", independent ? " + option tail" : "", Self.windowMinimum, diff)
-            } else { kernelPath = "stock (windowed-attention self-test failed)" }
+                validatedKernelPath = String(format: "windowed-attention%@ (L>=%d, self-test max diff %.1e)", independent ? " + option tail" : "", Self.windowMinimum, diff)
+            } else { validatedKernelPath = "stock (windowed-attention self-test failed)" }
         }
+        windowedValidated = windowed
         // MLX's compiled closure/cache retained ~1.58 GB of this model's
         // allocations after deinit. The ordinary graph has identical fixture
         // outputs and releases the weights immediately on /unload.
@@ -184,7 +193,7 @@ private final class VonGraph {
     let arrays: [String: MLXArray]
     let linears: [String: Linear]
     let dtype: DType
-    let windowed: Bool
+    var windowed: Bool
     let half: Int
     init(config: LayaEncoderConfiguration, independent: Bool, arrays: [String: MLXArray], linears: [String: Linear], dtype: DType, windowed: Bool) {
         self.config = config; self.independent = independent; self.arrays = arrays; self.linears = linears

@@ -314,6 +314,15 @@ class HelperTests(unittest.TestCase):
                                        headers={'Content-Type': 'application/json'}), timeout=5).close()
                 proc.wait(timeout=10); proc.stdout.close(); proc.stderr.close()
 
+    def test_engine_label_facts(self):
+        """/status carries the chip for the label and a per-model engine ('optimized' | 'mlx') with its reason."""
+        status = self.call('GET', '/status')
+        chip = status['gpu']['chip']
+        self.assertTrue(chip and not chip.startswith('Apple '), chip)
+        laya = status['models']['laya-english']
+        self.assertEqual((laya['engine'], laya['engine_reason']), ('optimized', None))
+        self.assertEqual((laya['optimizations']['tokenizer'], laya['optimizations']['attention']), ('fast', 'windowed'))
+
     def test_invalid_precision_keeps_model(self):
         """Review #8: a refused precision neither unloads the working model nor sticks for later loads."""
         for model, bad in [('laya-english', 32), ('laya-english', 7), ('von-1.2', 7)]:
@@ -331,6 +340,68 @@ class HelperTests(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError) as cm:
             self.call('POST', '/load', {'model': 'nope', 'bits': 8})
         self.assertEqual(cm.exception.code, 400); cm.exception.close()
+
+
+class StockFallbackTests(unittest.TestCase):
+    """The optimized path failing during inference (forced by the test-only VERDICT_TEST_OPTIMIZED_FAULT hook): the
+    request reruns on the stock path and succeeds, the model stays on stock (engine 'mlx' + reason) until it is
+    reloaded, and the switch is logged."""
+    def helper(self, fault, extra=None):
+        support = tempfile.mkdtemp(prefix='verdict-fallback-')
+        self.addCleanup(shutil.rmtree, support, True)
+        env = dict(os.environ, VERDICT_SUPPORT_DIR=support, VERDICT_STUB_MODELS='1', VERDICT_PRELOAD='', VERDICT_PORT='0',
+                   HF_HUB_CACHE=str(Path(support) / 'hub'), VERDICT_CATALOG=str(ROOT / 'Resources/models.json'),
+                   VERDICT_TEST_OPTIMIZED_FAULT=fault, **(extra or {}))
+        proc = subprocess.Popen([str(BINARY)], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        port = json.loads(proc.stdout.readline())['port']
+        def call(path, body=None):
+            request = urllib.request.Request(f'http://127.0.0.1:{port}{path}', method='POST' if body is not None else 'GET',
+                                             data=json.dumps(body).encode() if body is not None else None,
+                                             headers={'Content-Type': 'application/json'})
+            with urllib.request.urlopen(request, timeout=10) as response:
+                return json.load(response)
+        def stop():
+            if proc.poll() is None:
+                call('/quit', {}); proc.wait(timeout=10)
+            log = proc.stderr.read(); proc.stdout.close(); proc.stderr.close()
+            return log
+        return call, stop
+
+    def test_failure_reruns_on_stock_and_label_flips(self):
+        questions = {'n': {'type': 'noul', 'instructions': 'Is it?'}, 'c': {'type': 'choice', 'instructions': 'Which?', 'criteria': ['a', 'b']}}
+        for fault in ('nan', 'throw'):
+            for model in ('laya-english', 'von-1.2'):
+                with self.subTest(fault=fault, model=model):
+                    call, stop = self.helper(fault)
+                    call('/load', {'model': model})
+                    self.assertEqual(call('/status')['models'][model]['engine'], 'optimized')
+                    got = call('/judge', {'items': ['one', 'two'], 'questions': questions, 'model': model})['results']
+                    self.assertEqual([r['answers']['n']['noul'] for r in got], [0.75, 0.75])     # the stock path's answers
+                    self.assertEqual([r['answers']['c']['choice'] for r in got], ['a', 'a'])
+                    entry = call('/status')['models'][model]
+                    self.assertEqual(entry['engine'], 'mlx')
+                    self.assertIn('failed during inference', entry['engine_reason'])
+                    self.assertEqual((entry['optimizations']['tokenizer'], entry['optimizations']['attention']), ('library', 'stock'))
+                    # Stays on stock for the model's lifetime: later requests succeed without another switch.
+                    self.assertEqual(call('/judge', {'items': ['three'], 'questions': questions, 'model': model})['results'][0]['answers']['n']['noul'], 0.75)
+                    # A reload is a new model: optimized again (and here it fails again, so it falls back again).
+                    call('/unload', {'model': model}); call('/load', {'model': model})
+                    self.assertEqual(call('/status')['models'][model]['engine'], 'optimized')
+                    call('/judge', {'items': ['four'], 'questions': questions, 'model': model})
+                    self.assertEqual(call('/status')['models'][model]['engine'], 'mlx')
+                    log = stop()
+                    self.assertEqual(log.count(f'"stock_fallback":"{model}"'), 2, log)
+
+    def test_no_fault_stays_optimized_and_stock_can_be_requested(self):
+        call, stop = self.helper('')
+        call('/judge', {'items': ['x'], 'questions': {'n': {'type': 'noul', 'instructions': 'Is it?'}}, 'model': 'von-1.2'})
+        self.assertEqual(call('/status')['models']['von-1.2']['engine'], 'optimized')
+        self.assertNotIn('stock_fallback', stop())
+        call, stop = self.helper('', {'VERDICT_STOCK_PATH': '1'})
+        call('/load', {'model': 'laya-english'})
+        entry = call('/status')['models']['laya-english']
+        self.assertEqual((entry['engine'], entry['engine_reason']), ('mlx', 'stock path requested (VERDICT_STOCK_PATH=1)'))
+        stop()
 
 
 if __name__ == '__main__': unittest.main()

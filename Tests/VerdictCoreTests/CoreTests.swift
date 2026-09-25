@@ -201,6 +201,28 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(energyDelta(f32.j_per_1k, base: base.j_per_1k, short: true), Delta("2.9\u{00d7} more", .worse))
     }
 
+    func testEngineLabelAndTooltip() throws {
+        let fast = Optimizations(tokenizer: "fast", attention: "windowed", matmul: "neural accelerators", optimized: true)
+        let optimized = LoadedModel(device: "mlx", load_s: 1, bits: 16, optimizations: fast, engine: "optimized")
+        XCTAssertEqual(engineLabel(optimized, chip: "M5 Max"), "Optimized \u{00b7} M5 Max")
+        XCTAssertEqual(engineLabel(optimized, chip: nil), "Optimized")
+        let help = engineHelp(optimized, chip: "M5 Max", effectiveBits: 16)
+        for part in ["optimized path", "Verdict fast tokenizer", "windowed kernel", "GPU neural accelerators", "Precision: 16-bit"] { XCTAssertTrue(help.contains(part), part) }
+        let stock = Optimizations(tokenizer: "library", attention: "stock", matmul: "f32 (by design)", optimized: false)
+        let mlx = LoadedModel(device: "mlx", load_s: 1, bits: 0, optimizations: stock, engine: "mlx", engine_reason: "kernel self-test did not pass on this chip")
+        XCTAssertEqual(engineLabel(mlx, chip: "M5 Max"), "MLX")
+        let why = engineHelp(mlx, chip: "M5 Max", effectiveBits: 32)
+        for part in ["Stock MLX path", "Why: kernel self-test did not pass on this chip.", "swift-transformers", "stock MLX attention", "f32", "Precision: 32-bit"] { XCTAssertTrue(why.contains(part), part) }
+        // Helpers before the engine field: fast tokenizer + windowed attention = optimized; neural accelerators do not decide it.
+        XCTAssertEqual(engineLabel(LoadedModel(device: "mlx", load_s: 1, optimizations: Optimizations(tokenizer: "fast", attention: "windowed", matmul: "standard GPU", optimized: false)), chip: "M4"), "Optimized \u{00b7} M4")
+        XCTAssertEqual(engineLabel(LoadedModel(device: "mlx", load_s: 1), chip: "M4"), "MLX")
+        // /status decodes the chip and the engine fields.
+        let json = #"{"installed":{},"calls":0,"items":0,"started":0,"updated":0,"gpu":{"chip":"M5 Max","architecture":"applegpu_g17s","neural_accelerators":true,"generation":17},"models":{"von-1.2":{"device":"mlx","load_s":0.6,"bits":16,"engine":"mlx","engine_reason":"tokenizer format not recognised"}}}"#
+        let status = try JSONDecoder().decode(WorkerStatus.self, from: Data(json.utf8))
+        XCTAssertEqual(status.gpu?.chip, "M5 Max")
+        XCTAssertEqual(status.models["von-1.2"]?.engine_reason, "tokenizer format not recognised")
+    }
+
     func testReloadStateWithRecommendedDefault() {
         // Von, nothing explicit: selection is the recommended 16 (config bits 16). The helper loaded its default 16.
         let selected = configBits(effective: selectedBits(config: nil, recommended: 16, native: 32), native: 32)

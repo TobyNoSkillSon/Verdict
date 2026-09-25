@@ -78,7 +78,15 @@ final class LayaNetwork {
     private var linears: [String: Linear] = [:]
     private(set) var residentBytes = 0
     /// Active attention path for the sliding-window layers, reported in /status.
-    private(set) var kernelPath = "stock"
+    var kernelPath: String { stockForced && windowedValidated ? "stock (windowed attention switched off after an inference failure)" : validatedKernelPath }
+    private var validatedKernelPath = "stock"
+    /// Windowed attention passed its load-time self-test.
+    private(set) var windowedValidated = false
+    private var stockForced = false
+    /// True while sliding-window layers take the windowed path.
+    var windowedActive: Bool { windowedValidated && !stockForced }
+    /// Stock attention (true) or back to the validated windowed path (false).
+    func useStockAttention(_ on: Bool) { stockForced = on; graph.windowed = windowedActive }
     private var graph: LayaGraph!
 
     init(snapshot: URL, config: LayaEncoderConfiguration, headLayers: Int, bits: Int) throws {
@@ -132,10 +140,11 @@ final class LayaNetwork {
             let heads = config.num_attention_heads
             if let diff = LayaWindowedAttention.selfTest(half: config.local_attention / 2, heads: heads, dims: config.hidden_size / heads) {
                 windowed = true
-                kernelPath = String(format: "windowed-attention (L>=%d, self-test max diff %.1e)", LayaWindowedAttention.minimumLength, diff)
-            } else { kernelPath = "stock (windowed-attention self-test failed)" }
+                validatedKernelPath = String(format: "windowed-attention (L>=%d, self-test max diff %.1e)", LayaWindowedAttention.minimumLength, diff)
+            } else { validatedKernelPath = "stock (windowed-attention self-test failed)" }
             Memory.clearCache()   // self-test buffers; not weights
         }
+        windowedValidated = windowed
         graph = LayaGraph(config: config, headLayers: headLayers, arrays: arrays, linears: linears, windowed: windowed)
     }
 
@@ -165,7 +174,7 @@ private final class LayaGraph {
     let headLayers: Int
     let arrays: [String: MLXArray]
     let linears: [String: Linear]
-    let windowed: Bool
+    var windowed: Bool
     init(config: LayaEncoderConfiguration, headLayers: Int, arrays: [String: MLXArray], linears: [String: Linear], windowed: Bool) {
         self.config = config; self.headLayers = headLayers; self.arrays = arrays; self.linears = linears; self.windowed = windowed
     }

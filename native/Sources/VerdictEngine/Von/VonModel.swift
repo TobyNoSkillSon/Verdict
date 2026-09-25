@@ -17,12 +17,15 @@ public struct VonPreparedRow: Sendable {
     public init(ids: [Int], markers: [Int]) { self.ids = ids; self.markers = markers }
 }
 
-public final class VonModel: DecisionModel, KernelPathReporting {
+public final class VonModel: DecisionModel, KernelPathReporting, InferencePathSwitching {
     public let id: String
     public let contextLimit = 8192
     public var residentBytes: Int { network.residentBytes }
     public var kernelPath: String { network.kernelPath }
-    private let tokenizer: (any Tokenizer)?
+    private var tokenizer: (any Tokenizer)?
+    /// Stock path: the swift-transformers tokenizer even when the fast one validated (after an optimized-path failure).
+    private var stockTokenizer = false
+    private let configData: Data, tokenData: Data
     /// FastByteBPE when Von's tokenizer.json has the validated ModernBERT shape (zero mismatches vs the SDK's
     /// transformers tokenizer on 141k texts, native/perf/tokcheck.py --model von-1.x); swift-transformers otherwise.
     private let fastEncode: ((String, Bool) -> [Int])?
@@ -67,6 +70,7 @@ public final class VonModel: DecisionModel, KernelPathReporting {
         self.id = id
         let configData = try Data(contentsOf: snapshot.appendingPathComponent("tokenizer_config.json"))
         let tokenData = try Data(contentsOf: snapshot.appendingPathComponent("tokenizer.json"))
+        self.configData = configData; self.tokenData = tokenData
         let config = try JSONSerialization.jsonObject(with: configData) as? [String: Any] ?? [:]
         guard let mask = config["mask_token"] as? String, let sep = config["sep_token"] as? String else { throw VonError.invalid("Von tokenizer is missing MASK/SEP") }
         if !Self.libraryTokenizer, mask.utf8.elementsEqual("[MASK]".utf8), sep.utf8.elementsEqual("[SEP]".utf8),
@@ -75,8 +79,7 @@ public final class VonModel: DecisionModel, KernelPathReporting {
             fastEncode = { fast.encode($0, addSpecialTokens: $1) }
             maskID = id
         } else {
-            let decoder = JSONDecoder()
-            let loaded = try AutoTokenizer.from(tokenizerConfig: decoder.decode(Config.self, from: configData), tokenizerData: decoder.decode(Config.self, from: tokenData))
+            let loaded = try Self.library(configData, tokenData)
             guard let id = loaded.convertTokenToId(mask) else { throw VonError.invalid("Von tokenizer is missing MASK/SEP") }
             tokenizer = loaded; fastEncode = nil; maskID = id
         }
@@ -92,9 +95,27 @@ public final class VonModel: DecisionModel, KernelPathReporting {
         guard (cdata["independent_options"] as? Bool ?? false) == (id == "von-1.2") else { throw VonError.invalid("Von independent-options flag disagrees with catalog version") }
         network = try VonNetwork(snapshot: snapshot, id: id, bits: bits)
     }
-    var hasFastTokenizer: Bool { fastEncode != nil }
+    private static func library(_ configData: Data, _ tokenData: Data) throws -> any Tokenizer {
+        let decoder = JSONDecoder()
+        return try AutoTokenizer.from(tokenizerConfig: decoder.decode(Config.self, from: configData), tokenizerData: decoder.decode(Config.self, from: tokenData))
+    }
+    /// The fast tokenizer serves requests (validated at load and not switched off).
+    var hasFastTokenizer: Bool { fastEncode != nil && !stockTokenizer }
+    public var optimizedPathActive: Bool { hasFastTokenizer || network.windowedActive }
+    /// Stock path: library tokenizer (loaded on first use; must resolve the same mask id) and stock attention.
+    public func useStockPath(_ stock: Bool) throws {
+        if stock && tokenizer == nil {
+            let loaded = try Self.library(configData, tokenData)
+            guard loaded.convertTokenToId(maskToken) == maskID else { throw VonError.invalid("Library tokenizer disagrees with the fast tokenizer's mask id") }
+            tokenizer = loaded
+        }
+        stockTokenizer = stock
+        network.useStockAttention(stock)
+        questionCache.removeAll()   // cached null rows hold token ids from the previous tokenizer
+    }
     public func encode(_ text: String, addSpecialTokens: Bool = true) -> [Int] {
-        fastEncode?(text, addSpecialTokens) ?? tokenizer!.encode(text: text, addSpecialTokens: addSpecialTokens)
+        if !stockTokenizer, let fastEncode { return fastEncode(text, addSpecialTokens) }
+        return tokenizer!.encode(text: text, addSpecialTokens: addSpecialTokens)
     }
     private func state(_ item: Item) -> String {
         // SDK _format_state: a str is used as is (even when it looks like JSON); a dict enumerates its
@@ -159,6 +180,7 @@ public final class VonModel: DecisionModel, KernelPathReporting {
         }
         guard rows.allSatisfy({ !$0.markers.isEmpty }) else { throw VonError.invalid("Von rows need option markers") }
         let values = network.collect(network.launch(rows.map(\.ids), rows.map(\.markers), length: paddedLength(rows)), markers: rows.map(\.markers))
+        guard values.allSatisfy({ $0.allSatisfy(\.isFinite) }) else { throw VonError.invalid("Non-finite model outputs") }
         if Self.trace { log(rows, values) }
         return values
     }
@@ -263,6 +285,7 @@ public final class VonModel: DecisionModel, KernelPathReporting {
 
     public func predict(_ items: [Item], _ questions: [Question]) throws -> [ItemResult] {
         guard !questions.isEmpty else { throw VonError.invalid("Questions must be nonempty") }
+        try OptimizedPathFault.check(optimized: optimizedPathActive)
         let clock = ContinuousClock(), t0 = clock.now
         var results = [Answers](repeating: Answers(), count: items.count)
         var errors: [Int:String] = [:]
@@ -298,9 +321,14 @@ public final class VonModel: DecisionModel, KernelPathReporting {
         }
         if !current.isEmpty { chunks.append(current) }
         var padded = 0
+        var nonFinite = false
+        let poison = OptimizedPathFault.poisons(optimized: optimizedPathActive)
         func finish(_ slots: [Int], _ output: MLXArray) {
             let chunk = slots.map { rows[$0] }
-            let values = network.collect(output, markers: chunk.map(\.markers))
+            var values = network.collect(output, markers: chunk.map(\.markers))
+            if poison, !values.isEmpty, !values[0].isEmpty { values[0][0] = .nan }
+            // Non-finite logits fail the request (as Laya), never become NaN probabilities.
+            if !values.allSatisfy({ $0.allSatisfy(\.isFinite) }) { nonFinite = true; return }
             if Self.trace { log(chunk, values) }
             for (r,lg) in values.enumerated() {
                 let (i,q) = meta[slots[r]]
@@ -321,6 +349,7 @@ public final class VonModel: DecisionModel, KernelPathReporting {
             if !Self.doubleBuffer { finish(slots, output) }
         }
         if let (previous, previousOutput) = inflight { finish(previous, previousOutput) }
+        if nonFinite { throw VonError.invalid("Non-finite model outputs") }
         if Self.profile {
             let t2 = clock.now, real = rows.reduce(0) { $0 + $1.ids.count }
             func ms(_ d: Duration) -> String { String(format: "%.1f", Double(d.components.attoseconds) / 1e15 + Double(d.components.seconds) * 1000) }
