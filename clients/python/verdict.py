@@ -17,6 +17,10 @@
 Question shapes follow the TypeSafe/Laya convention (same names, same fields), so questions written for Jev work
 here unchanged. Plain dicts are still accepted.
 
+For one state at a time, Verdict serves TypeSafe's System One API: use the official SDK (`pip install typesafe-sdk`)
+with `base_url=verdict.base_url()` and any API key. This module is the local convenience layer: batches (`judge`,
+Verdict's /v1/judge extension), `gate`, `calibrate`, model management, and starting the app.
+
 A thin client of the Verdict app's local HTTP API (docs/API.md); starts the app if it is not running. Standard
 library only. The command line is the `verdict` binary that ships with the app.
 """
@@ -264,6 +268,12 @@ def ensure_running(wait=90):
     raise VerdictError('Verdict did not start in time')
 
 
+def base_url():
+    """The local System One API's base URL (http://127.0.0.1:<port>), launching the app if needed: pass it to the
+    TypeSafe SDK as base_url. The port changes when the helper restarts; call this again after a connection error."""
+    return f'http://127.0.0.1:{ensure_running()}'
+
+
 def status():
     """GET /v1/status: port, loaded models, memory, Keep Hot, recent unloads, the catalog."""
     ensure_running()
@@ -281,8 +291,14 @@ def models():
       "links": {"upstream", "weights", "runtime", ...}, "recommendation"}]
     Links point at Hugging Face / GitHub model cards so an agent can read the specifics."""
     ensure_running()
-    out = _call('GET', '/v1/models')['models']
+    reply = _call('GET', '/v1/models')
+    if not isinstance(reply, dict) or not isinstance(reply.get('models'), list):
+        raise VerdictError('Unexpected answer from Verdict: no models list')
+    # /v1/models is TypeSafe's listing: the `auto` alias, then local models whose `name` is the id (the human name is
+    # `display_name`), plus hosted `references`. Here: the catalog models as before, `name` the human name.
+    out = [m for m in reply['models'] + reply.get('references', []) if isinstance(m, dict) and 'id' in m]
     for m in out:   # highest precision first, as the table shows them
+        m['name'] = m.get('display_name', m.get('name'))
         m['benchmarks'] = dict(sorted(m['benchmarks'].items(), key=lambda kv: -int(kv[0]) if kv[0].isdigit() else 0))
     return out
 
