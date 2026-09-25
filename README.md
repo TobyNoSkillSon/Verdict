@@ -219,14 +219,14 @@ The recorded benchmark runs a 25-task suite (topic, intent, emotion, review star
 | Laya · Typed decisions | 421M | 8k | English | 16 | 55.4% | 0.117 | 8.2 ms | 607/s | 422 J/1k | 1.36 GB |
 | **Laya · Multilingual** | 322M | 8k | 100+ | 16 | 53.7% | 0.252 ⚠ | 5.4 ms | 1,406/s | 183 J/1k | 1.06 GB |
 | Von · 1.2 | 395M | 8k | English | 32 | 52.7% | 0.093 | 15.9 ms | 219/s | 1,100 J/1k | 2.23 GB |
-| Von · 1.1 | 395M | 8k | English | 32 | 48.0% | 0.155 | 15.2 ms | 228/s | 1,050 J/1k | 2.24 GB |
+| Von · 1.1 | 395M | 2k | English | 32 | 48.0% | 0.155 | 15.2 ms | 228/s | 1,050 J/1k | 2.24 GB |
 
 ⚠ Laya Multilingual's confidence is poorly calibrated in these results (the models table flags calibration error above 0.25). Do not treat its probabilities as reliable thresholds without validation on your data. Von loads at 16-bit by default: in this suite it is 2× faster, uses ~0.8 GB less and about a third of the energy, with accuracy within 0.1 points of f32. It moves near-tie probabilities by up to ~0.08 against the Von SDK; select 32 when you need SDK-exact probabilities. Jev · TypeSafe (hosted, 64k context) is a reference only: its published figures (69.5% accuracy, 0.246 calibration error, 256 ms) cover two sets (AG News, DAIR Emotion), are not measured here and are not comparable with the table; Verdict cannot load or call it.
 
 <details>
 <summary>Context, precision and limits</summary>
 
-**Context.** Laya and Von run at the encoder's real limit of 8,192 tokens (Laya's shipped config says 512; on 300 long BBC articles with the decisive text after 800 tokens of filler, accuracy was 26% at 512 and 91% at 1,024 and above). Questions count toward the budget. An over-limit item gets its own error in the results — never a truncated judgement — and the rest of the batch is answered.
+**Context.** Laya and Von 1.2 run at the encoder's real limit of 8,192 tokens (Laya's shipped config says 512; on 300 long BBC articles with the decisive text after 800 tokens of filler, accuracy was 26% at 512 and 91% at 1,024 and above). Von 1.1 accepts 2,048 tokens, the `max_position_embeddings` in its checkpoint config; the Von 1.1 SDK overrides that to 8,192 and runs longer items without a check, but the checkpoint was not configured for them. Questions count toward the budget. An over-limit item gets its own error in the results — never a truncated judgement — and the rest of the batch is answered.
 
 **Precision.** Every model loads at its recommended precision unless you pick another: the lowest measured energy per judgement among precisions within 0.5 accuracy points of the model's native precision (ties go to the faster one). Today that is 16-bit for all of them. Laya's native precision is 16-bit (8 and 4 bits save memory, cost up to a point of accuracy and are not faster). Von's native precision is 32-bit f32, the only setting that matches the Von SDK within 0.0001; it is one selection away, as are 8 and 4 bits. Select a precision in the table to see its numbers; **Reload** applies it to a loaded model, and the choice is remembered.
 
