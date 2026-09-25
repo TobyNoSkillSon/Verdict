@@ -4,7 +4,7 @@
 
 <h1 align="center">Verdict</h1>
 
-<p align="center">A local runtime for System One models, kept ready for your coding agent.</p>
+<p align="center">A local System One server: same API as Jev, your models on your Mac.</p>
 
 <p align="center">
   <a href="#install"><img src="docs/images/install.svg" alt="Install Verdict" width="152" height="42"></a>
@@ -14,6 +14,7 @@
 
 <p align="center">
   <a href="#system-one-models">System One models</a> ·
+  <a href="#switch-from-jev">Switch from Jev</a> ·
   <a href="#for-your-agent">For your agent</a> ·
   <a href="#models">Models</a> ·
   <a href="#the-app">The app</a> ·
@@ -23,9 +24,9 @@
   <a href="docs/API.md">API</a>
 </p>
 
-**Verdict is a macOS menu-bar app that keeps small decision models loaded for coding agents.** An agent sends a batch of items and a few typed questions — yes/no, pick one of these options, where on this rubric — and gets back a calibrated probability for every answer in milliseconds per item. It filters, sorts and routes in code, then reads only what matters.
+**Verdict is a local System One server: same API as Jev, your models on your Mac.** It serves TypeSafe's System One API — the one Jev answers at `api.typesafe.ai` and OpenRouter — from open decision models running natively on MLX, so an app built on Jev or the official SDKs switches to Verdict by changing its base URL and model name. Send a state and typed questions — yes/no, pick one of these options, where on this rubric — and get a calibrated probability for every answer in milliseconds, with nothing leaving the Mac.
 
-Everything runs on your Mac, natively on MLX. You install Verdict once, give your agent the included skill, and the app stays out of the way.
+It is also a menu-bar app that keeps those models loaded for coding agents. An agent sends a batch of items with the same questions, then filters, sorts and routes in code and reads only what matters. You install Verdict once, give your agent the included skill, and the app stays out of the way.
 
 <p align="center">
   <img src="docs/images/models.png" alt="Verdict's models table: Von 1.2 hot on the optimized path at 16-bit, with 32-bit selected and its accuracy, speed and energy shown against the recommended precision" width="900">
@@ -39,7 +40,50 @@ Everything runs on your Mac, natively on MLX. You install Verdict once, give you
 - **Probabilities, not prose.** Every answer comes with a probability, trained to be calibrated. Nothing is generated, so there is nothing to parse and nothing to hallucinate.
 - **One forward pass.** All questions about an item are answered together, in milliseconds.
 
-Verdict is a runtime for this class: the open System One models that run well on a Mac, loaded once, behind one interface.
+Verdict is a runtime for this class: the open System One models that run well on a Mac, loaded once, behind the System One API.
+
+## Switch from Jev
+
+Point the client at Verdict, pass any key (none is checked), and name a local model — `auto` routes English to Laya English and anything else to Laya Multilingual. `verdict url` prints the base URL; it changes when Verdict restarts.
+
+```python
+# pip install typesafe-sdk
+import sys, os; sys.path.insert(0, os.path.expanduser("~/.local/share/verdict"))
+import verdict
+from typesafe_sdk import TypeSafeClient, Noul, Choice, Score
+
+client = TypeSafeClient(api_key="local", base_url=verdict.base_url(), model="auto")   # was: api_key=TYPESAFE_KEY, model="jev-latest"
+result = client.system_one("I was charged twice. Please help ASAP.", {
+    "billing": Noul(instructions="Is this about billing?"),
+    "tone": Choice(instructions="What is the tone?", criteria={"calm": None, "angry": None}),
+    "urgency": Score(instructions="How urgent is this?", criteria=["low", "medium", "high"]),
+})
+print(result.nouls["billing"].noul, result.choices["tone"].choice, result.scores["urgency"].score)
+```
+
+```js
+// npm install @typesafe-ai/sdk;  run with TYPESAFE_BASE_URL=$(verdict url) TYPESAFE_API_KEY=local
+import { TypeSafeClient, noul } from "@typesafe-ai/sdk";
+const client = new TypeSafeClient({ defaultModel: "auto" });
+const result = await client.systemOne({ state: "I was charged twice.", questions: { billing: noul("Is this about billing?") } });
+console.log(result.answers.billing.noul);
+```
+
+```sh
+curl -s "$(verdict url)/v1/systemone" -H 'Content-Type: application/json' \
+  -d '{"model": "auto", "state": "I was charged twice.", "questions": {"billing": {"type": "noul", "instructions": "Is this about billing?"}}}'
+# {"answers": {"billing": {"noul": 0.9143, "type": "noul"}}, "model": "laya-english", "usage": {"input_tokens": 36, "output_tokens": 0}}
+```
+
+```swift
+import VerdictKit                                        // this package's library product
+let client = SystemOneClient()                           // finds or launches the local Verdict
+let result = try await client.systemOne(state: "I was charged twice.", questions: ["billing": .noul("Is this about billing?")])
+print(result.nouls["billing"]?.noul ?? 0)
+// The same client talks to Jev: SystemOneClient(baseURL: URL(string: "https://api.typesafe.ai")!, apiKey: key, model: "jev-latest")
+```
+
+What differs: the models are smaller and less accurate than Jev on the benchmark below, so check your questions on both; contexts are 8k tokens (2k for Von 1.1); `bits` is an optional extension that picks a model's precision; the first use of a model downloads it. Concurrent requests are merged into shared GPU passes, so many parallel SDK calls run at about 80% of the batch rate. [docs/API.md](docs/API.md#differences-from-jev) has the full list.
 
 ## For your agent
 
@@ -199,7 +243,7 @@ Download the release through the installer, not a browser. A browser adds the qu
 
 ## Using it
 
-Everything talks to one local HTTP API: the app, the `verdict` command, the Python library and the Swift package. [docs/USAGE.md](docs/USAGE.md) covers the menu, the command line and writing questions; [docs/API.md](docs/API.md) documents every endpoint, error and client.
+Everything talks to one local HTTP API: TypeSafe's System One API plus Verdict's batch and management endpoints. The app, the `verdict` command, the Python library and the Swift package are its clients, and so are the TypeSafe SDKs. [docs/USAGE.md](docs/USAGE.md) covers the menu, the command line and writing questions; [docs/API.md](docs/API.md) documents every endpoint, error and client.
 
 **Command line.** `verdict judge` reads JSONL (one JSON value per line; `--field` picks a key from each object) and prints one short line per item, so an agent spends few tokens reading it. `--json` prints every probability as JSON lines instead.
 
@@ -215,24 +259,23 @@ $ verdict judge --questions q.json --sort relevant < hits.jsonl
 
 `verdict status` shows what is loaded and on which engine, `verdict models` the catalog with its figures, and `verdict info <model>` the task breakdown and links to the model card and weights.
 
-**HTTP.** From any language, read the port from `status.json` and POST to `/v1/judge`:
+**HTTP.** From any language: the System One API ([Switch from Jev](#switch-from-jev)) for one state at a time, or Verdict's batch extension for many items in one request:
 
 ```sh
-PORT=$(plutil -extract port raw -o - "$HOME/Library/Application Support/Verdict/status.json")
-curl -s "http://127.0.0.1:$PORT/v1/judge" -H 'Content-Type: application/json' \
-  -d '{"items": ["please refund me"], "questions": {"refund": {"type": "noul", "instructions": "Does the writer ask for money back?"}}}'
+curl -s "$(verdict url)/v1/judge" -H 'Content-Type: application/json' \
+  -d '{"items": ["please refund me", "Do you ship to Canada?"], "questions": {"refund": {"type": "noul", "instructions": "Does the writer ask for money back?"}}}'
 ```
 
 **Python.** The library in `~/.local/share/verdict` uses only the standard library and starts the app if it is not running; the example is under [For your agent](#for-your-agent).
 
-**Swift.** VerdictKit is a library product of this package, with no dependencies of its own:
+**Swift.** VerdictKit is a library product of this package, with no dependencies of its own. `SystemOneClient` mirrors the TypeSafe SDKs; `judge` is its batch extension:
 
 ```swift
 // .package(url: "https://github.com/TobyNoSkillSon/Verdict", branch: "main"), product "VerdictKit"
 import VerdictKit
 
-let verdict = try await Verdict()        // finds the running app, or launches it
-let results = try await verdict.judge(tickets, [
+let client = SystemOneClient()           // finds the running app, or launches it
+let results = try await client.judge(items: tickets, questions: [
     "refund": .noul("Does the writer ask for money back?"),
     "dept": .choice("Which team should handle this?", ["billing": "charges, refunds", "tech": "bugs, crashes", "other": "none of these"]),
 ])
@@ -240,7 +283,7 @@ let results = try await verdict.judge(tickets, [
 
 ## Privacy
 
-Judgement inputs never leave your Mac. The API listens on `127.0.0.1` only and refuses requests that carry a browser `Origin` header or a foreign `Host`. It has no authentication, so any process on your Mac can call it; do not forward the port. The only network traffic is the app download at install and model weights from Hugging Face on first use. There is no telemetry and no hosted fallback.
+Judgement inputs never leave your Mac. The API listens on `127.0.0.1` only and refuses requests that carry a browser `Origin` header or a foreign `Host`. It has no authentication (an SDK's API key is accepted and ignored), so any process on your Mac can call it; do not forward the port. The only network traffic is the app download at install and model weights from Hugging Face on first use. There is no telemetry and no hosted fallback.
 
 Verdict judges text. An item with an `image`, `audio` or `video` field comes back as a per-item error.
 

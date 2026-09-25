@@ -47,15 +47,16 @@ Answers compare like values: `r.relevant > 0.6`, `r.kind == "source"`; detail is
 
 Shell, for a JSONL file: `verdict judge --questions q.json --field text --sort relevant --top 20 < items.jsonl` prints one short line per item (`#index  name=value …  | snippet`; `--json` for every probability). q.json holds the same questions as plain JSON: `{"relevant": {"type": "noul", "instructions": "…"}, "kind": {"type": "choice", "instructions": "…", "criteria": {"source": "…", "other": "…"}}}`. `verdict --help` covers the rest.
 
-Any other language calls the local HTTP API directly; the Python library, the `verdict` command and Swift's VerdictKit are thin clients of it. The port is in `status.json` (start the app with `open -g -a Verdict` if it is not running):
+Any other language calls the local HTTP API directly; the Python library, the `verdict` command and Swift's VerdictKit are thin clients of it. `verdict url` prints the base URL (it starts the app if needed; the port changes when Verdict restarts). Many items with the same questions go to the batch endpoint, `/v1/judge`:
 
 ```sh
-PORT=$(plutil -extract port raw -o - "$HOME/Library/Application Support/Verdict/status.json")
-curl -s "http://127.0.0.1:$PORT/v1/judge" -H 'Content-Type: application/json' \
+curl -s "$(verdict url)/v1/judge" -H 'Content-Type: application/json' \
   -d '{"items": ["…", "…"], "questions": {"relevant": {"type": "noul", "instructions": "Is this hit about the password-reset flow?"}}}'
 ```
 
-It returns `{"results": [{"answers": {"relevant": {"noul": 0.93, "confidence": 0.93}}, "model": "laya-english", "ms": 4.1}, …]}` in item order; an item it could not judge has `"error"` instead of `"answers"`. The repository's `docs/API.md` documents every endpoint.
+It returns `{"results": [{"answers": {"relevant": {"noul": 0.93, "confidence": 0.93}}, "model": "laya-english", "ms": 4.1}, …]}` in item order; an item it could not judge has `"error"` instead of `"answers"`.
+
+Verdict also serves TypeSafe's System One API (`POST /v1/systemone`: one state, its questions, `{"model", "answers", "usage"}`), so code written for Jev runs locally: with the official `typesafe-sdk`, `TypeSafeClient(api_key="local", base_url=<verdict url>, model="auto")` — any key works, and the model is `auto` or a local id, not `jev-latest`. For a pile of items, `judge()` or `/v1/judge` is still the fast path. The repository's `docs/API.md` documents every endpoint.
 
 Model choice: default routing (plain English → Laya English, other scripts → Laya Multilingual) is right for most work. `verdict models` shows each model's measured accuracy, calibration, speed and links; `verdict info <model>` its model cards. Plain-ASCII Polish or German: pass `model="laya-multilingual"`. Von 1.2 (`model="von-1.2"`) is the best-calibrated local model on the benchmark, for English.
 
