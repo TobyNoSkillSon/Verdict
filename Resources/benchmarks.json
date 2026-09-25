@@ -37,7 +37,7 @@
     "source": "measured via OpenRouter",
     "date": "2026-09-25",
     "hardware": "hosted API (OpenRouter, TypeSafe)",
-    "note": "TypeSafe Jev 1.13 (typesafe/jev-1.13-20260917), hosted. Measured on this 25-task suite through OpenRouter /api/v1/systemone, one row per request (bench/jev_api.py). ms is the sequential single-row p50 wall from this Mac, including network."
+    "note": "TypeSafe Jev 1.13 (typesafe/jev-1.13-20260917), hosted. Measured on this 25-task suite through OpenRouter /api/v1/systemone, one row per request, 12 requests in flight, answers cached so each row was paid for once. ms is the sequential single-row p50 wall from this Mac, including network."
   },
   "laya-english": {
     "default_bits": 16,

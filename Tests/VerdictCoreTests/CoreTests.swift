@@ -345,7 +345,7 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(automatic, [.choice(title: "Fit in free memory", checked: true, action: .memory(allowSwap: false), help: fitInFreeMemoryHelp),
                                    .choice(title: "Allow swap (slower)", checked: false, action: .memory(allowSwap: true), help: allowSwapHelp),
                                    .separator, .caption("~86.9 GB free now"), .caption("Unloaded laya-multilingual to make room")])
-        XCTAssertEqual(fitInFreeMemoryHelp, "Loads a model only if it fits in memory that is free right now; otherwise unloads idle models (least recently used, on-demand first) or refuses with the reason. Never pushes the Mac into swap.")
+        XCTAssertEqual(fitInFreeMemoryHelp, "Checks free memory before loading and avoids swap: a model loads only if it fits in memory that is free at that moment; otherwise idle models are unloaded (least recently used, on-demand first) or the load is refused with the reason. Best effort: memory use can change after the check.")
         XCTAssertEqual(allowSwapHelp, "Loads even when memory is short; macOS moves data to disk and everything, including other apps, can slow down.")
         var swap = Configuration(executable: "/x"); swap.allowSwap = true
         // The swap item is a toggle: checked, choosing it again turns it off.

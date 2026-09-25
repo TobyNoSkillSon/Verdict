@@ -246,7 +246,7 @@ private final class LayaGraph {
         }
         let gathered = x[MLXArray(0..<b).expandedDimensions(axis: 1), maximum(markers, 0)]
         let logits = linear(gelu(linear(norm(gathered, "scorer.layers.0"), "scorer.layers.1")), "scorer.layers.3").squeezed(axis: -1).asType(.float32)
-        // act_head is loaded/quantized to preserve residency, but its outputs are discarded by worker.py.
+        // act_head is loaded/quantized to preserve residency, but its outputs are discarded by the reference worker.
         return MLX.where(markerMask, logits, MLXArray(Float(-1e4)))
     }
 }

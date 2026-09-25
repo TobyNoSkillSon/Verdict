@@ -8,7 +8,7 @@ public protocol KernelPathReporting { var kernelPath: String { get } }
 /// block of `half` queries against its three-block key neighbourhood (3 * half keys) instead of the full
 /// L x L grid the stock path computes and then masks. Same allowed keys, same fused SDPA kernel; only the
 /// reduction tiling differs (float rounding). Pays from a few hundred tokens up: at ~7.5k tokens attention
-/// was 59% of the forward (lab/notes/THEORY.md).
+/// was 59% of the forward (measured on an M5 Max).
 ///
 /// Padding queries (valid = false) attend to every key of their neighbourhood rather than every valid key of
 /// the row: their outputs are never read (all layers mask invalid keys, markers point at valid tokens), they

@@ -14,7 +14,7 @@ public struct Configuration: Codable, Equatable {
     public var precision: [String: Int]?     // model id -> 0 (native: Laya fp16, Von fp32), 16, 8 or 4
     public var manualIdleMinutes: Int?       // Keep Hot, manually loaded models; nil = from idleMinutes, else Always (0)
     public var onDemandIdleMinutes: Int?     // Keep Hot, models loaded on demand; nil = 15
-    public var allowSwap: Bool?              // Memory: nil/false = Fit in free memory (never swap)
+    public var allowSwap: Bool?              // Memory: nil/false = Fit in free memory (avoids swap, best effort)
     public init(executable: String, hotModels: [String] = [], launchAtLogin: Bool = false, idleMinutes: Int? = 0) {
         self.executable = executable; self.hotModels = hotModels; self.launchAtLogin = launchAtLogin; self.idleMinutes = idleMinutes
     }
@@ -503,7 +503,9 @@ public let manualLoadHelp = "You loaded these yourself (Load in Models…, or ve
 public let onDemandLoadHelp = "An agent's request needed these, so Verdict loaded them; they are not loaded again when Verdict starts."
 public let keepHotAlwaysHelp = "Never unloaded for being idle; only Unload, or Memory making room for another model, unloads them."
 public let fitInFreeMemoryTitle = "Fit in free memory"
-public let fitInFreeMemoryHelp = "Loads a model only if it fits in memory that is free right now; otherwise unloads idle models (least recently used, on-demand first) or refuses with the reason. Never pushes the Mac into swap."
+public let fitInFreeMemoryHelp = "Checks free memory before loading and avoids swap: a model loads only if it fits in memory that is free at that moment; otherwise idle models are unloaded (least recently used, on-demand first) or the load is refused with the reason. Best effort: memory use can change after the check."
+public let copySkillHelp = "Copies SKILL.md for a coding agent: when Verdict is worth using, how to write questions, and the verdict command, Python and HTTP API."
+public let openFilesHelp = "Opens ~/Library/Application Support/Verdict: settings (config.json), the API's port and state (status.json) and the worker log."
 public let allowSwapTitle = "Allow swap (slower)"
 public let allowSwapHelp = "Loads even when memory is short; macOS moves data to disk and everything, including other apps, can slow down."
 

@@ -61,8 +61,8 @@ import VerdictCore
         menu.addItem(submenu("Keep Hot", "flame", keepHotMenu(config)))
         menu.addItem(submenu("Memory", "memorychip", memoryMenu(config, status: backend.status)))
         menu.addItem(.separator())
-        item("Copy Skill for Your Agent", "doc.on.doc", #selector(copyInstructions))
-        item("Open Verdict Files", "folder", #selector(files))
+        item("Copy Skill for Your Agent", "doc.on.doc", #selector(copyInstructions), help: copySkillHelp)
+        item("Open Verdict Files", "folder", #selector(files), help: openFilesHelp)
         if backend.processRunning || backend.previewRunning { item("Restart Worker", "arrow.clockwise", #selector(restart)) }
         else { item("Start Worker", "play", #selector(start)) }
         let login = NSMenuItem(title: "Launch at Login", action: #selector(toggleLogin), keyEquivalent: "")
@@ -96,9 +96,9 @@ import VerdictCore
         root.submenu = sub
         return root
     }
-    private func item(_ title: String, _ icon: String, _ action: Selector, key: String = "", modifiers: NSEvent.ModifierFlags = []) {
+    private func item(_ title: String, _ icon: String, _ action: Selector, key: String = "", modifiers: NSEvent.ModifierFlags = [], help: String? = nil) {
         let entry = NSMenuItem(title: title, action: action, keyEquivalent: key)
-        entry.target = self; entry.keyEquivalentModifierMask = modifiers
+        entry.target = self; entry.keyEquivalentModifierMask = modifiers; entry.toolTip = help
         entry.image = NSImage(systemSymbolName: icon, accessibilityDescription: nil)
         menu.addItem(entry)
     }

@@ -136,7 +136,7 @@ public final class LayaModel: DecisionModel, KernelPathReporting, InferencePathS
     }
 
     public func tokenCount(_ item: Item, _ questions: [Question]) throws -> Int {
-        // worker.py's backend.encode() defaults to adding tokenizer special tokens.
+        // The reference worker's backend.encode() defaults to adding tokenizer special tokens.
         encode(item.text, addSpecialTokens: true).count + (questions.map { encode($0.sourceJSON ?? Self.questionJSON($0), addSpecialTokens: true).count }.max() ?? 0) + 8
     }
 
