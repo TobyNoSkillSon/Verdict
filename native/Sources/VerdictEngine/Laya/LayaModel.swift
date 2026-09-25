@@ -291,3 +291,5 @@ public final class LayaModel: DecisionModel, KernelPathReporting {
         return "{" + fields.joined(separator: ", ") + "}"
     }
 }
+
+extension LayaModel: TokenizerPathReporting { public var tokenizerPath: String { prompt.hasFastTokenizer ? "fast" : "library" } }

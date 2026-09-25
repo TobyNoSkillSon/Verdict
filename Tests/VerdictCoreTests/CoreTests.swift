@@ -31,4 +31,16 @@ final class CoreTests: XCTestCase {
         XCTAssertThrowsError(try Configuration(executable: "").validate())
         XCTAssertNoThrow(try Configuration(executable: "/Applications/Verdict.app/Contents/MacOS/verdict-helper").validate())
     }
+
+    func testOptimizationStatusDecodesAndSummarises() throws {
+        let json = #"{"installed":{},"calls":0,"items":0,"started":0,"updated":0,"models":{"laya-english":{"device":"mlx","load_s":0.6,"bits":0,"optimizations":{"tokenizer":"fast","attention":"windowed","matmul":"standard GPU","optimized":false}}}}"#
+        let status = try JSONDecoder().decode(WorkerStatus.self, from: Data(json.utf8))
+        let o = try XCTUnwrap(status.models["laya-english"]?.optimizations)
+        XCTAssertFalse(o.optimized)
+        XCTAssertTrue(o.summary.hasPrefix("Standard on this Mac"))
+        XCTAssertTrue(o.summary.contains("fast tokenizer, windowed attention"))
+        XCTAssertTrue(o.summary.contains("standard GPU matmul"))
+        let old = #"{"installed":{},"calls":0,"items":0,"started":0,"updated":0,"models":{"laya-english":{"device":"mlx","load_s":0.6}}}"#
+        XCTAssertNil(try JSONDecoder().decode(WorkerStatus.self, from: Data(old.utf8)).models["laya-english"]?.optimizations)
+    }
 }

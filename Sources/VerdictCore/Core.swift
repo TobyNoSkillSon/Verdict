@@ -52,11 +52,30 @@ public struct BenchmarkResult: Codable, Equatable {
     public var note: String?
 }
 
+/// Which optimized paths a loaded model uses on this Mac (from the helper). Anything not optimized is the
+/// stock fallback: same answers, slower.
+public struct Optimizations: Codable, Equatable {
+    public var tokenizer: String?
+    public var attention: String?
+    public var matmul: String?
+    public var optimized: Bool
+    /// One line for a tooltip: what is fast, and what fell back and why.
+    public var summary: String {
+        var fast: [String] = [], fallback: [String] = []
+        if let t = tokenizer { t == "fast" ? fast.append("fast tokenizer") : fallback.append("library tokenizer (tokenizer format not recognised)") }
+        if let a = attention { a == "windowed" ? fast.append("windowed attention") : fallback.append("stock attention (kernel self-test did not pass)") }
+        if let m = matmul { m == "neural accelerators" ? fast.append("GPU neural accelerators") : fallback.append("standard GPU matmul (needs an M5-class GPU and macOS 26.2+)") }
+        let head = optimized ? "Optimized for this Mac" : "Standard on this Mac (fallback, same answers, slower)"
+        return head + (fast.isEmpty ? "" : ": " + fast.joined(separator: ", ")) + (fallback.isEmpty ? "." : ". Fallback: " + fallback.joined(separator: "; ") + ".")
+    }
+}
+
 public struct LoadedModel: Codable, Equatable {
     public var device: String
     public var load_s: Double
     public var bits: Int?
-    public init(device: String, load_s: Double, bits: Int? = nil) { self.device = device; self.load_s = load_s; self.bits = bits }
+    public var optimizations: Optimizations?
+    public init(device: String, load_s: Double, bits: Int? = nil, optimizations: Optimizations? = nil) { self.device = device; self.load_s = load_s; self.bits = bits; self.optimizations = optimizations }
 }
 
 public struct InstalledModel: Codable, Equatable {

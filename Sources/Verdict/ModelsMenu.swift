@@ -121,6 +121,11 @@ struct ModelTable: View {
                 Image(systemName: hot ? "flame.fill" : reference ? "cloud" : "circle").font(.system(size: 10))
                     .foregroundStyle(hot ? Color.orange : .secondary).frame(width: 12)
                 Text(model.name).font(.system(size: 11)).lineLimit(1)
+                if let o = status?.models[model.id]?.optimizations {
+                    Text(o.optimized ? "optimized" : "standard").font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(o.optimized ? Color.green : .secondary).lineLimit(1).fixedSize()
+                        .help(o.summary)
+                }
             }.frame(width: 146, alignment: .leading)
                 .help(reference ? model.recommendation : "\(model.backbone) · \(model.languages) · \(model.context) tokens. \(model.recommendation) License: \(model.license).")
             inputIcons(model).frame(width: 66, alignment: .leading)

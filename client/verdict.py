@@ -360,7 +360,13 @@ def _main(argv):
     try:
         if cmd == 'status':
             s = status()
-            hot = ', '.join(f"{k} ({v['device']})" for k, v in s['models'].items()) or 'none loaded'
+            def opt(v):
+                o = v.get('optimizations')
+                if not o: return v['device']
+                if o.get('optimized'): return f"{v['device']}, optimized"
+                slow = [k for k, want in (('tokenizer', 'fast'), ('attention', 'windowed'), ('matmul', 'neural accelerators')) if k in o and o[k] != want]
+                return f"{v['device']}, standard: {'/'.join(slow)}"
+            hot = ', '.join(f"{k} ({opt(v)})" for k, v in s['models'].items()) or 'none loaded'
             mem = s.get('memory', {})
             print(f"port {s['port']}  models: {hot}  calls: {s['calls']}  last: {s['last_ms']} ms  memory: {mem.get('rss_mb', 0):.0f} MB rss, {mem.get('mlx_active_mb', 0):.0f} MB weights"
                   + (f"  loading: {s['loading']}" if s.get('loading') else '') + (f"  error: {s['error']}" if s.get('error') else ''))

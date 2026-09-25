@@ -5,7 +5,7 @@ Your user asked you to install Verdict: a menu-bar app that keeps local decision
 1. **Check.** Apple Silicon Mac, macOS 14+, and `python3` for the CLI (macOS's own is fine). The installer checks and prints the one command that fixes anything missing — pass it to the user and stop.
 2. **Install.** From this repository: `scripts/install.sh`. It downloads the prebuilt app for this version with curl, verifies its SHA-256 and signature, puts it in `/Applications` (or `~/Applications`), starts it, and waits until a model is loaded. It prints a few short lines and ends with `ready: …`. First run downloads ~0.8 GB (Laya English). Never download the zip through a browser.
 3. **Install the skill into your own harness.** `verdict skill` prints it (`verdict skill --install DIR` writes `DIR/triage/SKILL.md` if your harness uses skill folders). Put it wherever your harness keeps skills, the way you normally would. Read it once; it tells you when Verdict is worth using and how to write questions.
-4. **Verify.** `verdict status` should list a model with `(mlx)`. Then:
+4. **Verify.** `verdict status` should list a model with `(mlx…)`; "optimized" means the fast paths are active on this Mac, "standard" means the fallback (same answers, slower). Then:
    `python3 -c "import sys,os; sys.path.insert(0, os.path.expanduser('~/.local/share/verdict')); from verdict import judge, Noul; print(judge('please refund me', {'refund': Noul('Does the writer ask for money back?')}))"`
 5. **Report** in one or two lines: installed, which model is hot, memory from `verdict status`. Ask whether they want **Launch at Login** (menu → Launch at Login); do not enable it yourself.
 

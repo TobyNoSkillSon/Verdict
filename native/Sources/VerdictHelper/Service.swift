@@ -26,7 +26,7 @@ final class Service {
         trimPercent = Double(env["VERDICT_TRIM_FREE_PCT"] ?? "") ?? 15
         if let data = env["VERDICT_PRECISION"]?.data(using: .utf8), let p = try? JSONSerialization.jsonObject(with: data) as? [String: Int] { precision = p }
         let now = Date().timeIntervalSince1970
-        state = ["models": [:], "calls": 0, "items": 0, "last_ms": NSNull(), "started": now, "port": NSNull(), "pid": Int(getpid()), "loading": NSNull(), "error": NSNull(), "last_used": now, "idle_minutes": Int(env["VERDICT_IDLE_MINUTES"] ?? "") ?? 0]
+        state = ["models": [:], "calls": 0, "items": 0, "last_ms": NSNull(), "started": now, "port": NSNull(), "pid": Int(getpid()), "loading": NSNull(), "error": NSNull(), "last_used": now, "idle_minutes": Int(env["VERDICT_IDLE_MINUTES"] ?? "") ?? 0, "gpu": Self.gpu]
         Memory.cacheLimit = cacheLimit * 1024 * 1024
     }
     func start(port: Int) { locked { state["port"] = port; writeStatus() } }
@@ -50,6 +50,36 @@ final class Service {
         }
         return ["rss_mb": lastRSS.1, "mlx_active_mb": (Double(Memory.activeMemory) / 1e6).rounded(), "mlx_cache_mb": (Double(Memory.cacheMemory) / 1e6).rounded()]
     }
+    /// Which optimized paths a loaded model uses on this Mac. Anything not optimized is the stock fallback:
+    /// same answers, slower. `optimized` is true only when every reported path is the fast one.
+    static func optimizations(_ agent: Any) -> [String: Any] {
+        var out: [String: Any] = [:], fast = true
+        if let t = (agent as? TokenizerPathReporting)?.tokenizerPath { out["tokenizer"] = t; fast = fast && t == "fast" }
+        if let k = (agent as? KernelPathReporting)?.kernelPath {
+            let windowed = k.hasPrefix("windowed")
+            out["attention"] = windowed ? "windowed" : "stock"; fast = fast && windowed
+        }
+        let nax = gpu["neural_accelerators"] as? Bool ?? false
+        out["matmul"] = nax ? "neural accelerators" : "standard GPU"; fast = fast && nax
+        out["optimized"] = fast
+        return out
+    }
+    /// GPU facts for the compatibility indicator. Neural-accelerator matmuls: MLX core 0.32 uses them on
+    /// macOS 26.2+ when the GPU generation is >= 17 (Mac) / >= 18 (phone class) — mirrors mlx is_nax_available().
+    static let gpu: [String: Any] = {
+        let arch = GPU.deviceInfo().architecture   // e.g. applegpu_g17s
+        let os = ProcessInfo.processInfo.operatingSystemVersion
+        var gen = 0, cls: Character = "?"
+        if let g = arch.range(of: "_g") {
+            let tail = arch[g.upperBound...]
+            gen = Int(tail.prefix { $0.isNumber }) ?? 0
+            cls = tail.last ?? "?"
+        }
+        let osOK = os.majorVersion > 26 || (os.majorVersion == 26 && os.minorVersion >= 2)
+        let nax = osOK && gen >= (cls == "p" ? 18 : 17)
+        return ["architecture": arch, "generation": gen, "macos": "\(os.majorVersion).\(os.minorVersion).\(os.patchVersion)", "neural_accelerators": nax]
+    }()
+
     /// Disk scan of downloaded snapshots; only load/download/delete change it, so judgements reuse it.
     private var installedCache: [String: Any]?
     /// Judgements write status.json off the request path (serial queue keeps writes ordered); a judgement
@@ -89,6 +119,7 @@ final class Service {
             var active = state["models"] as? [String: Any] ?? [:]
             active[id] = ["device": "mlx", "load_s": (Date().timeIntervalSince(start) * 10).rounded() / 10, "bits": bits]
             if let path = (agent as? KernelPathReporting)?.kernelPath, var entry = active[id] as? [String: Any] { entry["kernel"] = path; active[id] = entry }
+            if var entry = active[id] as? [String: Any] { entry["optimizations"] = Self.optimizations(agent); active[id] = entry }
             state["models"] = active; state["loading"] = NSNull(); state["downloading"] = false; writeStatus()
             return agent
         } catch {
