@@ -192,8 +192,9 @@ import VerdictCore
         if case .ready = next { restartAttempts = 0 }
         let changed = decoded != status || next != phase
         // The launch set is the manually loaded models. On-demand loads never join it; Keep Hot and memory unloads
-        // never leave it (only Unload/Delete in the table do).
-        if var config = try? configuration(), let hot = launchSet(config.hotModels, adding: decoded) {
+        // never leave it (only Unload/Delete in the table do). A model being deleted is never added back meanwhile.
+        var reconciled = decoded; for id in deleting { reconciled.models[id] = nil }
+        if var config = try? configuration(), let hot = launchSet(config.hotModels, adding: reconciled) {
             config.hotModels = hot; try? save(config)
         }
         status = decoded; phase = next
@@ -237,10 +238,15 @@ import VerdictCore
             busyModel = nil; onChange?()
         }
     }
+    /// Models with a Delete in flight: status reconciliation must not put them back in the launch set.
+    private var deleting: Set<String> = []
+    /// A menu Delete removes the model from the launch set once the helper has deleted it; a failed delete leaves the
+    /// launch set as it was.
     func delete(_ id: String) {
-        busyModel = id; onChange?()
+        busyModel = id; lastError = nil; deleting.insert(id); onChange?()
         Task {
-            do { try await control("delete", ["model": id]) } catch { lastError = error.localizedDescription }
+            do { try await control("delete", ["model": id]); setHot(id, false) } catch { lastError = error.localizedDescription }
+            deleting.remove(id)
             busyModel = nil; onChange?()
         }
     }

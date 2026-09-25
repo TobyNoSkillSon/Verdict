@@ -35,8 +35,7 @@ final class MenuTableHostingView: NSHostingView<ModelTable> {
             alert.addButton(withTitle: "Cancel")
             alert.addButton(withTitle: "Delete")
             guard alert.runModal() == .alertSecondButtonReturn else { return }
-            backend.setHot(id, false)
-            backend.delete(id)
+            backend.delete(id)   // leaves the launch set only after the helper confirms
         }
     }
 }
