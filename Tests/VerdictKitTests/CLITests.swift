@@ -193,6 +193,10 @@ final class CLIBinaryTests: XCTestCase {
         XCTAssertTrue(r.out.contains("Third-party notices for Verdict"), "the bundled licences follow NOTICE")
         XCTAssertTrue(r.out.contains("Copyright (c) 2023 ml-explore"))
         XCTAssertEqual(try run(["--licenses"]).out, r.out)
+        let plist = NSDictionary(contentsOf: StubHelper.root.appendingPathComponent("Resources/Info.plist"))
+        r = try run(["--version"])
+        XCTAssertEqual(r.code, 0, r.err)
+        XCTAssertEqual(r.out, "verdict \(plist?["CFBundleShortVersionString"] as? String ?? "?") (build \(plist?["CFBundleVersion"] as? String ?? "?"))\n")
         r = try run(["--help"])
         XCTAssertTrue(r.out.contains("verdict judge --questions"), r.out)
     }

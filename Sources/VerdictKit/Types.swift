@@ -86,6 +86,8 @@ public struct Judgement: Sendable, Hashable, Codable {
 
 public struct Status: Sendable, Codable, Equatable {
     public var api: Int?
+    /// The app version (Info.plist CFBundleShortVersionString), e.g. "0.3.0".
+    public var version: String?
     public var port: Int?
     public var pid: Int?
     public var models: [String: LoadedModel]

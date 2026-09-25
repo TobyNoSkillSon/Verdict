@@ -15,7 +15,7 @@ The helper listens on a random loopback port chosen at each start. It writes the
 
 1. Read `port` and `pid` from `status.json`. The API is up when both are set and the process `pid` is alive (`kill(pid, 0)` succeeds). After a clean shutdown `port` is `null`.
 2. If it is not up, start the app in the background: `open -g /Applications/Verdict.app` (or `~/Applications/Verdict.app`; `scripts/install.sh` records the installed path in `~/.local/share/verdict/app-path`). Poll `status.json` until step 1 succeeds: usually one to three seconds; allow 90.
-3. Optionally check `GET /v1/status` → `"api": 1`. A Verdict from before the versioned API answers every `/v1/…` path with `404 {"error": "not found"}`; update it.
+3. Optionally check `GET /v1/status` → `"api": 1` (and `"version"`, the app version, e.g. `"0.3.0"`). A Verdict from before the versioned API answers every `/v1/…` path with `404 {"error": "not found"}`; update it.
 
 The port changes whenever the helper restarts (app relaunch, crash recovery, Restart Worker). After a connection error, read `status.json` again rather than retrying the old port.
 
@@ -108,7 +108,7 @@ The helper's live state (the same object it writes to `status.json`, plus `catal
 
 ```json
 {
-  "api": 1, "port": 58245, "pid": 88420, "started": 1790372212.99,
+  "api": 1, "version": "0.3.0", "port": 58245, "pid": 88420, "started": 1790372212.99,
   "calls": 1, "items": 2, "last_ms": 14.0, "last_used": 1790372223.96,
   "loading": null, "downloading": false, "error": null, "refused": null, "evictions": [],
   "manual_idle_minutes": 0, "on_demand_idle_minutes": 5, "allow_swap": false,
@@ -123,6 +123,7 @@ The helper's live state (the same object it writes to `status.json`, plus `catal
 }
 ```
 
+- `version`: the app version (`null` for a helper run outside the app and a checkout).
 - `models`: loaded models. `bits` as loaded (`0` = native). `residency`: `manual` (loaded from the menu or with `"manual": true`; loaded again at the next launch) or `on_demand` (a request needed it). `engine`: `optimized` (Verdict's fast tokenizer and windowed attention, self-tested at load on this Mac) or `mlx` with `engine_reason`.
 - `loading` / `downloading`: the model being loaded and whether its weights are downloading. `error`: the last load failure.
 - `memory.available_mb`: what the Memory check counts as free now. `refused`: the last memory refusal (`model`, `message`, `at`); `evictions`: the last 20 models unloaded by the helper (`model`, `residency`, `reason`, `at`).

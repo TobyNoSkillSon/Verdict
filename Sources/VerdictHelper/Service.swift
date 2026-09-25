@@ -54,7 +54,7 @@ final class Service {
         allowSwap = env["VERDICT_ALLOW_SWAP"] == "1"
         probe = MemoryProbe(environment: env)
         minuteSeconds = Double(env["VERDICT_TEST_MINUTE_SECONDS"] ?? "") ?? 60
-        state = ["api": Self.apiVersion, "models": [:], "calls": 0, "items": 0, "last_ms": NSNull(), "started": now, "port": NSNull(), "pid": Int(getpid()), "loading": NSNull(), "error": NSNull(), "last_used": now, "gpu": Self.gpu, "evictions": [], "refused": NSNull()]
+        state = ["api": Self.apiVersion, "version": Self.appVersion ?? NSNull(), "models": [:], "calls": 0, "items": 0, "last_ms": NSNull(), "started": now, "port": NSNull(), "pid": Int(getpid()), "loading": NSNull(), "error": NSNull(), "last_used": now, "gpu": Self.gpu, "evictions": [], "refused": NSNull()]
         Memory.cacheLimit = cacheLimit * 1024 * 1024
         publishSettings()
     }
@@ -536,6 +536,13 @@ final class Service {
               let text = String(data: data, encoding: .utf8) else { return String(describing: raw) }
         return text
     }
+    /// The app version, reported in /v1/status as "version": the enclosing Verdict.app's Info.plist, or for a helper
+    /// run from a build directory, the checkout's Resources/Info.plist.
+    static let appVersion: String? = {
+        if let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String { return v }
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        return NSDictionary(contentsOf: root.appendingPathComponent("Resources/Info.plist"))?["CFBundleShortVersionString"] as? String
+    }()
     /// Public API version, reported in /v1/status as "api". Bumped only for incompatible changes to /v1.
     static let apiVersion = 1
     /// Public endpoints are served under /v1 and, for older clients, at their original unversioned paths.

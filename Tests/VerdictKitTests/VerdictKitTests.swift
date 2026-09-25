@@ -127,6 +127,10 @@ final class HelperTests: XCTestCase {
         XCTAssertEqual(status.pid.map(Int32.init), helper.process.processIdentifier)
         XCTAssertEqual(status.models, [:])
         XCTAssertEqual(status.on_demand_idle_minutes, 15)
+        // The app version (Info.plist; a helper outside an app reads the checkout's Resources/Info.plist).
+        let plist = NSDictionary(contentsOf: StubHelper.root.appendingPathComponent("Resources/Info.plist"))
+        let version = try XCTUnwrap(plist?["CFBundleShortVersionString"] as? String)
+        XCTAssertEqual(status.version, version)
     }
 
     func testJudgeTypedQuestionsAndPerItemErrors() async throws {

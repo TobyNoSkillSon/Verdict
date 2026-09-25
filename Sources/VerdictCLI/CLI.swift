@@ -15,6 +15,7 @@ verdict: judge many items with the same typed questions, locally, in millisecond
     verdict unload ID
     verdict skill [--install DIR]          print the agent skill (named triage), or write DIR/triage/SKILL.md
     verdict licenses                       Verdict's NOTICE and the licences of the code it bundles
+    verdict --version                      this command's version (the app's)
 
 q.json: {"name": {"type": "noul"|"choice"|"score", "instructions": "…", "criteria": …}, …}
 Talks to the Verdict app over its local HTTP API (docs/API.md); starts the app if it is not running.
@@ -32,6 +33,10 @@ struct CLI {
     func run(_ argv: [String]) async -> Int32 {
         guard var command = argv.first, !["-h", "--help", "help"].contains(command) else { write(usage); return 0 }
         if command == "--licenses" { command = "licenses" }
+        if command == "--version" || command == "version" {
+            guard let info = versionInfo() else { warn("error: Info.plist not found"); return 1 }
+            write("verdict \(info.version) (build \(info.build))"); return 0
+        }
         do {
             try await dispatch(command, Array(argv.dropFirst()))
             return 0
@@ -167,6 +172,17 @@ struct CLI {
                 write(Format.line(index: index, item: item, result: result, field: field, order: questions.ids))
             }
         }
+    }
+
+    /// This command's version: the app it ships in, else the source checkout it was built from.
+    func versionInfo() -> (version: String, build: String)? {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        for url in [Verdict.containingApp?.appendingPathComponent("Contents/Info.plist"), root.appendingPathComponent("Resources/Info.plist")] {
+            if let url, let info = NSDictionary(contentsOf: url), let version = info["CFBundleShortVersionString"] as? String {
+                return (version, info["CFBundleVersion"] as? String ?? "?")
+            }
+        }
+        return nil
     }
 
     /// The agent skill: from the app this command ships in, the installed app, or a source checkout.

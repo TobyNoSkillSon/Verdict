@@ -59,6 +59,16 @@ final class NoticesTests: XCTestCase {
         }
     }
 
+    /// 0.3.0 is stated once, in Info.plist; the build number is a whole number that only goes up.
+    func testVersionIsStatedInInfoPlist() throws {
+        let plist = try XCTUnwrap(NSDictionary(contentsOf: Self.root.appendingPathComponent("Resources/Info.plist")))
+        XCTAssertEqual(plist["CFBundleShortVersionString"] as? String, "0.3.0")
+        XCTAssertEqual(plist["CFBundleVersion"] as? String, "3")
+        for doc in ["README.md", "AGENTS.md", "Resources/SKILL.md", "docs/API.md", "docs/USAGE.md"] {
+            XCTAssertNil(try text(doc).range(of: #"\b0\.2\.0\b"#, options: .regularExpression), "\(doc) states the old version")
+        }
+    }
+
     /// build.sh copies the three files into Contents/Resources and refuses to finish without them.
     func testBuildShipsTheNotices() throws {
         let build = try text("scripts/build.sh")
