@@ -9,17 +9,20 @@ import MLXNN
 private let vonGeGLU: @Sendable (MLXArray, MLXArray) -> MLXArray = compile(shapeless: true) { a, b in a * (1 + erf(a / sqrt(2))) / 2 * b }
 
 final class VonNetwork {
-    /// Encoder weights/activations dtype: the original f32 by default (bits 0; fp16 fails the ≤1% gate vs the SDK on
-    /// near-tie items, native/perf/THEORY.md), fp16 when loaded at 16 bits. VERDICT_VON_DTYPE=fp32|fp16|bf16 overrides
-    /// (A/B and the tolerance curve).
+    /// Encoder weights/activations dtype: the original f32 by default (bits 0 or 32; fp16 fails the ≤1% gate vs the SDK
+    /// on near-tie items, native/perf/THEORY.md), fp16 at 16 bits and for the 8/4-bit quantized models (activations,
+    /// embeddings, norms and quantization scales). VERDICT_VON_DTYPE=fp32|fp16|bf16 overrides (A/B, tolerance curve).
     static func dtype(bits: Int) -> DType {
         switch ProcessInfo.processInfo.environment["VERDICT_VON_DTYPE"] {
         case "fp32": return .float32
         case "fp16": return .float16
         case "bf16": return .bfloat16
-        default: return bits == 16 ? .float16 : .float32
+        default: return bits == 0 || bits == 32 ? .float32 : .float16
         }
     }
+    /// Encoder Linear layers (Wqkv, Wo, Wi, mlp.Wo; in-dims 1024/2624, all multiples of 64) are quantized at 8 or 4 bits,
+    /// group 64, as LayaNetwork. Embeddings, norms and the scorer head (1.6 MB, marker rows only, f32) never are.
+    static let quantGroup = 64
     /// Keep the residual stream in f32 while the GEMMs run in the (half) weight dtype: VERDICT_VON_RESIDUAL=fp32.
     static let residualF32 = ProcessInfo.processInfo.environment["VERDICT_VON_RESIDUAL"] == "fp32"
     /// Diagnostic/curve knob: encoder layers kept entirely in f32 (weights and compute), e.g. "0-3,27".
@@ -43,6 +46,8 @@ final class VonNetwork {
     let config: LayaEncoderConfiguration
     let independent: Bool
     let dtype: DType
+    /// 8 or 4 when the encoder Linears are quantized, else 0.
+    let quantBits: Int
     private var graph: VonGraph!
     let residentBytes: Int
     /// Active attention path for the sliding-window layers, reported in /status.
@@ -54,30 +59,47 @@ final class VonNetwork {
         try VonWeights.validate(zip, config: config)
         independent = id == "von-1.2"
         dtype = Self.dtype(bits: bits)
-        // One f32 storage at a time: converted and evaluated before the next is read, so load peaks at the
-        // converted model plus one f32 tensor (the f32 buffer is freed as soon as its conversion evaluates).
+        quantBits = bits == 8 || bits == 4 ? bits : 0
+        // One f32 storage at a time: converted (or quantized) and evaluated before the next is read, so load peaks at
+        // the converted model plus one f32 tensor (the f32 buffer is freed as soon as its conversion evaluates).
         // The scorer head (1.6 MB) and the final norm stay f32: they run on marker rows only.
         var weights: [String: MLXArray] = [:]
+        var quantized: [String: (MLXArray, MLXArray, MLXArray?)] = [:]
         let names = VonWeights.encoderNames(config) + VonWeights.head
+        let encoderLinear = [".attn.Wqkv.weight", ".attn.Wo.weight", ".mlp.Wi.weight", ".mlp.Wo.weight"]
         for (i, (name, shape)) in names.enumerated() {
             let raw = try zip.tensor(i, shape: shape)
-            let keep = dtype == .float32 || name.hasPrefix("scorer.") || name.hasPrefix("final_norm.")
-                || Self.layerIndex(name).map { Self.f32Layers.contains($0) } == true
+            let f32Layer = Self.layerIndex(name).map { Self.f32Layers.contains($0) } == true
+            if quantBits > 0, !f32Layer, encoderLinear.contains(where: name.hasSuffix), shape[1] % Self.quantGroup == 0 {
+                // Quantized from the original f32 weights; scales/biases then take the activation dtype.
+                let (w, s, b) = MLX.quantized(raw, groupSize: Self.quantGroup, bits: quantBits)
+                let entry = (w, s.asType(dtype), b?.asType(dtype))
+                eval([entry.0, entry.1] + (entry.2.map { [$0] } ?? []))
+                quantized[String(name.dropLast(7))] = entry   // key without ".weight"
+                continue
+            }
+            let keep = dtype == .float32 || name.hasPrefix("scorer.") || name.hasPrefix("final_norm.") || f32Layer
             let value = keep ? raw : raw.asType(dtype)
             eval(value)
             weights[name] = value
         }
         let expected = Set(names.map(\.0))
-        guard Set(weights.keys) == expected else { throw VonError.invalid("Von checkpoint is not the trained 178-key model") }
+        guard Set(weights.keys).union(quantized.keys.map { $0 + ".weight" }) == expected else { throw VonError.invalid("Von checkpoint is not the trained 178-key model") }
         var linearNames = ["scorer.dense", "scorer.out_proj"]
         for i in 0..<config.num_hidden_layers {
             linearNames += ["attn.Wqkv", "attn.Wo", "mlp.Wi", "mlp.Wo"].map { "layers.\(i)." + $0 }
         }
         var linears: [String: Linear] = [:]
         for name in linearNames {
+            if let (w, s, b) = quantized.removeValue(forKey: name) {
+                linears[name] = QuantizedLinear(weight: w, bias: weights.removeValue(forKey: name + ".bias"), scales: s, biases: b,
+                                                groupSize: Self.quantGroup, bits: quantBits)
+                continue
+            }
             guard let w = weights.removeValue(forKey: name + ".weight"), w.ndim == 2 else { throw VonError.invalid("Missing Von linear \(name)") }
             linears[name] = Linear(weight: w, bias: weights.removeValue(forKey: name + ".bias"))
         }
+        guard quantized.isEmpty else { throw VonError.invalid("Unexpected quantized Von tensors") }
         let arrays = weights
         var all = Array(arrays.values)
         for layer in linears.values { all += layer.parameters().flattened().map(\.1) }

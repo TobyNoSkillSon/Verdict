@@ -40,6 +40,9 @@ public final class VonModel: DecisionModel, KernelPathReporting {
 
     // A/B switches (native/perf/THEORY.md); defaults are the measured best.
     static let env = ProcessInfo.processInfo.environment
+    /// 0 and 32 both load the original f32 weights (the native precision).
+    public static let precisions: Set<Int> = [0, 32, 16, 8, 4]
+    public static let precisionMessage = "Von precision must be 32 (native f32; 0 means the same), 16, 8 or 4 bits"
     static let sortByLength = env["VERDICT_VON_ARRIVAL_ORDER"] != "1"
     static let tokenBudget = Int(env["VERDICT_VON_TOKEN_BUDGET"] ?? "") ?? 8192
     static let rowCap = max(1, Int(env["VERDICT_VON_ROWS"] ?? "") ?? 64)
@@ -58,8 +61,9 @@ public final class VonModel: DecisionModel, KernelPathReporting {
     public init(id: String, snapshot: URL, bits: Int = 0) throws {
         guard ["von-1.1","von-1.2"].contains(id) else { throw VonError.invalid("Unknown Von model '\(id)'") }
         // 0: the original f32 weights (passes the ≤1% gate vs the SDK). 16: fp16 weights/activations, ~3x faster and
-        // half the memory, max |dp| 0.08 on near-tie items (outside the gate; opt-in like Laya's 8/4-bit). 8/4: no.
-        guard bits == 0 || bits == 16 else { throw VonError.invalid("Von precision must be 32 (default) or 16 bits") }
+        // half the memory, max |dp| 0.08 on near-tie items (outside the gate; opt-in like Laya's 8/4-bit). 8/4: encoder
+        // Linears quantized (group 64) with fp16 activations: less memory, lossy by design (drift: native/perf/THEORY.md).
+        guard Self.precisions.contains(bits) else { throw VonError.invalid(Self.precisionMessage) }
         self.id = id
         let configData = try Data(contentsOf: snapshot.appendingPathComponent("tokenizer_config.json"))
         let tokenData = try Data(contentsOf: snapshot.appendingPathComponent("tokenizer.json"))

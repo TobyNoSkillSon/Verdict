@@ -66,7 +66,7 @@ final class Service {
         let halfPrecision = runtime == "von" ? bits == 16 : (bits == 0 || bits == 16)
         if !nax { out["matmul"] = "standard GPU"; fast = false }
         else if halfPrecision { out["matmul"] = "neural accelerators" }
-        else { out["matmul"] = runtime == "von" ? "f32 (by design)" : "\(bits)-bit (regular GPU path)" }
+        else { out["matmul"] = runtime == "von" && (bits == 0 || bits == 32) ? "f32 (by design)" : "\(bits)-bit (regular GPU path)" }
         out["optimized"] = fast
         return out
     }
@@ -265,6 +265,10 @@ final class Service {
                     guard let id = body["model"] as? String else { throw ServiceError("'model'") }
                     if body["bits"] != nil {
                         guard let bits = integer(body["bits"]) else { throw ServiceError("invalid literal for int() with base 10: '\(body["bits"]!)'") }
+                        // Von: reject an unsupported precision before unloading the current one (Laya keeps its engine check).
+                        if catalog.entries.first(where: { $0.id == id })?.runtime == "von", !VonModel.precisions.contains(bits) {
+                            throw ServiceError("\(id): \(VonModel.precisionMessage)")
+                        }
                         precision[id] = bits; unload(id)
                     }
                     _ = try load(id); return (200, ["loaded": order])

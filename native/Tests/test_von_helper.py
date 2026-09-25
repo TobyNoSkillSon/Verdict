@@ -115,10 +115,27 @@ class VonParityTests(unittest.TestCase):
                           'sdk_single_path_differences',sdk_single_differences,
                           'sdk_single_batched_max_diff',fixture['sdk_single_batched_max_diff'],
                           'resident',status['memory'],flush=True)
+                    # Unsupported precision: refused before the loaded f32 model is unloaded.
                     with self.assertRaises(urllib.error.HTTPError) as precision_error:
-                        request('/load',{'model':id,'bits':8})
+                        request('/load',{'model':id,'bits':5})
                     self.assertEqual(precision_error.exception.code,400)
+                    self.assertIn('precision',json.load(precision_error.exception)['error'])
                     precision_error.exception.close()
+                    self.assertEqual(json.load(urllib.request.urlopen(url+'/status'))['models'][id]['bits'],0)
+                    # bits 8/4: quantized encoder Linears, lossy by design (drift vs the SDK is reported in
+                    # native/perf/THEORY.md, not gated). Here: loads, answers every item in order with valid fields.
+                    for bits in (8,4):
+                        self.assertIn(id,request('/load',{'model':id,'bits':bits})['loaded'])
+                        got=request('/judge',{'items':[e['item'] for e in fixture['items']],'questions':questions,'model':id})['results']
+                        self.assertEqual(len(got),len(fixture['items']))
+                        q_dp=0.0
+                        for entry,actual in zip(fixture['items'],got):
+                            for name,expected in entry['batched_answers'].items():
+                                a=actual['answers'][name]
+                                self.assertTrue(0<=a['confidence']<=1)
+                                if 'noul' in expected: q_dp=max(q_dp,abs(a['noul']-expected['noul']))
+                                else: q_dp=max(q_dp,max(abs(a['probabilities'][k]-v) for k,v in expected['probabilities'].items()))
+                        print('VON_Q',id,bits,'max_dp',round(q_dp,4),flush=True)
                     # bits 16: opt-in fp16, not the default. It is outside the ≤1% gate (max |dp| 0.08 on near-tie
                     # items of the 368-item set, native/perf/THEORY.md): check the same answers and |dp| ≤ 0.1.
                     self.assertIn(id,request('/load',{'model':id,'bits':16})['loaded'])
