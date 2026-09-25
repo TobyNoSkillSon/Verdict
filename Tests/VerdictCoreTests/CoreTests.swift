@@ -377,4 +377,31 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(formatContext(8192), "8k")
         XCTAssertEqual(formatContext(32000), "32k")   // Jev: OpenRouter lists 32,000
     }
+
+    func testHardwareNoteFamilyCheck() throws {
+        XCTAssertEqual(chipGeneration("M5 Max"), "M5")
+        XCTAssertEqual(chipGeneration("Apple M5 Pro"), "M5")
+        XCTAssertEqual(chipGeneration("M5"), "M5")
+        XCTAssertEqual(chipGeneration("M10 Ultra"), "M10")
+        XCTAssertNil(chipGeneration("hosted API (OpenRouter, TypeSafe)"))
+        // Same family: no note.
+        XCTAssertNil(hardwareNote(thisChip: "M5", measuredOn: "M5 Max"))
+        XCTAssertNil(hardwareNote(thisChip: "M5 Pro", measuredOn: "M5 Max"))
+        XCTAssertNil(hardwareNote(thisChip: "Apple M5 Max", measuredOn: "M5 Max"))
+        // Different family: the note and its tooltip.
+        let m4 = try XCTUnwrap(hardwareNote(thisChip: "M4 Max", measuredOn: "M5 Max"))
+        XCTAssertEqual(m4.text, "Benchmarks measured on M5 Max")
+        XCTAssertEqual(m4.help, "Speed, energy and memory were measured on M5 Max; they differ on this Mac (M4 Max). Accuracy is the same.")
+        XCTAssertEqual(hardwareNote(thisChip: "Apple M1", measuredOn: "M5 Max")?.text, "Benchmarks measured on M5 Max")
+        // Unknown chip on either side: no note.
+        XCTAssertNil(hardwareNote(thisChip: nil, measuredOn: "M5 Max"))
+        XCTAssertNil(hardwareNote(thisChip: "", measuredOn: "M5 Max"))
+        XCTAssertNil(hardwareNote(thisChip: "M1", measuredOn: nil))
+        // The measurement chip comes from benchmarks.json `hardware`; hosted entries are ignored.
+        let json = #"{"jev": {"accuracy": 0.7, "hardware": "hosted API (OpenRouter, TypeSafe)"}, "laya-english": {"default_bits": 16, "precisions": {"16": {"accuracy": 0.5, "hardware": "Apple M5 Max, macOS 26.6"}, "8": {"accuracy": 0.5, "hardware": "Apple M5 Max, macOS 26.6"}}}}"#
+        XCTAssertEqual(measurementChip(decodeBenchmarks(Data(json.utf8))), "M5 Max")
+        XCTAssertNil(measurementChip([:]))
+        let shipped = try Data(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("../../Resources/benchmarks.json"))
+        XCTAssertEqual(measurementChip(decodeBenchmarks(shipped)), "M5 Max")
+    }
 }

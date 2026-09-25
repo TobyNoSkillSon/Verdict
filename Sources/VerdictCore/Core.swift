@@ -563,3 +563,42 @@ public func footerNotice(lastError: String?, status: WorkerStatus?, now: Double)
     return nil
 }
 
+
+/// A chip name without the vendor prefix: "Apple M5 Max" → "M5 Max". Nil when empty.
+public func displayChip(_ chip: String?) -> String? {
+    guard var c = chip?.trimmingCharacters(in: .whitespaces), !c.isEmpty else { return nil }
+    if c.hasPrefix("Apple ") { c = String(c.dropFirst(6)) }
+    return c.isEmpty ? nil : c
+}
+
+/// The generation token of an Apple Silicon chip name: "M5" in "M5 Max", "Apple M5 Pro" or "M5". Nil when there is none.
+public func chipGeneration(_ chip: String?) -> String? {
+    guard let chip else { return nil }
+    return chip.split(whereSeparator: { $0 == " " || $0 == "," }).map(String.init).first { token in
+        token.count > 1 && token.first == "M" && token.dropFirst().allSatisfy(\.isNumber)
+    }
+}
+
+/// The chip the benchmarks were measured on, from benchmarks.json `hardware` ("Apple M5 Max, macOS 26.6" → "M5 Max"):
+/// the most common chip among the results; hosted or published entries without a chip are ignored.
+public func measurementChip(_ benchmarks: [String: ModelBenchmark]) -> String? {
+    var counts: [String: Int] = [:]
+    for model in benchmarks.values {
+        for result in model.precisions.values {
+            guard let hardware = result.hardware, let chip = displayChip(hardware.split(separator: ",").first.map(String.init)),
+                  chipGeneration(chip) != nil else { continue }
+            counts[chip, default: 0] += 1
+        }
+    }
+    return counts.sorted { $0.value != $1.value ? $0.value > $1.value : $0.key < $1.key }.first?.key
+}
+
+/// The models table's footer note when this Mac is not in the measurement chip's family (M5 vs M5 Pro: same family).
+/// Nil when either chip is unknown or both share a generation.
+public func hardwareNote(thisChip: String?, measuredOn: String?) -> (text: String, help: String)? {
+    guard let this = displayChip(thisChip), let measured = displayChip(measuredOn),
+          let thisGeneration = chipGeneration(this), let measuredGeneration = chipGeneration(measured),
+          thisGeneration != measuredGeneration else { return nil }
+    return ("Benchmarks measured on \(measured)",
+            "Speed, energy and memory were measured on \(measured); they differ on this Mac (\(this)). Accuracy is the same.")
+}

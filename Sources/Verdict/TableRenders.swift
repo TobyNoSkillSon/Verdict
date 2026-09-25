@@ -3,7 +3,8 @@ import SwiftUI
 import VerdictCore
 
 /// `Verdict --render-table DIR`: draws the models table in fixed states to PNGs without starting the worker
-/// or touching config.json. Set VERDICT_BENCHMARKS to render against a fixture.
+/// or touching config.json. Set VERDICT_BENCHMARKS to render against a fixture, VERDICT_RENDER_CHIP (e.g. 'Apple M3 Pro')
+/// to render as another Mac (default M5 Max).
 @MainActor final class TableRenderDelegate: NSObject, NSApplicationDelegate {
     let directory: URL
     let backend = Backend()
@@ -17,7 +18,8 @@ import VerdictCore
         var base = WorkerStatus(); base.port = 1
         base.installed = ["laya-english": InstalledModel(bytes: 842_600_000), "laya-multilingual": InstalledModel(bytes: 643_800_000),
                           "von-1.2": InstalledModel(bytes: 1_580_000_000)]
-        base.gpu = GPUStatus(chip: "M5 Max", neural_accelerators: true)
+        let chip = displayChip(ProcessInfo.processInfo.environment["VERDICT_RENDER_CHIP"]) ?? "M5 Max"
+        base.gpu = GPUStatus(chip: chip, neural_accelerators: true)
         let fast = Optimizations(tokenizer: "fast", attention: "windowed", matmul: "neural accelerators", optimized: true)
         let stock = Optimizations(tokenizer: "library", attention: "stock", matmul: "neural accelerators", optimized: false)
         var laya = base; laya.models["laya-english"] = LoadedModel(device: "mlx", load_s: 0.6, bits: 0, optimizations: fast, engine: "optimized")
@@ -25,8 +27,17 @@ import VerdictCore
         var fallback = base
         fallback.models["laya-english"] = LoadedModel(device: "mlx", load_s: 0.6, bits: 0, optimizations: stock, engine: "mlx",
             engine_reason: "the optimized path failed during inference (Non-finite model outputs); switched to the stock MLX path")
+        // Footer states: loading (left, replaces the hardware note) and a recent refusal (error, left).
+        var loadingState = base; loadingState.loading = "von-1.2"
+        var refused = base
+        refused.refused = Refusal(model: "von-1.2", message: "von-1.2 at 16-bit needs ~2.0 GB; ~0.9 GB free without swapping. Unload laya-english, pick 8-bit, or allow swap in Verdict \u{2192} Memory.", at: Date().timeIntervalSince1970)
+        var refusedShort = base
+        refusedShort.refused = Refusal(model: "von-1.2", message: "von-1.2 at 16-bit needs ~2.0 GB; ~0.9 GB free.", at: Date().timeIntervalSince1970)
         // Selections are config bits (0 = native); models without one show their recommended precision.
         let states: [(String, WorkerStatus, [String: Int])] = [
+            ("footer-loading", loadingState, [:]),
+            ("footer-error-long", refused, [:]),
+            ("footer-error-short", refusedShort, [:]),
             ("nothing-loaded", base, [:]),
             ("laya-english-loaded", laya, [:]),
             ("von-16-loaded-32-selected", von, ["von-1.2": 0]),

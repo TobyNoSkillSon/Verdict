@@ -292,34 +292,59 @@ struct ModelTable: View {
         return text + measured(b)
     }
 
+    /// This Mac's chip: the helper's /status gpu.chip, else the CPU brand string (helper not running).
+    private static let localChip: String? = {
+        var size = 0
+        guard sysctlbyname("machdep.cpu.brand_string", nil, &size, nil, 0) == 0, size > 0 else { return nil }
+        var bytes = [CChar](repeating: 0, count: size)
+        guard sysctlbyname("machdep.cpu.brand_string", &bytes, &size, nil, 0) == 0 else { return nil }
+        return displayChip(String(cString: bytes))
+    }()
+
+    /// Left: an error, else Loading…, else the measurement-hardware note. Right: the model request, unless an error
+    /// needs the full width.
     @ViewBuilder private var footer: some View {
-        HStack {
+        Group {
             if let error = footerNotice(lastError: backend.lastError, status: status, now: Date().timeIntervalSince1970) {
-                Text(error).font(.system(size: 10)).foregroundStyle(.red).lineLimit(1).help(error)
-            } else if let loading = status?.loading, loading != "" {
-                ProgressView().controlSize(.mini)
-                Text("Loading \(loading)…").font(.system(size: 10)).foregroundStyle(.secondary)
+                let text = Text(error).font(.system(size: 10)).foregroundStyle(.red).lineLimit(1).help(error)
+                ViewThatFits(in: .horizontal) {
+                    HStack { text.fixedSize(); Spacer(minLength: 16); requestButton }
+                    HStack { text; Spacer(minLength: 0) }
+                }
             } else {
-                Button {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(modelRequest, forType: .string)
-                    copyGeneration += 1; let generation = copyGeneration
-                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) { copied = true }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                        guard generation == copyGeneration else { return }
-                        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) { copied = false }
+                HStack {
+                    if let loading = status?.loading, loading != "" {
+                        ProgressView().controlSize(.mini)
+                        Text("Loading \(loading)…").font(.system(size: 10)).foregroundStyle(.secondary)
+                    } else if let note = hardwareNote(thisChip: status?.gpu?.chip ?? Self.localChip, measuredOn: measurementChip(backend.benchmarks)) {
+                        Text(note.text).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+                            .padding(.leading, 8).help(note.help)
                     }
-                } label: {
-                    HStack {
-                        Text("Want another model? Copy a request for your agent.")
-                        Spacer(minLength: 8)
-                        Image(systemName: "doc.on.doc").accessibilityHidden(true)
-                    }.padding(.horizontal, 8).contentShape(Rectangle())
-                }.buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(.secondary)
-                    .help(modelRequest)
-                    .accessibilityHint("Copies a model-request brief to the clipboard. Nothing is sent automatically.")
+                    Spacer(minLength: 16)
+                    requestButton
+                }
             }
         }.buttonStyle(.bordered).controlSize(.small)
+    }
+
+    private var requestButton: some View {
+        Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(modelRequest, forType: .string)
+            copyGeneration += 1; let generation = copyGeneration
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) { copied = true }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                guard generation == copyGeneration else { return }
+                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) { copied = false }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Text("Want another model? Copy a request for your agent.")
+                Image(systemName: "doc.on.doc").accessibilityHidden(true)
+            }.padding(.horizontal, 8).contentShape(Rectangle())
+        }.buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(.secondary).fixedSize()
+            .help(modelRequest)
+            .accessibilityHint("Copies a model-request brief to the clipboard. Nothing is sent automatically.")
     }
 
     private func heading(_ text: String, _ column: ModelSortColumn, _ width: CGFloat, _ alignment: Alignment) -> some View {
