@@ -19,6 +19,11 @@ ROOT = Path(__file__).resolve().parents[2]
 BINARY = Path(os.environ.get('VERDICT_HELPER', ROOT / 'native/.build/release-helper/verdict-helper'))
 
 
+# models.json default_bits (the recommended precision) as the helper stores it: the native precision is 0.
+DEFAULT_BITS = {m['id']: (0 if m.get('default_bits') == (32 if m.get('runtime') == 'von' else 16) else m.get('default_bits', 0))
+                for m in json.loads((ROOT / 'Resources/models.json').read_text())}
+
+
 class HelperTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -267,6 +272,48 @@ class HelperTests(unittest.TestCase):
         self.assertIn('models', rt.call('/status'))
         self.assertEqual(rt.call('/settings', {'idle_minutes': before}), {'idle_minutes': before})
 
+    def test_unset_precision_uses_catalog_default(self):
+        """No VERDICT_PRECISION entry: loads (including the client's auto-load and preload) use models.json
+        default_bits. Von 1.2 loads at 16; an explicit 0 still means native f32."""
+        self.assertEqual(DEFAULT_BITS['von-1.2'], 16)
+        self.assertEqual(self.call('GET', '/status')['models']['laya-english']['bits'], 0)   # preload, Laya native
+        self.call('POST', '/judge', {'items': ['x'], 'questions': {'n': {'type': 'noul', 'instructions': 'Is it?'}}, 'model': 'von-1.2'})
+        loaded = self.call('GET', '/status')['models']['von-1.2']                        # auto-loaded by /judge
+        self.assertEqual(loaded['bits'], 16)
+        self.assertNotIn('f32', loaded['optimizations']['matmul'])
+        self.call('POST', '/load', {'model': 'von-1.2', 'bits': 0})
+        loaded = self.call('GET', '/status')['models']['von-1.2']
+        self.assertEqual(loaded['bits'], 0)
+        if loaded['optimizations']['matmul'] != 'standard GPU':
+            self.assertEqual(loaded['optimizations']['matmul'], 'f32 (by design)')
+        self.call('POST', '/unload', {'model': 'von-1.2'})
+        self.call('POST', '/load', {'model': 'von-1.2'})                                   # explicit 0 sticks
+        self.assertEqual(self.call('GET', '/status')['models']['von-1.2']['bits'], 0)
+        self.call('POST', '/unload', {'model': 'von-1.2'})
+
+    def test_explicit_precision_map_wins(self):
+        """VERDICT_PRECISION (the app's explicit choices) overrides default_bits, including 0 = native, at preload."""
+        with tempfile.TemporaryDirectory() as isolated:
+            env = dict(os.environ, VERDICT_SUPPORT_DIR=isolated, VERDICT_STUB_MODELS='1', VERDICT_PORT='0',
+                       VERDICT_PRELOAD='von-1.2,von-1.1', VERDICT_PRECISION=json.dumps({'von-1.2': 0}),
+                       HF_HUB_CACHE=str(Path(isolated) / 'hub'), VERDICT_CATALOG=str(ROOT / 'Resources/models.json'))
+            proc = subprocess.Popen([str(BINARY)], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            try:
+                port = json.loads(proc.stdout.readline())['port']
+                for _ in range(100):
+                    try:
+                        models = json.loads((Path(isolated) / 'status.json').read_text())['models']
+                        if len(models) == 2: break
+                    except (OSError, ValueError, KeyError):
+                        pass
+                    time.sleep(.05)
+                self.assertEqual(models['von-1.2']['bits'], 0)
+                self.assertEqual(models['von-1.1']['bits'], DEFAULT_BITS['von-1.1'])
+            finally:
+                urllib.request.urlopen(urllib.request.Request(f'http://127.0.0.1:{port}/quit', data=b'{}',
+                                       headers={'Content-Type': 'application/json'}), timeout=5).close()
+                proc.wait(timeout=10); proc.stdout.close(); proc.stderr.close()
+
     def test_invalid_precision_keeps_model(self):
         """Review #8: a refused precision neither unloads the working model nor sticks for later loads."""
         for model, bad in [('laya-english', 32), ('laya-english', 7), ('von-1.2', 7)]:
@@ -278,7 +325,8 @@ class HelperTests(unittest.TestCase):
             self.assertIn(model, self.call('GET', '/status')['models'], f'{model} unloaded by bits={bad}')
             self.call('POST', '/unload', {'model': model})
             self.call('POST', '/load', {'model': model})
-            self.assertEqual(self.call('GET', '/status')['models'][model]['bits'], 0)
+            # The refused bits did not stick: a plain load uses the catalog default (Laya native = 0, Von 16).
+            self.assertEqual(self.call('GET', '/status')['models'][model]['bits'], DEFAULT_BITS[model])
             self.call('POST', '/unload', {'model': model})
         with self.assertRaises(urllib.error.HTTPError) as cm:
             self.call('POST', '/load', {'model': 'nope', 'bits': 8})

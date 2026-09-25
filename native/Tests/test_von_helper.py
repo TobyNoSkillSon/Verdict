@@ -1,9 +1,10 @@
 """Pinned-SDK Von parity gate, deliberately opt-in for GPU/large checkpoints.
 
 VERDICT_VON_PARITY=1 python3 -m unittest -v native.Tests.test_von_helper
-Requires ~/.cache/verdict-bench/von/ckpt-{1.1,1.2}, no downloads. The default (f32) build is held to the strict
-SDK gate below (Δp ≤ 0.0001, raw logits ≤ 5e-4); never silently broaden it after float-order differences. The opt-in
-fp16 precision (bits 16) is checked against the documented ≤1% comparison instead (full set: native/perf/vonref.py).
+Requires ~/.cache/verdict-bench/von/ckpt-{1.1,1.2}, no downloads. Native f32 (requested explicitly as bits 0; an
+unset precision loads the catalog's recommended default_bits) is held to the strict SDK gate below (Δp ≤ 0.0001, raw
+logits ≤ 5e-4); never silently broaden it after float-order differences. fp16 (bits 16) is checked against the
+documented ≤1% comparison instead (full set: native/perf/vonref.py).
 """
 import gzip
 import json
@@ -47,7 +48,9 @@ class VonParityTests(unittest.TestCase):
                             data=json.dumps(obj,ensure_ascii=False).encode(),headers={'Content-Type':'application/json'}),timeout=180) as reply:
                             return json.load(reply)
                     id='von-'+version
-                    self.assertIn(id,request('/load',{'model':id})['loaded'])
+                    # The strict SDK gate is for f32: request native explicitly (unset loads the recommended 16-bit).
+                    self.assertIn(id,request('/load',{'model':id,'bits':0})['loaded'])
+                    self.assertEqual(json.load(urllib.request.urlopen(url+'/status'))['models'][id]['bits'],0)
                     questions=fixture['questions']
                     violations=[]
                     max_p={'one-question':Decimal(0),'three-question':Decimal(0),'five-item':Decimal(0)}
@@ -136,7 +139,7 @@ class VonParityTests(unittest.TestCase):
                                 if 'noul' in expected: q_dp=max(q_dp,abs(a['noul']-expected['noul']))
                                 else: q_dp=max(q_dp,max(abs(a['probabilities'][k]-v) for k,v in expected['probabilities'].items()))
                         print('VON_Q',id,bits,'max_dp',round(q_dp,4),flush=True)
-                    # bits 16: opt-in fp16, not the default. It is outside the ≤1% gate (max |dp| 0.08 on near-tie
+                    # bits 16: the recommended default, not the SDK-exact setting. It is outside the ≤1% gate (max |dp| 0.08 on near-tie
                     # items of the 368-item set, native/perf/THEORY.md): check the same answers and |dp| ≤ 0.1.
                     self.assertIn(id,request('/load',{'model':id,'bits':16})['loaded'])
                     half=request('/judge',{'items':[e['item'] for e in fixture['items']],'questions':questions,'model':id})['results']

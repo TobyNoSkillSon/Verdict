@@ -286,6 +286,25 @@ def _eff(bits, native):
     return native if not bits else int(bits)
 
 
+RECOMMENDATION_MARGIN = 0.005   # 0.5 accuracy points
+
+
+def recommended_bits(results, options=None):
+    """The recommended precision (mirrors VerdictCore.recommendedBits): among measured precisions (accuracy present)
+    within 0.5 points of the best measured accuracy, the lowest J/1k; ties -> lower ms; then higher bits. A precision
+    without energy (or ms) ranks after those with it. results: {bits: result}; None when nothing is measured."""
+    measured = [(int(b), r) for b, r in (results or {}).items()
+                if isinstance(r, dict) and r.get('accuracy') is not None and (options is None or int(b) in options)]
+    if not measured:
+        return None
+    best = max(r['accuracy'] for _, r in measured)
+    inf = float('inf')
+    candidates = [(b, r) for b, r in measured if r['accuracy'] >= best - RECOMMENDATION_MARGIN - 1e-9]
+    key = lambda c: (inf if c[1].get('j_per_1k') is None else c[1]['j_per_1k'],
+                     inf if c[1].get('ms') is None else c[1]['ms'], -c[0])
+    return min(candidates, key=key)[0]
+
+
 _MINUS = '\u2212'
 
 
@@ -294,9 +313,10 @@ def _signed(x, fmt):
 
 
 def deltas(result, base):
-    """Figures at one precision vs the default precision, as short strings (None when either side is unmeasured).
+    """Figures at one precision vs the recommended (default) precision, as short strings (None when either side is unmeasured).
 
-    {"accuracy": "−0.4 pt", "ece": "+0.012", "speed": "35% faster", "energy": "20% less energy"}; speed is a rate change."""
+    {"accuracy": "−0.4 pt", "ece": "+0.012", "speed": "35% faster", "energy": "20% less energy"}; speed is a rate change;
+    from 2x on speed reads "2.0× slower" and extra energy "2.9× more energy"."""
     result, base, out = result or {}, base or {}, {}
     a, b = result.get('accuracy'), base.get('accuracy')
     if a is not None and b is not None:
@@ -315,7 +335,8 @@ def deltas(result, base):
     a, b = result.get('j_per_1k'), base.get('j_per_1k')
     if a is not None and b:
         c = a / b - 1
-        out['energy'] = 'same energy' if abs(c) < 0.005 else f"{abs(c) * 100:.0f}% {'less' if c < 0 else 'more'} energy"
+        out['energy'] = ('same energy' if abs(c) < 0.005 else f'{a / b:.1f}\u00d7 more energy' if c >= 1
+                         else f"{abs(c) * 100:.0f}% {'less' if c < 0 else 'more'} energy")
     return out
 
 
@@ -324,9 +345,9 @@ def models():
 
     [{"id", "name", "family", "inputs", "params", "context", "languages", "license",
       "state": "hot"|"downloaded"|"available"|"hosted", "loadable": bool,
-      "precision": {"selected", "default", "loaded", "options"} (bits; None for hosted/not loaded),
+      "precision": {"selected", "default", "loaded", "options"} (bits; default = recommended; None for hosted/not loaded),
       "benchmark": {"accuracy", "ece", "ms", "items_per_s", "j_per_1k", "memory_mb", "sets", ...} | None   # at the selected precision
-      "benchmarks": {"16": {...}, "8": {..., "deltas": {...}}}   # every measured precision, deltas vs the default
+      "benchmarks": {"16": {...}, "8": {..., "deltas": {...}}}   # every measured precision, deltas vs the recommended
       "links": {"upstream", "weights", "runtime", ...}, "recommendation"}]
     Links point at Hugging Face / GitHub model cards so an agent can read the specifics."""
     s = status(); bench = _benchmarks(); selected = _selected_precision(); out = []
@@ -336,7 +357,9 @@ def models():
         hosted = not m.get('repository')
         native = native_bits(m.get('runtime'))
         default, results = _precisions(bench.get(m['id']), native)
-        sel = default if hosted else _eff(selected.get(m['id'], 0), native)
+        if not hosted:   # the recommended precision is the default: selection, loads and deltas
+            default = recommended_bits(results, precision_options(m.get('runtime'))) or native
+        sel = default if hosted else _eff(selected[m['id']], native) if m['id'] in selected else default
         loaded = s['models'].get(m['id'])
         base = results.get(default)
         all_results = {str(k): dict(v, **({'deltas': deltas(v, base)} if k != default else {}))
@@ -452,7 +475,7 @@ def _mem(mb):
 
 
 def _precision_rows(m):
-    """One line per offered precision: figures with deltas vs the default; marks default/selected/loaded."""
+    """One line per offered precision: figures with deltas vs the recommended; marks recommended/selected/loaded."""
     p = m['precision']
     options = p['options'] if p else [int(k) for k in m['benchmarks']]
     rows = []
@@ -460,7 +483,7 @@ def _precision_rows(m):
         r = m['benchmarks'].get(str(bits)) or {}
         d = r.get('deltas', {})
         cell = lambda v, delta: (v + (' ' + delta if delta else ''))
-        tags = [t for t, on in (('default', p and bits == p['default']), ('selected', p and bits == p['selected']),
+        tags = [t for t, on in (('recommended', p and bits == p['default']), ('selected', p and bits == p['selected']),
                                 ('loaded', p and bits == p['loaded'])) if on]
         rows.append(f"{bits if p else '—':>4}  {cell(_num(r.get('accuracy'), '{:.1%}'), d.get('accuracy')):16} {cell(_num(r.get('ece'), '{:.3f}'), d.get('ece')):15} "
                     f"{cell(_ms(r.get('ms')), d.get('speed')):20} {cell(_num(r.get('j_per_1k'), '{:.0f} J'), d.get('energy')):24} {_mem(r.get('memory_mb')):>8}"
@@ -495,7 +518,7 @@ def _main(argv):
                 for m in sorted(ms, key=lambda m: -((m['benchmark'] or {}).get('accuracy') or 0)):
                     for n, row in enumerate(_precision_rows(m)):
                         print(f"{m['id'] if n == 0 else '':22} {row}")
-                print("\ndeltas vs each model's default precision; speed is single-item p50, energy is batched.")
+                print("\ndeltas vs each model's recommended precision (lowest energy within 0.5 pt of its best accuracy); speed is single-item p50, energy is batched.")
                 return 0
             print(f"{'model':22} {'inputs':16} {'context':>7} {'bits':>4} {'accuracy':>8} {'ece':>6} {'speed':>8} {'J/1k':>6} {'memory':>8}  {'state':10} weights")
             for m in sorted(ms, key=lambda m: -((m['benchmark'] or {}).get('accuracy') or 0)):

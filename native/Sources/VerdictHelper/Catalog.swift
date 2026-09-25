@@ -9,6 +9,12 @@ struct ModelSpec {
     let context: Int
     let inputs: [String]
     let raw: [String: Any]
+    /// Precision for loads without an explicit choice (models.json default_bits: the recommended precision).
+    /// Stored like explicit bits: the runtime's native precision (Laya 16, Von 32) is 0.
+    var defaultBits: Int {
+        guard let bits = raw["default_bits"] as? Int else { return 0 }
+        return bits == (runtime == "von" ? 32 : 16) ? 0 : bits
+    }
 }
 
 struct ServiceError: Error, CustomStringConvertible {

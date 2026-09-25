@@ -71,18 +71,25 @@ struct ModelTable: View {
         }
     }
 
+    /// Loaded row: the selection blue at reduced intensity, so the row reads as "hot" without shouting.
+    static let hotRow = Color(nsColor: .selectedContentBackgroundColor).opacity(0.6)
+    /// Same green family as the deltas, deep enough for white text on the loaded row.
+    static let reloadGreen = Color(red: 0.20, green: 0.56, blue: 0.31)
+
     private func native(_ m: CatalogModel) -> Int { nativeBits(runtime: m.runtime) }
-    /// Selected precision as effective bits (16/8/4, or 32 for Von).
+    private func recommended(_ m: CatalogModel) -> Int? { backend.recommendedPrecision(m.id) }
+    /// Selected precision as effective bits (16/8/4, or 32 for Von); the recommended one unless the user picked.
     private func selectedBits(_ m: CatalogModel) -> Int { effectiveBits(config: backend.precision(m.id), native: native(m)) }
-    /// (selected, default) results; the reference model has only its published figures.
+    /// (selected, base) results; deltas compare against the recommended precision. The reference model has only its
+    /// published figures.
     private func results(_ m: CatalogModel) -> (BenchmarkResult?, BenchmarkResult?) {
         guard let b = backend.benchmarks[m.id] else { return (nil, nil) }
-        let base = b.defaultResult(nativeBits: native(m))
-        if m.reference == true { return (base, base) }
+        if m.reference == true { let base = b.defaultResult(nativeBits: native(m)); return (base, base) }
+        let base = b.result(bits: defaultBits(recommended: recommended(m), native: native(m)))
         return (b.result(bits: selectedBits(m)), base)
     }
     private func isDefault(_ m: CatalogModel) -> Bool {
-        m.reference == true || selectedBits(m) == (backend.benchmarks[m.id]?.default_bits ?? native(m))
+        m.reference == true || selectedBits(m) == defaultBits(recommended: recommended(m), native: native(m))
     }
 
     private var rows: [CatalogModel] {
@@ -168,7 +175,7 @@ struct ModelTable: View {
             Text(formatContext(model.context)).frame(width: W.context, alignment: .trailing)
                 .help("Maximum tokens per item, questions included. A longer item gets its own error; it is never truncated.")
             Text(reference ? "" : model.params).frame(width: W.params, alignment: .trailing)
-            precisionPicker(model, loadedBits: hot ? effectiveBits(config: loaded?.bits ?? 0, native: native(model)) : nil, loading: loading)
+            precisionPicker(model, loadedBits: hot ? effectiveBits(config: loaded?.bits ?? 0, native: native(model)) : nil, loading: loading, hot: hot)
                 .frame(width: W.bits, alignment: .leading)
             metric(bench?.accuracy.map { String(format: "%.1f%%", $0 * 100) }, compare ? accuracyDelta(bench?.accuracy, base: base?.accuracy) : nil, W.accuracy, hot: hot)
                 .help(accuracyHelp(model, bench))
@@ -190,9 +197,9 @@ struct ModelTable: View {
             if reference {
                 Text("").frame(width: W.button + W.trash + 6)
             } else {
-                Button(loading ? "…" : action == .unload ? "Unload" : action == .reload ? "Reload" : installed == nil ? "Get" : "Load") {
+                loadButton(loading ? "…" : action == .unload ? "Unload" : action == .reload ? "Reload" : installed == nil ? "Get" : "Load", reload: action == .reload && !loading) {
                     if action == .unload { backend.unload(model.id) } else { backend.load(model.id) }
-                }.buttonStyle(.bordered).controlSize(.small).frame(width: W.button)
+                }.frame(width: W.button)
                     .disabled(loading || backend.busyModel != nil || status?.port == nil)
                     .help(action == .unload ? "Free its memory; it stays downloaded and will not load at next launch."
                           : action == .reload ? "Load it at \(selectedBits(model))-bit in place of the loaded \(effectiveBits(config: loaded?.bits ?? 0, native: native(model)))-bit."
@@ -204,7 +211,7 @@ struct ModelTable: View {
             }
         }.font(.system(size: 11, design: .monospaced))
             .padding(.horizontal, 6).frame(height: 30)
-            .background(hot ? Color(nsColor: .selectedContentBackgroundColor) : .clear, in: RoundedRectangle(cornerRadius: 4))
+            .background(hot ? Self.hotRow : .clear, in: RoundedRectangle(cornerRadius: 4))
             .foregroundStyle(hot ? Color(nsColor: .selectedMenuItemTextColor) : reference ? Color.secondary : Color.primary)
             .contentShape(Rectangle())
     }
@@ -220,17 +227,27 @@ struct ModelTable: View {
         }.frame(width: width, alignment: .trailing)
     }
 
-    @ViewBuilder private func precisionPicker(_ model: CatalogModel, loadedBits: Int?, loading: Bool) -> some View {
+    /// Reload (a different precision is selected for the loaded model) is the green variant of the same button.
+    @ViewBuilder private func loadButton(_ title: String, reload: Bool, action: @escaping () -> Void) -> some View {
+        if reload {
+            Button(title, action: action).buttonStyle(ReloadButtonStyle()).controlSize(.small)
+        } else {
+            Button(title, action: action).buttonStyle(.bordered).controlSize(.small)
+        }
+    }
+
+    @ViewBuilder private func precisionPicker(_ model: CatalogModel, loadedBits: Int?, loading: Bool, hot: Bool) -> some View {
         if model.reference == true {
             Text("—").foregroundStyle(.secondary)
         } else {
             let options = precisionOptions(runtime: model.runtime)
             let n = native(model)
-            Picker("", selection: Binding(get: { selectedBits(model) }, set: { backend.setPrecision(model.id, configBits(effective: $0, native: n)) })) {
-                ForEach(options, id: \.self) { bits in Text(String(bits)).tag(bits) }
-            }.pickerStyle(.segmented).controlSize(.mini).labelsHidden().frame(width: CGFloat(options.count) * 23)
-                .disabled(loading)
-                .help("Weight precision; \(n) is the model's native precision. Selecting one shows its measured numbers" + (loadedBits.map { "; loaded at \($0)-bit, Reload applies the selection." } ?? "."))
+            PrecisionControl(options: options, selected: selectedBits(model), recommended: recommended(model), hot: hot, enabled: !loading,
+                             help: "Weight precision; \(n) is the model's native precision. Selecting one shows its measured numbers"
+                                + (loadedBits.map { "; loaded at \($0)-bit, Reload applies the selection." } ?? "."),
+                             recommendedHelp: "Recommended: lowest energy within 0.5 pt of the best accuracy") { bits in
+                backend.setPrecision(model.id, configBits(effective: bits, native: n))
+            }.controlSize(.mini).fixedSize()
         }
     }
 
@@ -317,3 +334,15 @@ struct ModelTable: View {
     }
 }
 
+/// The pending-Reload button: the bordered small button's shape, filled in the deltas' green family (deep enough for
+/// white text on the loaded row). Drawn directly, so it stays green in an inactive window or a menu.
+struct ReloadButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var enabled
+    func makeBody(configuration: ButtonStyleConfiguration) -> some View {
+        configuration.label
+            .foregroundStyle(.white)
+            .padding(.horizontal, 7).frame(height: 16)
+            .background(ModelTable.reloadGreen.opacity(configuration.isPressed ? 0.75 : enabled ? 1 : 0.5),
+                        in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+    }
+}

@@ -121,6 +121,51 @@ public func effectiveBits(config bits: Int, native: Int) -> Int { bits == 0 ? na
 /// Effective bits → config/helper bits: the native precision is stored as 0.
 public func configBits(effective bits: Int, native: Int) -> Int { bits == native ? 0 : bits }
 
+// MARK: Recommended precision
+
+/// Accuracy margin (fraction, 0.005 = 0.5 points) within which a precision counts as matching the best.
+public let recommendationMargin = 0.005
+
+/// The recommended precision: among measured precisions (accuracy present) whose accuracy is within 0.5 points of
+/// the model's best measured accuracy, the lowest energy per 1,000 judgements; ties → lower ms; then higher bits.
+/// A precision without energy (or ms) ranks after those with it. `options` limits the candidates to offered precisions.
+/// Nil when nothing is measured. client/verdict.py `recommended_bits` mirrors this rule.
+public func recommendedBits(_ benchmark: ModelBenchmark?, options: [Int]? = nil) -> Int? {
+    guard let benchmark else { return nil }
+    let measured: [(bits: Int, result: BenchmarkResult, accuracy: Double)] = benchmark.precisions.compactMap { key, r in
+        guard let bits = Int(key), let accuracy = r.accuracy, options?.contains(bits) ?? true else { return nil }
+        return (bits, r, accuracy)
+    }
+    guard let best = measured.map(\.accuracy).max() else { return nil }
+    // 1e-9 absorbs float error: 0.485 − 0.480 is 0.0050000000000000044.
+    let candidates = measured.filter { $0.accuracy >= best - recommendationMargin - 1e-9 }
+    func order(_ a: Double?, _ b: Double?) -> Bool? {
+        switch (a, b) {
+        case let (x?, y?): return x == y ? nil : x < y
+        case (_?, nil): return true
+        case (nil, _?): return false
+        case (nil, nil): return nil
+        }
+    }
+    return candidates.min { a, b in
+        order(a.result.j_per_1k, b.result.j_per_1k) ?? order(a.result.ms, b.result.ms) ?? (a.bits > b.bits)
+    }?.bits
+}
+
+/// Recommended precision for a catalog model; nil for the hosted reference and unmeasured models.
+public func recommendedBits(for model: CatalogModel, benchmark: ModelBenchmark?) -> Int? {
+    guard model.reference != true else { return nil }
+    return recommendedBits(benchmark, options: precisionOptions(runtime: model.runtime))
+}
+
+/// Default precision (effective bits) when config has no explicit choice: the recommended one, else native.
+public func defaultBits(recommended: Int?, native: Int) -> Int { recommended ?? native }
+
+/// Selected precision as effective bits: the explicit config choice (0 = native) or the default.
+public func selectedBits(config: Int?, recommended: Int?, native: Int) -> Int {
+    config.map { effectiveBits(config: $0, native: native) } ?? defaultBits(recommended: recommended, native: native)
+}
+
 /// What the load button does for a model with a selected precision and, if loaded, its loaded precision.
 public enum LoadAction: Equatable { case load, unload, reload }
 public func loadAction(selected: Int, loaded: Int?, native: Int) -> LoadAction {
@@ -128,7 +173,7 @@ public func loadAction(selected: Int, loaded: Int?, native: Int) -> LoadAction {
     return effectiveBits(config: loaded, native: native) == effectiveBits(config: selected, native: native) ? .unload : .reload
 }
 
-// MARK: Deltas vs the default precision
+// MARK: Deltas vs the recommended (default) precision
 
 public enum DeltaTone: Equatable { case better, worse, neutral }
 public struct Delta: Equatable {
@@ -172,12 +217,14 @@ public func speedDelta(_ ms: Double?, base: Double?, short: Bool = false) -> Del
     return Delta("\(amount) \(word)", faster ? .better : .worse)
 }
 
-/// Energy per 1,000 judgements → "20% less energy" / "15% more energy" (fraction of the default). Under 1% reads "same energy".
+/// Energy per 1,000 judgements → "20% less energy" / "15% more energy" (fraction of the base); from 2× the base on it
+/// reads "2.9× more energy". Under 1% reads "same energy".
 public func energyDelta(_ joules: Double?, base: Double?, short: Bool = false) -> Delta? {
     guard let joules, let base, base > 0 else { return nil }
     let change = joules / base - 1
     let suffix = short ? "" : " energy"
     if abs(change) < 0.005 { return Delta("same" + suffix, .neutral) }
+    if change >= 1 { return Delta(String(format: "%.1f× more", joules / base) + suffix, .worse) }
     return Delta(String(format: "%.0f%%", abs(change) * 100) + (change < 0 ? " less" : " more") + suffix, change < 0 ? .better : .worse)
 }
 

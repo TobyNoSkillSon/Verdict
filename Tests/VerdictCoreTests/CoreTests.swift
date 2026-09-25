@@ -118,5 +118,93 @@ final class CoreTests: XCTestCase {
         XCTAssertNil(formatMemory(nil))
         XCTAssertEqual(formatMs(4.6), "4.6 ms")
         XCTAssertEqual(formatMs(14.2), "14 ms")
+        XCTAssertEqual(energyDelta(1100.2, base: 378.6, short: true), Delta("2.9\u{00d7} more", .worse))
+        XCTAssertEqual(energyDelta(760, base: 380), Delta("2.0\u{00d7} more energy", .worse))
+        XCTAssertEqual(energyDelta(740, base: 380), Delta("95% more energy", .worse))
+    }
+
+    private func bench(_ precisions: [Int: BenchmarkResult]) -> ModelBenchmark { ModelBenchmark(default_bits: nil, precisions: precisions) }
+    private func model(_ id: String, runtime: String?, reference: Bool? = nil) -> CatalogModel {
+        CatalogModel(id: id, name: id, backbone: "", params: "", repository: reference == true ? "" : "r", subfolder: "", downloadBytes: 0,
+                     context: 8192, languages: "", license: "", recommendation: "", recommended: false, reference: reference, runtime: runtime, inputs: nil)
+    }
+
+    func testRecommendedPrecisionRule() {
+        // Within 0.5 pt of the best (55.4%): 16 and 8; 16 uses less energy. 4 is 0.6 pt down, excluded despite lowest J.
+        XCTAssertEqual(recommendedBits(bench([16: .init(accuracy: 0.554, ms: 8.2, j_per_1k: 422), 8: .init(accuracy: 0.551, ms: 9.9, j_per_1k: 470),
+                                             4: .init(accuracy: 0.548, ms: 9.6, j_per_1k: 300)])), 16)
+        // Exactly 0.5 pt below the best counts as within (float error absorbed): 32 at 48.0% vs best 48.5%.
+        XCTAssertEqual(recommendedBits(bench([32: .init(accuracy: 0.485, ms: 15, j_per_1k: 1050), 16: .init(accuracy: 0.480, ms: 7.4, j_per_1k: 345)])), 16)
+        // Energy tie -> lower ms; energy and ms tie -> higher bits.
+        XCTAssertEqual(recommendedBits(bench([16: .init(accuracy: 0.5, ms: 8, j_per_1k: 400), 8: .init(accuracy: 0.5, ms: 7, j_per_1k: 400)])), 8)
+        XCTAssertEqual(recommendedBits(bench([16: .init(accuracy: 0.5, ms: 7, j_per_1k: 400), 8: .init(accuracy: 0.5, ms: 7, j_per_1k: 400)])), 16)
+        // Missing fields: no accuracy = not measured (excluded, even with the lowest energy); missing energy ranks last,
+        // then ms decides among those without energy.
+        XCTAssertEqual(recommendedBits(bench([16: .init(accuracy: 0.5, ms: 8, j_per_1k: 400), 8: .init(ms: 3, j_per_1k: 100)])), 16)
+        XCTAssertEqual(recommendedBits(bench([16: .init(accuracy: 0.5, ms: 8), 8: .init(accuracy: 0.5, ms: 9, j_per_1k: 900)])), 8)
+        XCTAssertEqual(recommendedBits(bench([16: .init(accuracy: 0.5, ms: 8), 8: .init(accuracy: 0.5, ms: 6)])), 8)
+        XCTAssertEqual(recommendedBits(bench([16: .init(accuracy: 0.5), 8: .init(accuracy: 0.5)])), 16)
+        // One measured precision: that one. Nothing measured: nil.
+        XCTAssertEqual(recommendedBits(bench([32: .init(accuracy: 0.588)])), 32)
+        XCTAssertNil(recommendedBits(bench([16: .init(ms: 4)])))
+        XCTAssertNil(recommendedBits(bench([:])))
+        XCTAssertNil(recommendedBits(nil))
+        // Offered options only: a stray 2-bit entry is never recommended.
+        XCTAssertEqual(recommendedBits(bench([16: .init(accuracy: 0.5, j_per_1k: 400), 2: .init(accuracy: 0.5, j_per_1k: 10)]), options: [16, 8, 4]), 16)
+        // Reference (Jev) rows are excluded; the legacy flat shape decodes but is never recommended from.
+        let jev = decodeBenchmarks(Data(#"{"jev": {"accuracy": 0.695, "ece": 0.246, "ms": 256, "source": "published"}}"#.utf8))["jev"]
+        XCTAssertNil(recommendedBits(for: model("jev", runtime: "hosted", reference: true), benchmark: jev))
+        XCTAssertEqual(recommendedBits(for: model("von-1.2", runtime: "von"), benchmark: bench([32: .init(accuracy: 0.527, ms: 15.9, j_per_1k: 1100),
+                                                                                          16: .init(accuracy: 0.526, ms: 7.9, j_per_1k: 379)])), 16)
+    }
+
+    /// The shipped catalog: the rule, benchmarks.json default_bits and the helper's models.json default_bits agree.
+    func testShippedCatalogDefaultsFollowTheRule() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let benchmarks = decodeBenchmarks(try Data(contentsOf: root.appendingPathComponent("Resources/benchmarks.json")))
+        let catalogData = try Data(contentsOf: root.appendingPathComponent("Resources/models.json"))
+        let catalog = try JSONDecoder().decode([CatalogModel].self, from: catalogData)
+        let raw = try XCTUnwrap(JSONSerialization.jsonObject(with: catalogData) as? [[String: Any]])
+        var seen: [String: Int] = [:]
+        for m in catalog where m.reference != true {
+            let rec = try XCTUnwrap(recommendedBits(for: m, benchmark: benchmarks[m.id]), m.id)
+            seen[m.id] = rec
+            XCTAssertEqual(benchmarks[m.id]?.default_bits, rec, "benchmarks.json default_bits \(m.id)")
+            XCTAssertEqual(raw.first { $0["id"] as? String == m.id }?["default_bits"] as? Int, rec, "models.json default_bits \(m.id)")
+        }
+        XCTAssertEqual(seen, ["laya-english": 16, "laya-multilingual": 16, "laya-typed-decisions": 16, "von-1.2": 16, "von-1.1": 4])
+        XCTAssertNil(recommendedBits(for: try XCTUnwrap(catalog.first { $0.id == "jev" }), benchmark: benchmarks["jev"]))
+    }
+
+    func testDefaultsAndDeltasAgainstRecommended() throws {
+        // No explicit choice -> recommended; explicit 0 -> native; explicit bits -> those.
+        XCTAssertEqual(selectedBits(config: nil, recommended: 16, native: 32), 16)
+        XCTAssertEqual(selectedBits(config: 0, recommended: 16, native: 32), 32)
+        XCTAssertEqual(selectedBits(config: 8, recommended: 16, native: 32), 8)
+        XCTAssertEqual(selectedBits(config: nil, recommended: nil, native: 32), 32)
+        XCTAssertEqual(configBits(effective: selectedBits(config: nil, recommended: 16, native: 16), native: 16), 0)
+        // Von 1.2 with 32 selected, compared with the recommended 16 (shipped figures).
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let von = try XCTUnwrap(decodeBenchmarks(try Data(contentsOf: root.appendingPathComponent("Resources/benchmarks.json")))["von-1.2"])
+        let base = try XCTUnwrap(von.result(bits: try XCTUnwrap(recommendedBits(von, options: [32, 16, 8, 4]))))
+        let f32 = try XCTUnwrap(von.result(bits: 32))
+        XCTAssertEqual(accuracyDelta(f32.accuracy, base: base.accuracy), Delta("+0.1 pt", .better))
+        XCTAssertEqual(speedDelta(f32.ms, base: base.ms, short: true), Delta("2.0\u{00d7} slower", .worse))
+        XCTAssertEqual(energyDelta(f32.j_per_1k, base: base.j_per_1k, short: true), Delta("2.9\u{00d7} more", .worse))
+    }
+
+    func testReloadStateWithRecommendedDefault() {
+        // Von, nothing explicit: selection is the recommended 16 (config bits 16). The helper loaded its default 16.
+        let selected = configBits(effective: selectedBits(config: nil, recommended: 16, native: 32), native: 32)
+        XCTAssertEqual(selected, 16)
+        XCTAssertEqual(loadAction(selected: selected, loaded: 16, native: 32), .unload)
+        XCTAssertEqual(loadAction(selected: selected, loaded: 0, native: 32), .reload)     // loaded f32, 16 selected
+        XCTAssertEqual(loadAction(selected: 0, loaded: 16, native: 32), .reload)           // user picked 32 on a 16 load
+        XCTAssertEqual(loadAction(selected: selected, loaded: nil, native: 32), .load)
+        // Laya: recommended 16 is native, stored as 0; the helper reports 0 or 16, both the same precision.
+        let laya = configBits(effective: selectedBits(config: nil, recommended: 16, native: 16), native: 16)
+        XCTAssertEqual(loadAction(selected: laya, loaded: 0, native: 16), .unload)
+        XCTAssertEqual(loadAction(selected: laya, loaded: 16, native: 16), .unload)
+        XCTAssertEqual(loadAction(selected: 8, loaded: 0, native: 16), .reload)
     }
 }

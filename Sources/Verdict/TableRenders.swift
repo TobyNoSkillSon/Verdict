@@ -18,13 +18,13 @@ import VerdictCore
         base.installed = ["laya-english": InstalledModel(bytes: 842_600_000), "laya-multilingual": InstalledModel(bytes: 643_800_000),
                           "von-1.2": InstalledModel(bytes: 1_580_000_000)]
         let fast = Optimizations(tokenizer: "fast", attention: "windowed", matmul: "neural accelerators", optimized: true)
-        let f32 = Optimizations(tokenizer: "fast", attention: "windowed", matmul: "f32 (by design)", optimized: true)
         var laya = base; laya.models["laya-english"] = LoadedModel(device: "mlx", load_s: 0.6, bits: 0, optimizations: fast)
-        var von = base; von.models["von-1.2"] = LoadedModel(device: "mlx", load_s: 1.1, bits: 0, optimizations: f32)
+        var von = base; von.models["von-1.2"] = LoadedModel(device: "mlx", load_s: 1.1, bits: 16, optimizations: fast)
+        // Selections are config bits (0 = native); models without one show their recommended precision.
         let states: [(String, WorkerStatus, [String: Int])] = [
             ("nothing-loaded", base, [:]),
-            ("laya-16-loaded-8-selected", laya, ["laya-english": 8, "von-1.2": 16]),
-            ("von-32-default", von, ["laya-multilingual": 4, "von-1.1": 8]),
+            ("laya-16-loaded-8-selected", laya, ["laya-english": 8]),
+            ("von-16-loaded-32-selected", von, ["von-1.2": 0]),
         ]
         render(states, 0)
     }

@@ -119,7 +119,8 @@ final class Service {
         let start = Date()
         do {
             let snapshot = ProcessInfo.processInfo.environment["VERDICT_STUB_MODELS"] == "1" ? support : try catalog.snapshot(spec)
-            let bits = precision[id] ?? 0
+            // Explicit choice (VERDICT_PRECISION or /load bits; 0 = native) wins; else the catalog's recommended default.
+            let bits = precision[id] ?? spec.defaultBits
             let agent = try type.load(id: id, snapshot: snapshot, bits: bits)
             models[id] = agent; order.append(id)
             var active = state["models"] as? [String: Any] ?? [:]

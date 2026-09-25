@@ -261,8 +261,18 @@ extension Backend {
 }
 
 extension Backend {
-    /// Config bits for the selected precision (0 = native).
-    func precision(_ id: String) -> Int { selectedPrecision[id] ?? 0 }
+    /// Recommended precision (effective bits) from the measured catalog; nil for the reference/unmeasured.
+    func recommendedPrecision(_ id: String) -> Int? {
+        guard let model = catalog.first(where: { $0.id == id }) else { return nil }
+        return recommendedBits(for: model, benchmark: benchmarks[id])
+    }
+    /// Config bits for the selected precision (0 = native). Without an explicit choice: the recommended precision,
+    /// which the helper also loads by default (models.json default_bits). Nothing is written until the user picks.
+    func precision(_ id: String) -> Int {
+        if let explicit = selectedPrecision[id] { return explicit }
+        let native = nativeBits(runtime: catalog.first(where: { $0.id == id })?.runtime)
+        return configBits(effective: defaultBits(recommended: recommendedPrecision(id), native: native), native: native)
+    }
     /// Records the selection only; the table shows its numbers and a loaded model offers Reload.
     func setPrecision(_ id: String, _ bits: Int) {
         guard precision(id) != bits else { return }
