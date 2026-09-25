@@ -108,7 +108,7 @@ class VonParityTests(unittest.TestCase):
                         'questions':{'n':{'type':'noul','instructions':'Is this about money?'}},'model':id})['results']
                     self.assertIn('noul',long[0]['answers']['n'])
                     self.assertIn('confidence',long[0]['answers']['n'])
-                    self.assertIn('8192',long[1]['error'])
+                    self.assertIn('2048' if version=='1.1' else '8192',long[1]['error'])   # config max_position_embeddings
                     status=json.load(urllib.request.urlopen(url+'/status'))
                     sdk_single_differences=sum(
                         any(entry['answers'][name].get(k)!=v for k,v in entry['batched_answers'][name].items()

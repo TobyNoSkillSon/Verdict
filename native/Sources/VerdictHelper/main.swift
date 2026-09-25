@@ -31,7 +31,9 @@ final class HTTPServer {
                 FileHandle.standardOutput.write(Data(line.utf8))
                 DispatchQueue.global().async { self.service.preload() }
                 let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global())
-                timer.schedule(deadline: .now() + 30, repeating: 30)
+                // Keep Hot and pressure checks; VERDICT_TEST_IDLE_TICK_S shortens the interval for tests.
+                let tick = Double(ProcessInfo.processInfo.environment["VERDICT_TEST_IDLE_TICK_S"] ?? "") ?? 30
+                timer.schedule(deadline: .now() + tick, repeating: tick)
                 timer.setEventHandler { self.service.idleTick() }
                 timer.resume(); self.timer = timer
             case .failed(let error): fputs("listener: \(error)\n", stderr); exit(1)
@@ -94,7 +96,7 @@ final class HTTPServer {
     }
     private func respond(_ connection: NWConnection, _ code: Int, _ body: [String: Any]) {
         let data = (try? JSONSerialization.data(withJSONObject: body, options: [.fragmentsAllowed, .withoutEscapingSlashes])) ?? Data("{}".utf8)
-        let reason = [200: "OK", 403: "Forbidden", 404: "Not Found", 415: "Unsupported Media Type"][code] ?? "Bad Request"
+        let reason = [200: "OK", 403: "Forbidden", 404: "Not Found", 415: "Unsupported Media Type", 507: "Insufficient Storage"][code] ?? "Bad Request"
         let header = "HTTP/1.1 \(code) \(reason)\r\nContent-Type: application/json\r\nContent-Length: \(data.count)\r\nConnection: close\r\n\r\n"
         connection.send(content: Data(header.utf8) + data, completion: .contentProcessed { [self] _ in
             connection.cancel()

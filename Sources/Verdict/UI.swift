@@ -57,30 +57,42 @@ import VerdictCore
         }
         menu.addItem(.separator())
         menu.addItem(models.modelItem())
+        let config = backend.menuConfiguration
+        menu.addItem(submenu("Keep Hot", "flame", keepHotMenu(config)))
+        menu.addItem(submenu("Memory", "memorychip", memoryMenu(config, status: backend.status)))
+        menu.addItem(.separator())
         item("Copy Skill for Your Agent", "doc.on.doc", #selector(copyInstructions))
         item("Open Verdict Files", "folder", #selector(files))
-        menu.addItem(.separator())
-        if backend.processRunning { item("Restart Worker", "arrow.clockwise", #selector(restart)) }
+        if backend.processRunning || backend.previewRunning { item("Restart Worker", "arrow.clockwise", #selector(restart)) }
         else { item("Start Worker", "play", #selector(start)) }
-        let keep = NSMenuItem(title: "Keep Hot", action: nil, keyEquivalent: "")
-        keep.image = NSImage(systemSymbolName: "flame", accessibilityDescription: nil)
-        let keepMenu = NSMenu(); keepMenu.autoenablesItems = false
-        for choice in keepHotChoices {
-            let entry = NSMenuItem(title: choice.title, action: #selector(selectKeepHot(_:)), keyEquivalent: "")
-            entry.target = self; entry.representedObject = choice.minutes
-            entry.state = backend.idleMinutes == choice.minutes ? .on : .off
-            keepMenu.addItem(entry)
-        }
-        keepMenu.addItem(.separator())
-        let note = NSMenuItem(title: "Unloaded models reload on the next judgement", action: nil, keyEquivalent: ""); note.isEnabled = false
-        keepMenu.addItem(note)
-        keep.submenu = keepMenu; menu.addItem(keep)
         let login = NSMenuItem(title: "Launch at Login", action: #selector(toggleLogin), keyEquivalent: "")
         login.target = self; login.state = SMAppService.mainApp.status == .enabled ? .on : .off
         menu.addItem(login)
         menu.addItem(.separator())
         item("Support the developer…", "heart", #selector(support))
         item("Quit Verdict", "power", #selector(quit), key: "q", modifiers: [.command])
+    }
+    /// Keep Hot / Memory submenu from VerdictCore's entries (section headers, checkmarked choices, short captions).
+    private func submenu(_ title: String, _ icon: String, _ entries: [MenuEntry]) -> NSMenuItem {
+        let root = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        root.image = NSImage(systemSymbolName: icon, accessibilityDescription: nil)
+        let sub = NSMenu(); sub.autoenablesItems = false
+        for entry in entries {
+            switch entry {
+            case .header(let text): sub.addItem(.sectionHeader(title: text))
+            case .separator: sub.addItem(.separator())
+            case .caption(let text):
+                let line = NSMenuItem(title: text, action: nil, keyEquivalent: ""); line.isEnabled = false
+                sub.addItem(line)
+            case .choice(let text, let checked, let action):
+                let choice = NSMenuItem(title: text, action: #selector(choose(_:)), keyEquivalent: "")
+                choice.target = self; choice.state = checked ? .on : .off
+                choice.representedObject = MenuActionBox(action)
+                sub.addItem(choice)
+            }
+        }
+        root.submenu = sub
+        return root
     }
     private func item(_ title: String, _ icon: String, _ action: Selector, key: String = "", modifiers: NSEvent.ModifierFlags = []) {
         let entry = NSMenuItem(title: title, action: action, keyEquivalent: key)
@@ -104,7 +116,10 @@ import VerdictCore
     }
     @objc private func restart() { backend.stop(); backend.start() }
     @objc private func start() { backend.start() }
-    @objc private func selectKeepHot(_ sender: NSMenuItem) { backend.setIdleMinutes(sender.representedObject as? Int ?? 0) }
+    @objc private func choose(_ sender: NSMenuItem) {
+        guard let box = sender.representedObject as? MenuActionBox else { return }
+        backend.apply(box.action)
+    }
     @objc private func toggleLogin() {
         do {
             if SMAppService.mainApp.status == .enabled { try SMAppService.mainApp.unregister() } else { try SMAppService.mainApp.register() }
@@ -161,19 +176,7 @@ import VerdictCore
                         try? rep.representation(using: .png, properties: [:])?.write(to: directory.appendingPathComponent("menu.png"))
                     }
                     window.orderOut(nil)
-                    if let keep = delegate.menu.items.first(where: { $0.title == "Keep Hot" })?.submenu {
-                        let sub = MenuMock(items: keep.items, width: 300)
-                        let w2 = NSWindow(contentRect: sub.frame, styleMask: .borderless, backing: .buffered, defer: false)
-                        w2.backgroundColor = .clear; w2.contentView = sub; w2.appearance = NSAppearance(named: .darkAqua)
-                        w2.orderFrontRegardless(); w2.setFrameOrigin(NSPoint(x: -5000, y: -5000))
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                            if let rep = sub.bitmapImageRepForCachingDisplay(in: sub.bounds) {
-                                sub.cacheDisplay(in: sub.bounds, to: rep)
-                                try? rep.representation(using: .png, properties: [:])?.write(to: directory.appendingPathComponent("keep-hot.png"))
-                            }
-                            w2.orderOut(nil); NSApp.terminate(nil)
-                        }
-                    } else { NSApp.terminate(nil) }
+                    MenuMock.renderSubmenus(of: delegate.menu, into: directory) { NSApp.terminate(nil) }
                 }
                 return
             }
@@ -210,10 +213,35 @@ final class MenuMock: NSView {
     let items: [NSMenuItem]
     init(items: [NSMenuItem], width: CGFloat) {
         self.items = items
-        let height = items.reduce(CGFloat(12)) { $0 + ($1.isSeparatorItem ? 11 : 26) }
+        let height = items.reduce(CGFloat(12)) { $0 + ($1.isSeparatorItem ? 11 : $1.isSectionHeader ? 22 : 26) }
         super.init(frame: NSRect(x: 0, y: 0, width: width, height: height))
     }
     required init?(coder: NSCoder) { nil }
+    /// Draws `items` offscreen to `url` (PNG), then calls `done`.
+    static func render(_ items: [NSMenuItem], width: CGFloat, to url: URL, done: @escaping () -> Void) {
+        let view = MenuMock(items: items, width: width)
+        let window = NSWindow(contentRect: view.frame, styleMask: .borderless, backing: .buffered, defer: false)
+        window.backgroundColor = .clear; window.contentView = view; window.appearance = NSAppearance(named: .darkAqua)
+        window.orderFrontRegardless(); window.setFrameOrigin(NSPoint(x: -5000, y: -5000))
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            if let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+                view.cacheDisplay(in: view.bounds, to: rep)
+                try? rep.representation(using: .png, properties: [:])?.write(to: url)
+            }
+            window.orderOut(nil); done()
+        }
+    }
+    /// keep-hot.png and memory.png from the main menu's submenus.
+    static func renderSubmenus(of menu: NSMenu, into directory: URL, prefix: String = "", done: @escaping () -> Void) {
+        let subs = [("Keep Hot", "keep-hot"), ("Memory", "memory")].compactMap { title, name in
+            menu.items.first(where: { $0.title == title })?.submenu.map { ($0.items, name) }
+        }
+        func next(_ index: Int) {
+            guard index < subs.count else { done(); return }
+            render(subs[index].0, width: 300, to: directory.appendingPathComponent("\(prefix)\(subs[index].1).png")) { next(index + 1) }
+        }
+        next(0)
+    }
     override func draw(_ dirtyRect: NSRect) {
         let panel = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: 10, yRadius: 10)
         NSColor(calibratedRed: 0.14, green: 0.14, blue: 0.15, alpha: 1).setFill(); panel.fill()
@@ -221,6 +249,12 @@ final class MenuMock: NSView {
         var y = bounds.height - 6
         let attrs: (NSColor, CGFloat) -> [NSAttributedString.Key: Any] = { c, size in [.font: NSFont.systemFont(ofSize: size), .foregroundColor: c] }
         for item in items {
+            if item.isSectionHeader {
+                y -= 22
+                NSAttributedString(string: item.title, attributes: [.font: NSFont.systemFont(ofSize: 11, weight: .semibold),
+                    .foregroundColor: NSColor.white.withAlphaComponent(0.5)]).draw(at: NSPoint(x: 14, y: y + 4))
+                continue
+            }
             if item.isSeparatorItem {
                 y -= 5.5
                 NSColor.white.withAlphaComponent(0.14).setFill(); NSBezierPath(rect: NSRect(x: 14, y: y, width: bounds.width - 28, height: 1)).fill()
@@ -248,6 +282,12 @@ final class MenuMock: NSView {
     }
 }
 
+
+/// Carries a VerdictCore menu action through NSMenuItem.representedObject.
+final class MenuActionBox: NSObject {
+    let action: MenuAction
+    init(_ action: MenuAction) { self.action = action }
+}
 
 func skillText() -> String {
     guard let url = Bundle.main.url(forResource: "SKILL", withExtension: "md"), let text = try? String(contentsOf: url, encoding: .utf8) else {

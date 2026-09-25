@@ -237,4 +237,94 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(loadAction(selected: laya, loaded: 16, native: 16), .unload)
         XCTAssertEqual(loadAction(selected: 8, loaded: 0, native: 16), .reload)
     }
+
+    // MARK: Keep Hot per class, Memory, launch set
+
+    func testKeepHotAndMemoryConfigDefaultsAndLegacy() throws {
+        func decode(_ json: String) throws -> Configuration { try JSONDecoder().decode(Configuration.self, from: Data(json.utf8)) }
+        let fresh = try decode(#"{"executable":"/x","hotModels":["laya-english"],"launchAtLogin":false}"#)
+        XCTAssertEqual("\(fresh.manualIdle) \(fresh.onDemandIdle) \(fresh.swapAllowed)", "0 15 false")
+        // A config from before per-class Keep Hot: its single window becomes the manual one if the menu offers it.
+        XCTAssertEqual(try decode(#"{"executable":"/x","hotModels":[],"launchAtLogin":false,"idleMinutes":60}"#).manualIdle, 60)
+        XCTAssertEqual(try decode(#"{"executable":"/x","hotModels":[],"launchAtLogin":false,"idleMinutes":240}"#).manualIdle, 0)
+        let current = try decode(#"{"executable":"/x","hotModels":[],"launchAtLogin":false,"idleMinutes":60,"manualIdleMinutes":30,"onDemandIdleMinutes":0,"allowSwap":true}"#)
+        XCTAssertEqual("\(current.manualIdle) \(current.onDemandIdle) \(current.swapAllowed)", "30 0 true")
+        // Round trip keeps the new fields.
+        let again = try JSONDecoder().decode(Configuration.self, from: JSONEncoder().encode(current))
+        XCTAssertEqual(again, current)
+    }
+
+    func testHelperEnvironmentAndSettings() {
+        var config = Configuration(executable: "/x", hotModels: ["laya-english", "von-1.2"])
+        config.precision = ["von-1.2": 0]
+        XCTAssertEqual(config.helperEnvironment, ["VERDICT_PRELOAD": "laya-english,von-1.2", "VERDICT_IDLE_MINUTES": "0",
+                                                  "VERDICT_MANUAL_IDLE_MINUTES": "0", "VERDICT_ON_DEMAND_IDLE_MINUTES": "15",
+                                                  "VERDICT_ALLOW_SWAP": "0", "VERDICT_PRECISION": #"{"von-1.2":0}"#])
+        config = applying(.keepHot(.manual, minutes: 60), to: config)
+        config = applying(.keepHot(.onDemand, minutes: 5), to: config)
+        config = applying(.memory(allowSwap: true), to: config)
+        XCTAssertEqual([config.manualIdleMinutes, config.idleMinutes, config.onDemandIdleMinutes], [60, 60, 5]); XCTAssertEqual(config.allowSwap, true)
+        XCTAssertEqual(config.helperSettings, ["manual_idle_minutes": "60", "on_demand_idle_minutes": "5", "allow_swap": "true"])
+        XCTAssertEqual(config.helperEnvironment["VERDICT_IDLE_MINUTES"], "60")      // older helpers read the manual value
+        XCTAssertEqual(config.helperEnvironment["VERDICT_ALLOW_SWAP"], "1")
+    }
+
+    func testKeepHotMenu() {
+        let menu = keepHotMenu(Configuration(executable: "/x"))
+        let titles: [String] = menu.map {
+            switch $0 {
+            case .header(let t): return "# " + t
+            case .choice(let t, let checked, _): return t + (checked ? " ✓" : "")
+            case .caption(let t): return "(" + t + ")"
+            case .separator: return "—"
+            }
+        }
+        XCTAssertEqual(titles, ["# Manually loaded", "Always ✓", "15 min idle", "30 min idle", "60 min idle", "—",
+                                "# Loaded on demand", "5 min idle", "15 min idle ✓", "30 min idle", "60 min idle", "Always", "—",
+                                "(Unloaded models reload on the next request)"])
+        guard case .choice(_, _, let action) = menu[11] else { return XCTFail("on-demand Always") }
+        XCTAssertEqual(action, .keepHot(.onDemand, minutes: 0))
+        var custom = Configuration(executable: "/x"); custom.manualIdleMinutes = 30; custom.onDemandIdleMinutes = 0
+        let checked = keepHotMenu(custom).compactMap { entry -> MenuAction? in
+            if case .choice(_, true, let action) = entry { return action }; return nil
+        }
+        XCTAssertEqual(checked, [.keepHot(.manual, minutes: 30), .keepHot(.onDemand, minutes: 0)])
+    }
+
+    func testMemoryMenu() {
+        var status = WorkerStatus(); status.memory = ["available_mb": 86_940]
+        status.evictions = [Eviction(model: "von-1.2", reason: "idle: unused for 15 min (loaded on demand)", at: 1),
+                            Eviction(model: "laya-multilingual", reason: "memory: made room for von-1.2 at 16-bit", at: 2)]
+        let automatic = memoryMenu(Configuration(executable: "/x"), status: status)
+        XCTAssertEqual(automatic, [.choice(title: "Automatic (never swap)", checked: true, action: .memory(allowSwap: false)),
+                                   .choice(title: "Allow loading into swap", checked: false, action: .memory(allowSwap: true)),
+                                   .separator, .caption("~86.9 GB free without swapping"), .caption("Unloaded laya-multilingual to make room")])
+        var swap = Configuration(executable: "/x"); swap.allowSwap = true
+        // The swap item is a toggle: checked, choosing it again turns it off.
+        XCTAssertEqual(memoryMenu(swap, status: nil), [.choice(title: "Automatic (never swap)", checked: false, action: .memory(allowSwap: false)),
+                                                       .choice(title: "Allow loading into swap", checked: true, action: .memory(allowSwap: false))])
+    }
+
+    func testLaunchSetFollowsManualLoadsOnly() throws {
+        let json = #"{"installed":{},"calls":0,"items":0,"started":0,"updated":0,"models":{"laya-english":{"device":"mlx","load_s":0.6,"residency":"manual","last_used":5,"context":8192},"von-1.2":{"device":"mlx","load_s":1,"residency":"on_demand","last_used":9,"context":8192},"von-1.1":{"device":"mlx","load_s":1,"residency":"manual","context":2048}},"evictions":[{"model":"laya-multilingual","residency":"on_demand","reason":"memory: made room","at":3}],"refused":null,"manual_idle_minutes":0,"on_demand_idle_minutes":15,"allow_swap":false}"#
+        let status = try JSONDecoder().decode(WorkerStatus.self, from: Data(json.utf8))
+        XCTAssertEqual(status.models["von-1.1"]?.context, 2048)
+        XCTAssertEqual(status.models["von-1.2"]?.residency, "on_demand")
+        XCTAssertEqual(status.evictions?.first?.model, "laya-multilingual")
+        XCTAssertEqual(launchSet(["laya-english"], adding: status), ["laya-english", "von-1.1"])     // on-demand von-1.2 stays out
+        XCTAssertNil(launchSet(["von-1.1", "laya-english"], adding: status))
+        // An evicted or idle-unloaded manual model stays in the launch set: nothing is removed from status alone.
+        XCTAssertNil(launchSet(["laya-english", "von-1.1", "laya-typed-decisions"], adding: status))
+    }
+
+    func testFooterNotice() {
+        var status = WorkerStatus()
+        status.refused = Refusal(model: "von-1.2", message: "von-1.2 at 16-bit needs ~2.0 GB", at: 1000)
+        XCTAssertEqual(footerNotice(lastError: nil, status: status, now: 1100), "von-1.2 at 16-bit needs ~2.0 GB")
+        XCTAssertNil(footerNotice(lastError: nil, status: status, now: 1700))                // older than 10 minutes
+        XCTAssertEqual(footerNotice(lastError: "Worker is not ready.", status: status, now: 1100), "Worker is not ready.")
+        status.error = "boom"
+        XCTAssertEqual(footerNotice(lastError: nil, status: status, now: 1100), "boom")
+        XCTAssertEqual(formatContext(2048), "2k")
+    }
 }

@@ -8,7 +8,7 @@ struct StubLoader: ModelLoader {
 
 /// Reports an optimized path (fast tokenizer, windowed attention) so the helper's engine reporting and stock fallback
 /// can be tested without weights; VERDICT_TEST_OPTIMIZED_FAULT makes that path fail like the real models'.
-private final class StubModel: DecisionModel, TokenizerPathReporting, KernelPathReporting, InferencePathSwitching {
+private final class StubModel: DecisionModel, TokenizerPathReporting, KernelPathReporting, InferencePathSwitching, CatalogContextAdopting {
     let id: String
     init(id: String) { self.id = id }
     private var stock = false
@@ -16,7 +16,8 @@ private final class StubModel: DecisionModel, TokenizerPathReporting, KernelPath
     var kernelPath: String { stock ? "stock (windowed attention switched off after an inference failure)" : "windowed-attention (stub)" }
     var optimizedPathActive: Bool { !stock }
     func useStockPath(_ stock: Bool) throws { self.stock = stock }
-    var contextLimit: Int { 8192 }
+    private(set) var contextLimit = 8192
+    func adoptContext(_ tokens: Int) { contextLimit = tokens }
     var residentBytes: Int { 0 }
     func tokenCount(_ item: Item, _ questions: [Question]) throws -> Int {
         item.text.split(whereSeparator: \.isWhitespace).count +
@@ -47,6 +48,9 @@ private final class StubModel: DecisionModel, TokenizerPathReporting, KernelPath
         }
     }
 }
+
+/// Test stubs have no config of their own: they take the catalog's context (von-1.1 2048, the rest 8192).
+protocol CatalogContextAdopting: AnyObject { func adoptContext(_ tokens: Int) }
 
 let productionLoaders: [String: ModelLoader.Type] = ["laya": LayaLoader.self, "von": VonLoader.self]
 

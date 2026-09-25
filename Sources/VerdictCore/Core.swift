@@ -10,10 +10,38 @@ public struct Configuration: Codable, Equatable {
     public var executable: String            // the bundled verdict-helper (informational)
     public var hotModels: [String]           // loaded at launch, kept resident
     public var launchAtLogin: Bool
-    public var idleMinutes: Int?             // 0 or nil = always hot
+    public var idleMinutes: Int?             // before Keep Hot per class: one window for every model (0 or nil = always)
     public var precision: [String: Int]?     // model id -> 0 (native: Laya fp16, Von fp32), 16, 8 or 4
+    public var manualIdleMinutes: Int?       // Keep Hot, manually loaded models; nil = from idleMinutes, else Always (0)
+    public var onDemandIdleMinutes: Int?     // Keep Hot, models loaded on demand; nil = 15
+    public var allowSwap: Bool?              // Memory: nil/false = Automatic (never swap)
     public init(executable: String, hotModels: [String] = ["laya-english"], launchAtLogin: Bool = false, idleMinutes: Int? = 0) {
         self.executable = executable; self.hotModels = hotModels; self.launchAtLogin = launchAtLogin; self.idleMinutes = idleMinutes
+    }
+    /// Keep Hot window for manually loaded models. A config from before per-class Keep Hot keeps its single choice
+    /// when the new menu offers it (15 or 60 minutes); its other choice (4 hours) becomes Always.
+    public var manualIdle: Int {
+        if let manualIdleMinutes { return manualIdleMinutes }
+        guard let legacy = idleMinutes, manualKeepHotChoices.contains(where: { $0.minutes == legacy }) else { return 0 }
+        return legacy
+    }
+    public var onDemandIdle: Int { onDemandIdleMinutes ?? defaultOnDemandIdleMinutes }
+    public var swapAllowed: Bool { allowSwap ?? false }
+    /// The helper's launch environment for these settings (launch set, Keep Hot, Memory, precision choices).
+    public var helperEnvironment: [String: String] {
+        var env = ["VERDICT_PRELOAD": hotModels.joined(separator: ","),
+                   "VERDICT_IDLE_MINUTES": String(manualIdle),
+                   "VERDICT_MANUAL_IDLE_MINUTES": String(manualIdle),
+                   "VERDICT_ON_DEMAND_IDLE_MINUTES": String(onDemandIdle),
+                   "VERDICT_ALLOW_SWAP": swapAllowed ? "1" : "0"]
+        if let data = try? JSONSerialization.data(withJSONObject: precision ?? [:], options: [.sortedKeys]) {
+            env["VERDICT_PRECISION"] = String(data: data, encoding: .utf8)
+        }
+        return env
+    }
+    /// The /settings body that applies these settings to a running helper.
+    public var helperSettings: [String: String] {
+        ["manual_idle_minutes": String(manualIdle), "on_demand_idle_minutes": String(onDemandIdle), "allow_swap": swapAllowed ? "true" : "false"]
     }
     public func validate() throws {
         guard executable.hasPrefix("/") else { throw VerdictError.message("The native helper is missing. Reinstall: git pull && scripts/install.sh") }
@@ -275,8 +303,16 @@ public struct LoadedModel: Codable, Equatable {
     public var engine: String?
     /// Why the model is on the stock path (nil when optimized).
     public var engine_reason: String?
-    public init(device: String, load_s: Double, bits: Int? = nil, optimizations: Optimizations? = nil, engine: String? = nil, engine_reason: String? = nil) {
+    /// "manual" (menu Load/Reload, launch set) or "on_demand" (a request loaded it).
+    public var residency: String?
+    /// When a request last used it (or it loaded), seconds since 1970.
+    public var last_used: Double?
+    /// Tokens per item this loaded model accepts (its config's limit).
+    public var context: Int?
+    public init(device: String, load_s: Double, bits: Int? = nil, optimizations: Optimizations? = nil, engine: String? = nil, engine_reason: String? = nil,
+                residency: String? = nil, last_used: Double? = nil, context: Int? = nil) {
         self.device = device; self.load_s = load_s; self.bits = bits; self.optimizations = optimizations; self.engine = engine; self.engine_reason = engine_reason
+        self.residency = residency; self.last_used = last_used; self.context = context
     }
     /// True on Verdict's optimized path. Helpers before the engine field: fast tokenizer and windowed attention.
     public var optimizedEngine: Bool {
@@ -327,6 +363,23 @@ public func engineHelp(_ model: LoadedModel, chip: String?, effectiveBits bits: 
     return lines.joined(separator: "\n")
 }
 
+/// A model the helper unloaded on its own: Keep Hot idle window, making room for a load, or memory pressure.
+public struct Eviction: Codable, Equatable {
+    public var model: String
+    public var residency: String?
+    public var reason: String
+    public var at: Double
+    public init(model: String, residency: String? = nil, reason: String, at: Double) { self.model = model; self.residency = residency; self.reason = reason; self.at = at }
+}
+
+/// The last load refused because it would have needed swap (Automatic memory mode).
+public struct Refusal: Codable, Equatable {
+    public var model: String
+    public var message: String
+    public var at: Double
+    public init(model: String, message: String, at: Double) { self.model = model; self.message = message; self.at = at }
+}
+
 public struct InstalledModel: Codable, Equatable {
     public var bytes: Int64
     public init(bytes: Int64) { self.bytes = bytes }
@@ -347,6 +400,11 @@ public struct WorkerStatus: Codable, Equatable {
     public var idle_unloaded: Bool? = nil
     public var memory: [String: Double]? = nil
     public var idle_minutes: Int? = nil
+    public var manual_idle_minutes: Int? = nil
+    public var on_demand_idle_minutes: Int? = nil
+    public var allow_swap: Bool? = nil
+    public var evictions: [Eviction]? = nil
+    public var refused: Refusal? = nil
     public var error: String? = nil
     public var gpu: GPUStatus? = nil
     public var updated: Double = 0
@@ -406,5 +464,76 @@ A candidate needs: open weights with a licence that allows local use; a predict(
 Steps: (1) find the weights and runtime, verify the licence; (2) add a catalog entry to Resources/models.json (id, name, backbone, params, repository, context, languages, license, recommendation); (3) if it is not a Laya checkpoint, implement a DecisionModel + ModelLoader in native/Sources/VerdictEngine and register it by the catalog's runtime field in native/Sources/VerdictHelper/Registry.swift; (4) prove parity against the model's reference implementation on fixed fixtures (see native/fixtures and scripts/oracle.py); (5) run scripts/benchmark.py so it appears with measured accuracy, calibration and speed; (6) run the tests (xcrun swift test; python3 Tests/edge_pass.py). Report what you verified and what remains uncertain.
 """
 
-public let keepHotChoices: [(minutes: Int, title: String)] = [(0, "Always"), (15, "15 minutes after use"), (60, "1 hour after use"), (240, "4 hours after use")]
+// MARK: Keep Hot and Memory menus
+
+/// Keep Hot idle windows (minutes; 0 = Always). Idle is per model: time since a request last used it (or it loaded).
+public let manualKeepHotChoices: [(minutes: Int, title: String)] = [(0, "Always"), (15, "15 min idle"), (30, "30 min idle"), (60, "60 min idle")]
+public let onDemandKeepHotChoices: [(minutes: Int, title: String)] = [(5, "5 min idle"), (15, "15 min idle"), (30, "30 min idle"), (60, "60 min idle"), (0, "Always")]
+public let defaultOnDemandIdleMinutes = 15
+
+public enum ResidencyClass: String, Equatable { case manual, onDemand = "on_demand" }
+
+/// One entry of the Keep Hot or Memory submenu: a section header, a choice, or a disabled caption.
+public enum MenuEntry: Equatable {
+    case header(String)
+    case choice(title: String, checked: Bool, action: MenuAction)
+    case caption(String)
+    case separator
+}
+public enum MenuAction: Equatable {
+    case keepHot(ResidencyClass, minutes: Int)
+    case memory(allowSwap: Bool)
+}
+
+/// Keep Hot submenu: manually loaded (menu Load/Reload, the launch set) and loaded on demand (a request needed it).
+public func keepHotMenu(_ config: Configuration) -> [MenuEntry] {
+    var entries: [MenuEntry] = [.header("Manually loaded")]
+    entries += manualKeepHotChoices.map { .choice(title: $0.title, checked: config.manualIdle == $0.minutes, action: .keepHot(.manual, minutes: $0.minutes)) }
+    entries += [.separator, .header("Loaded on demand")]
+    entries += onDemandKeepHotChoices.map { .choice(title: $0.title, checked: config.onDemandIdle == $0.minutes, action: .keepHot(.onDemand, minutes: $0.minutes)) }
+    entries += [.separator, .caption("Unloaded models reload on the next request")]
+    return entries
+}
+
+/// Memory submenu. Automatic: a load must fit in memory macOS can give without swapping, unloading idle models
+/// (on demand first) to make room, else it is refused with the reason. Allow loading into swap skips the check.
+public func memoryMenu(_ config: Configuration, status: WorkerStatus?) -> [MenuEntry] {
+    var entries: [MenuEntry] = [
+        .choice(title: "Automatic (never swap)", checked: !config.swapAllowed, action: .memory(allowSwap: false)),
+        .choice(title: "Allow loading into swap", checked: config.swapAllowed, action: .memory(allowSwap: !config.swapAllowed)),
+    ]
+    var captions: [String] = []
+    if let mb = status?.memory?["available_mb"] { captions.append(String(format: "~%.1f GB free without swapping", Swift.max(0, mb) / 1000)) }
+    if let last = status?.evictions?.last(where: { $0.reason.hasPrefix("memory") }) { captions.append("Unloaded \(last.model) to make room") }
+    if !captions.isEmpty { entries.append(.separator); entries += captions.map { .caption($0) } }
+    return entries
+}
+
+/// Applies a Keep Hot or Memory choice to the configuration.
+public func applying(_ action: MenuAction, to config: Configuration) -> Configuration {
+    var next = config
+    switch action {
+    case .keepHot(.manual, let minutes): next.manualIdleMinutes = minutes; next.idleMinutes = minutes
+    case .keepHot(.onDemand, let minutes): next.onDemandIdleMinutes = minutes
+    case .memory(let allow): next.allowSwap = allow
+    }
+    return next
+}
+
+/// The launch set grows by the models the helper reports as manually loaded (Load from the menu, or `verdict load
+/// --manual`). It shrinks only on an explicit Unload/Delete, never when Keep Hot or the memory check unloads a model.
+/// Nil when nothing changes.
+public func launchSet(_ hot: [String], adding status: WorkerStatus) -> [String]? {
+    let manual = status.models.filter { $0.value.residency == ResidencyClass.manual.rawValue }.keys.sorted()
+    let added = manual.filter { !hot.contains($0) }
+    return added.isEmpty ? nil : hot + added
+}
+
+/// The models table's footer notice: the app's own error, the worker's, else a recent memory refusal (10 minutes).
+public func footerNotice(lastError: String?, status: WorkerStatus?, now: Double) -> String? {
+    if let lastError { return lastError }
+    if let error = status?.error { return error }
+    if let refused = status?.refused, now - refused.at < 600 { return refused.message }
+    return nil
+}
 

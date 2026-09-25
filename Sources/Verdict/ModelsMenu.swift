@@ -295,7 +295,7 @@ struct ModelTable: View {
 
     @ViewBuilder private var footer: some View {
         HStack {
-            if let error = backend.lastError ?? status?.error {
+            if let error = footerNotice(lastError: backend.lastError, status: status, now: Date().timeIntervalSince1970) {
                 Text(error).font(.system(size: 10)).foregroundStyle(.red).lineLimit(1).help(error)
             } else if let loading = status?.loading, loading != "" {
                 ProgressView().controlSize(.mini)

@@ -22,7 +22,8 @@ CLI (JSONL in, JSONL out):
     verdict judge --questions q.json [--field KEY] [--sort NAME] [--min X] [--top N] [--model ID] [--json] < items.jsonl
         default output, one line per item:  #index  name=value(conf) …  | first 60 chars of the item
     verdict skill [--install DIR]      print the agent skill (named triage), or write DIR/triage/SKILL.md
-    verdict status | verdict models [--all] [--json] | verdict info MODEL [--json] | verdict load ID | verdict unload ID | verdict quit
+    verdict status | verdict models [--all] [--json] | verdict info MODEL [--json] | verdict load ID [--manual] | verdict unload ID | verdict quit
+        load: on demand (Keep Hot "Loaded on demand"); --manual loads like the menu (launch set, "Manually loaded")
 
 Python: models() returns the catalog with state, measured benchmarks and Hugging Face/GitHub links.
 
@@ -517,10 +518,20 @@ def _main(argv):
             def opt(v):
                 label = engine_label(v, chip)
                 return label + (f": {v['engine_reason']}" if label == 'MLX' and v.get('engine_reason') else '')
-            hot = ', '.join(f"{k} ({opt(v)})" for k, v in s['models'].items()) or 'none loaded'
+            hot = ', '.join(f"{k} ({opt(v)})" + (f" [{v['residency'].replace('_', ' ')}]" if v.get('residency') else '')
+                            for k, v in s['models'].items()) or 'none loaded'
             mem = s.get('memory', {})
-            print(f"port {s['port']}  models: {hot}  calls: {s['calls']}  last: {s['last_ms']} ms  memory: {mem.get('rss_mb', 0):.0f} MB rss, {mem.get('mlx_active_mb', 0):.0f} MB weights"
+            free = f", ~{mem['available_mb'] / 1000:.1f} GB free without swapping" if mem.get('available_mb') is not None else ''
+            print(f"port {s['port']}  models: {hot}  calls: {s['calls']}  last: {s['last_ms']} ms  memory: {mem.get('rss_mb', 0):.0f} MB rss, {mem.get('mlx_active_mb', 0):.0f} MB weights{free}"
                   + (f"  loading: {s['loading']}" if s.get('loading') else '') + (f"  error: {s['error']}" if s.get('error') else ''))
+            if 'on_demand_idle_minutes' in s:
+                window = lambda m: 'always' if not m else f'{m} min idle'
+                print(f"keep hot: manual {window(s.get('manual_idle_minutes'))}, on demand {window(s['on_demand_idle_minutes'])}"
+                      f"  memory: {'swap allowed' if s.get('allow_swap') else 'automatic (never swap)'}")
+            for e in (s.get('evictions') or [])[-3:]:
+                print(f"unloaded {e['model']} ({e.get('residency', '').replace('_', ' ')}): {e['reason']}")
+            if s.get('refused'):
+                print(f"refused: {s['refused']['message']}")
             return 0
         if cmd == 'models':
             ms = models()
@@ -573,7 +584,13 @@ def _main(argv):
                 print(f"  {k:11} {v}")
             return 0
         if cmd in ('load', 'unload'):
-            ensure_running(); print(_call('POST', '/' + cmd, {'model': rest[0]})['loaded']); return 0
+            ids = [a for a in rest if not a.startswith('--')]
+            if not ids:
+                raise VerdictError(f'verdict {cmd} ID')
+            body = {'model': ids[0]}
+            if cmd == 'load' and '--manual' in rest:
+                body['manual'] = True
+            ensure_running(); print(_call('POST', '/' + cmd, body)['loaded']); return 0
         if cmd == 'quit':
             if _port(): _call('POST', '/quit')
             return 0

@@ -30,6 +30,7 @@ CANONICAL = {'q': {'type': 'choice', 'instructions': 'Pick the label', 'criteria
 CANONICAL_ITEMS = ['plain text', 'caf\u00e9 review: great coffee']
 SDK_CANONICAL = {'1.1': [(0.0082, 0.9918), (0.7865, 0.2135)], '1.2': [(0.0766, 0.9234), (0.9727, 0.0273)]}
 TOL = 0.0001
+CONTEXT = {'1.1': 2048, '1.2': 8192}
 # Choice descriptions sent as null: the SDK describes the option by its label (desc.strip() if desc else opt.strip()).
 CUSTOMER = ['I want my money back for this broken kettle', 'What time do you open on Sunday?']
 NULL_DESC = {'q': {'type': 'choice', 'instructions': 'What does the customer want?',
@@ -87,6 +88,10 @@ class VonValidationTests(unittest.TestCase):
 
     def judge(self, items, questions):
         return self.post('/judge', {'model': self.model, 'items': items, 'questions': questions})
+
+    def status(self):
+        with urllib.request.urlopen(self.url + '/status', timeout=30) as reply:
+            return json.load(reply)
 
     def traced_lengths(self):
         self.stderr.flush(); self.stderr.seek(0)
@@ -153,15 +158,23 @@ class VonValidationTests(unittest.TestCase):
         self.each_version(body)
 
     # 3 — context before any forward pass, including the cached null pass
+    # Each version's limit is its config's max_position_embeddings: Von 1.1 2048, Von 1.2 8192.
     def test_over_context_launches_nothing(self):
         def body(version):
+            limit = CONTEXT[version]
+            self.assertEqual(self.status()['models'][self.model]['context'], limit)
             before = len(self.traced_lengths())
-            r = self.judge(['x'], {'q': {'type': 'noul', 'instructions': 'hello ' * 8300}})['results']
-            self.assertIn('Von accepts 8192', r[0]['error'])
+            r = self.judge(['x'], {'q': {'type': 'noul', 'instructions': 'hello ' * (limit + 108)}})['results']
+            self.assertIn(f'Von accepts {limit}', r[0]['error'])
             self.assertEqual(self.traced_lengths()[before:], [], 'a forward pass ran for an all-over-context request')
-            r = self.judge(['hello ' * 8300, 'short'], {'q': {'type': 'noul', 'instructions': 'Is this a greeting?'}})['results']
-            self.assertIn('Von accepts 8192', r[0]['error']); self.assertIn('noul', r[1]['answers']['q'])
-            self.assertLessEqual(max(self.traced_lengths()[before:]), 8192)
+            r = self.judge(['hello ' * (limit + 108), 'short'], {'q': {'type': 'noul', 'instructions': 'Is this a greeting?'}})['results']
+            self.assertIn(f'Von accepts {limit}', r[0]['error']); self.assertIn('noul', r[1]['answers']['q'])
+            self.assertLessEqual(max(self.traced_lengths()[before:]), limit)
+            if version == '1.1':    # between the limits: 1.1 refuses what 1.2 runs
+                r = self.judge(['hello ' * 3000], REFUND)['results']
+                self.assertIn('Von accepts 2048', r[0]['error'])
+                r = self.judge(['hello ' * 1900], REFUND)['results']
+                self.assertIn('noul', r[0]['answers']['q'])
         self.each_version(body)
 
     # 4 — item types as the SDK's _format_state sees them

@@ -19,7 +19,9 @@ public struct VonPreparedRow: Sendable {
 
 public final class VonModel: DecisionModel, KernelPathReporting, InferencePathSwitching {
     public let id: String
-    public let contextLimit = 8192
+    /// Tokens per row: the checkpoint's max_position_embeddings (Von 1.1: 2048, Von 1.2: 8192), at most 8192. The
+    /// von-sdk overrides the config to 8192 and runs longer rows unchecked; Von 1.1 was not configured for them.
+    public let contextLimit: Int
     public var residentBytes: Int { network.residentBytes }
     public var kernelPath: String { network.kernelPath }
     private var tokenizer: (any Tokenizer)?
@@ -94,6 +96,7 @@ public final class VonModel: DecisionModel, KernelPathReporting, InferencePathSw
         prior = cdata["noul_zero_shot_prior"] as? [String: Double]
         guard (cdata["independent_options"] as? Bool ?? false) == (id == "von-1.2") else { throw VonError.invalid("Von independent-options flag disagrees with catalog version") }
         network = try VonNetwork(snapshot: snapshot, id: id, bits: bits)
+        contextLimit = Swift.min(8192, network.config.max_position_embeddings ?? 8192)
     }
     private static func library(_ configData: Data, _ tokenData: Data) throws -> any Tokenizer {
         let decoder = JSONDecoder()

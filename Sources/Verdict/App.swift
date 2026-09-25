@@ -9,6 +9,12 @@ import AppKit
             app.run()
             return
         }
+        if let index = args.firstIndex(of: "--render-menu"), args.count > index + 1 {
+            let delegate = MenuRenderDelegate(directory: URL(fileURLWithPath: args[index + 1], isDirectory: true))
+            app.delegate = delegate
+            app.run()
+            return
+        }
         let delegate = AppDelegate()
         app.delegate = delegate
         app.run()

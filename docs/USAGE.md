@@ -4,11 +4,14 @@
 
 - **Header** — `Verdict: 2 models hot · 1,204 judgements`. Green when ready, grey while loading, orange when the worker failed (click it for the error and the log).
 - **Last judgement** — wall time of the most recent call.
-- **Models…** — the table, sorted by accuracy by default; click a heading to sort. **Get** downloads and loads; **Load**/**Unload** toggle residency; the trash icon deletes downloaded weights (with confirmation). Hot models are remembered and loaded again at the next launch. Hover a number for what it measures. The greyed cloud row is a hosted reference model that cannot be loaded. The footer copies a model-request brief for a coding agent.
+- **Models…** — the table, sorted by accuracy by default; click a heading to sort. **Get** downloads and loads; **Load**/**Unload** toggle residency; the trash icon deletes downloaded weights (with confirmation). Models loaded here are remembered and loaded again at the next launch; **Unload** removes them from that set. Hover a number for what it measures. The greyed cloud row is a hosted reference model that cannot be loaded. The footer copies a model-request brief for a coding agent.
 - **Copy Skill for Your Agent** — puts a complete `SKILL.md` on the clipboard: when to use Verdict, the API, how to write questions.
 - **Set Up Runtime…** — appears only when the Python runtime is missing; installs it (about a minute) and starts the worker. Progress in `setup.log`.
 - **Open Verdict Files** — `~/Library/Application Support/Verdict`.
-- **Keep Hot** — Always, or unload after 15 min / 1 h / 4 h idle; the next judgement reloads.
+- **Keep Hot** — idle windows per kind of load, each model timed from its own last request; the next request that needs an unloaded model loads it again.
+  - **Manually loaded** (Load/Reload in the table, and the launch set): Always (default), 15, 30 or 60 min idle.
+  - **Loaded on demand** (a request or an agent's `verdict load` needed it): 5, 15 (default), 30 or 60 min idle, or Always. On-demand loads do not join the launch set.
+- **Memory** — **Automatic (never swap)** (default): before a load, need = the model's measured memory at that precision (benchmarks.json `memory_mb`; else weights on disk scaled to the precision + 0.77 GB) + 0.5 GB activation headroom; free = min(free + inactive + purgeable pages, kern.memorystatus_level × RAM) − max(1 GB, 10% of RAM). Short of it, Verdict unloads idle models (on demand before manual, least recently used first, never one serving the current request) and re-checks after each; if even that cannot free enough, nothing is unloaded and the load is refused (HTTP 507) with the reason and what to do. **Allow loading into swap** skips the check. The submenu shows current free memory and the last model unloaded to make room; `verdict status` lists recent unloads and the last refusal.
 - **Bits** (in the Models table) — Laya 16 (native), 8 or 4; Von 32 (native), 16, 8 or 4. The row shows accuracy, calibration error, ms/item, energy (J per 1,000 judgements) and memory for the selected precision, with differences from the native precision in green (better) or red (worse). On a loaded model at another precision, **Unload** becomes **Reload**, which loads the selection.
 - **Restart Worker** / **Launch at Login** / **Quit**.
 
@@ -23,7 +26,7 @@ verdict status
 verdict models [--json]            # catalog at each model's selected precision: accuracy, ece, ms, J/1k, memory, state, weights link
 verdict models --all               # every precision per model, with deltas vs the native precision
 verdict info MODEL [--json]        # one model: all precisions, task breakdown, measurement source, links
-verdict load laya-multilingual | verdict unload ID | verdict quit
+verdict load laya-multilingual [--manual] | verdict unload ID | verdict quit   # load: on demand; --manual: like the menu (launch set)
 verdict judge --questions q.json [--model ID] [--field KEY] [--sort NAME] [--min X] [--top N] < items.jsonl
 ```
 

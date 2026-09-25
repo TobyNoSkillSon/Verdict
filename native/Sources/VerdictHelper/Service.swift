@@ -19,6 +19,19 @@ final class Service {
     private let trimPercent: Double
     private var lastRSS: (Double, Double) = (0, 0)
     var quitting = false
+    /// Per loaded model: its residency class, when a request last used it (or it loaded), and its load estimate (MB).
+    private var residency: [String: Residency] = [:]
+    private var lastUsed: [String: Double] = [:]
+    private var footprint: [String: Double] = [:]
+    /// Models the request being served needs; never evicted or idle-unloaded meanwhile.
+    private var pinned: Set<String> = []
+    /// Keep Hot idle windows in minutes per class (0 = always) and the Memory mode.
+    private var manualIdle: Int
+    private var onDemandIdle: Int
+    private var allowSwap: Bool
+    private let probe: MemoryProbe
+    /// Seconds per Keep Hot minute; tests shorten it (VERDICT_TEST_MINUTE_SECONDS).
+    private let minuteSeconds: Double
 
     init() throws {
         catalog = try Catalog()
@@ -29,14 +42,28 @@ final class Service {
         trimPercent = Double(env["VERDICT_TRIM_FREE_PCT"] ?? "") ?? 15
         if let data = env["VERDICT_PRECISION"]?.data(using: .utf8), let p = try? JSONSerialization.jsonObject(with: data) as? [String: Int] { precision = p }
         let now = Date().timeIntervalSince1970
-        state = ["models": [:], "calls": 0, "items": 0, "last_ms": NSNull(), "started": now, "port": NSNull(), "pid": Int(getpid()), "loading": NSNull(), "error": NSNull(), "last_used": now, "idle_minutes": Int(env["VERDICT_IDLE_MINUTES"] ?? "") ?? 0, "gpu": Self.gpu]
+        // VERDICT_IDLE_MINUTES (older launchers and the bench/test harnesses) sets both classes unless the per-class
+        // variables are given; the app passes all three.
+        let legacy = Int(env["VERDICT_IDLE_MINUTES"] ?? "")
+        manualIdle = max(0, Int(env["VERDICT_MANUAL_IDLE_MINUTES"] ?? "") ?? legacy ?? 0)
+        onDemandIdle = max(0, Int(env["VERDICT_ON_DEMAND_IDLE_MINUTES"] ?? "") ?? legacy ?? 15)
+        allowSwap = env["VERDICT_ALLOW_SWAP"] == "1"
+        probe = MemoryProbe(environment: env)
+        minuteSeconds = Double(env["VERDICT_TEST_MINUTE_SECONDS"] ?? "") ?? 60
+        state = ["models": [:], "calls": 0, "items": 0, "last_ms": NSNull(), "started": now, "port": NSNull(), "pid": Int(getpid()), "loading": NSNull(), "error": NSNull(), "last_used": now, "gpu": Self.gpu, "evictions": [], "refused": NSNull()]
         Memory.cacheLimit = cacheLimit * 1024 * 1024
+        publishSettings()
     }
+    /// Keep Hot and Memory settings as /status reports them; idle_minutes is the manual value (older clients).
+    private var settings: [String: Any] {
+        ["idle_minutes": manualIdle, "manual_idle_minutes": manualIdle, "on_demand_idle_minutes": onDemandIdle, "allow_swap": allowSwap]
+    }
+    private func publishSettings() { for (key, value) in settings { state[key] = value } }
     func start(port: Int) { locked { state["port"] = port; writeStatus() } }
     func finish() { locked { state["models"] = [:]; state["port"] = NSNull(); writeStatus() }; flushStatus() }
     func preload() {
         for id in (ProcessInfo.processInfo.environment["VERDICT_PRELOAD"] ?? "").split(separator: ",") {
-            do { try locked { _ = try load(String(id)) } }
+            do { try locked { _ = try load(String(id), as: .manual) } }
             catch { fputs("{\"error\":\"\(String(describing: error).prefix(300))\"}\n", stderr) }
         }
     }
@@ -51,8 +78,10 @@ final class Service {
                 if let str = String(data: data, encoding: .utf8), let kb = Double(str.trimmingCharacters(in: .whitespacesAndNewlines)) { lastRSS = (now, (kb / 1024).rounded()) }
             }
         }
-        return ["rss_mb": lastRSS.1, "mlx_active_mb": (Double(Memory.activeMemory) / 1e6).rounded(), "mlx_cache_mb": (Double(Memory.cacheMemory) / 1e6).rounded()]
+        return ["rss_mb": lastRSS.1, "mlx_active_mb": (Double(Memory.activeMemory) / 1e6).rounded(), "mlx_cache_mb": (Double(Memory.cacheMemory) / 1e6).rounded(),
+                "available_mb": probe.availableMB(loadedMB: loadedEstimateMB).rounded()]
     }
+    private var loadedEstimateMB: Double { footprint.values.reduce(0, +) }
     /// Which optimized paths a loaded model uses on this Mac. Anything not optimized is the stock fallback:
     /// same answers, slower. `optimized` is true only when every reported path is the fast one.
     static func optimizations(_ agent: Any, runtime: String, bits: Int) -> [String: Any] {
@@ -151,11 +180,19 @@ final class Service {
     }
     /// Block until queued status writes reach disk (shutdown).
     func flushStatus() { statusQueue.sync {} }
-    private func load(_ id: String) throws -> DecisionModel {
-        if let existing = models[id] { return existing }
+    /// Loads `id` (or returns it loaded). A manual request promotes an on-demand model to manual; an on-demand request
+    /// never demotes. In Automatic memory mode the load must fit without swapping (see `admit`).
+    private func load(_ id: String, as requested: Residency) throws -> DecisionModel {
+        if let existing = models[id] {
+            if requested == .manual && residency[id] != .manual {
+                residency[id] = .manual; updateEntry(id); writeStatus(refreshInstalled: false)
+            }
+            return existing
+        }
         let spec = try catalog.spec(id)
         // Do not download weights if no production loader is registered.
         let type = try loader(runtime: spec.runtime)
+        let estimate = try admit(spec, bits: precision[id] ?? spec.defaultBits)
         state["loading"] = id; state["downloading"] = catalog.cached(spec) == nil; state["error"] = NSNull(); writeStatus()
         let start = Date()
         do {
@@ -165,12 +202,17 @@ final class Service {
             let agent = try type.load(id: id, snapshot: snapshot, bits: bits)
             // VERDICT_STOCK_PATH=1: serve every model on the stock MLX path (diagnosis; the fallback tests' reference).
             if Self.stockRequested, let paths = agent as? InferencePathSwitching { try paths.useStockPath(true) }
+            // Stub models take the catalog's context (real models read their own config).
+            if let stub = agent as? CatalogContextAdopting { stub.adoptContext(spec.context) }
             models[id] = agent; order.append(id)
+            residency[id] = requested; lastUsed[id] = Date().timeIntervalSince1970; footprint[id] = estimate
             var active = state["models"] as? [String: Any] ?? [:]
-            active[id] = ["device": "mlx", "load_s": (Date().timeIntervalSince(start) * 10).rounded() / 10, "bits": bits]
+            active[id] = ["device": "mlx", "load_s": (Date().timeIntervalSince(start) * 10).rounded() / 10, "bits": bits,
+                          "context": agent.contextLimit, "memory_estimate_mb": estimate.rounded()]
             state["models"] = active; fallbacks[id] = nil
+            updateEntry(id)
             describe(id, agent, runtime: spec.runtime, bits: bits)
-            state["loading"] = NSNull(); state["downloading"] = false; writeStatus()
+            state["loading"] = NSNull(); state["downloading"] = false; state["refused"] = NSNull(); writeStatus()
             return agent
         } catch {
             state["loading"] = NSNull(); state["downloading"] = false
@@ -180,28 +222,97 @@ final class Service {
     }
     private func unload(_ id: String) {
         models.removeValue(forKey: id); order.removeAll { $0 == id }; fallbacks[id] = nil
+        residency[id] = nil; lastUsed[id] = nil; footprint[id] = nil
         var active = state["models"] as? [String: Any] ?? [:]; active.removeValue(forKey: id); state["models"] = active
         Memory.clearCache(); writeStatus()
     }
-    private func freePercent() -> Double {
-        var value: Int32 = 100; var size = MemoryLayout<Int32>.size
-        return sysctlbyname("kern.memorystatus_level", &value, &size, nil, 0) == 0 ? Double(value) : 100
+    /// Residency and last use into the model's /status entry.
+    private func updateEntry(_ id: String) {
+        var active = state["models"] as? [String: Any] ?? [:]
+        guard var entry = active[id] as? [String: Any] else { return }
+        entry["residency"] = (residency[id] ?? .onDemand).rawValue
+        entry["last_used"] = lastUsed[id] ?? NSNull()
+        active[id] = entry; state["models"] = active
     }
+    /// Unloads a model the service chose to drop (idle window, making room, memory pressure) and says why: /status
+    /// `evictions` (last 20) and a JSON log line.
+    private func evict(_ id: String, reason: String) {
+        let cls = (residency[id] ?? .onDemand).rawValue
+        unload(id)
+        var list = state["evictions"] as? [[String: Any]] ?? []
+        list.append(["model": id, "residency": cls, "reason": reason, "at": Date().timeIntervalSince1970])
+        state["evictions"] = Array(list.suffix(20)); writeStatus(refreshInstalled: false)
+        fputs("{\"evicted\":\(jsonString(id)),\"residency\":\"\(cls)\",\"reason\":\(jsonString(reason))}\n", stderr)
+    }
+    /// Eviction order: on-demand models least recently used first, then manual ones the same way.
+    private func evictionOrder() -> [String] {
+        func lru(_ cls: Residency) -> [String] {
+            order.filter { (residency[$0] ?? .onDemand) == cls }.sorted { (lastUsed[$0] ?? 0) < (lastUsed[$1] ?? 0) }
+        }
+        return lru(.onDemand) + lru(.manual)
+    }
+    /// Automatic memory mode: a load must fit in what macOS can give without swapping (MemoryProbe): need = the
+    /// model's estimate + activation headroom. Too little: unload idle models (on-demand LRU first, then manual; never
+    /// a model the current request uses), re-checking after each. If even unloading every candidate would not free
+    /// enough by their estimates, nothing is unloaded. Still short: MemoryRefusal (HTTP 507). Allow-swap skips all of
+    /// it. `credit`: memory the caller frees before loading (the same model at another precision). Returns the estimate.
+    @discardableResult
+    private func admit(_ spec: ModelSpec, bits: Int, credit: Double = 0) throws -> Double {
+        let estimate = memoryEstimateMB(spec, bits: bits, measured: catalog.measuredMemory, diskBytes: installedBytes(spec.id))
+        if allowSwap { return estimate }
+        let need = estimate + MemoryProbe.headroomMB
+        Memory.clearCache()   // our own reusable buffers are not free pages yet
+        func available() -> Double { probe.availableMB(loadedMB: loadedEstimateMB) + credit }
+        var free = available()
+        if free >= need { return estimate }
+        let candidates = evictionOrder().filter { $0 != spec.id && !pinned.contains($0) }
+        // What an unload is expected to free: the weights MLX holds, else the load estimate (stub models).
+        func reclaim(_ id: String) -> Double {
+            let resident = Double(models[id]?.residentBytes ?? 0) / 1e6
+            return resident > 0 ? resident : footprint[id] ?? 0
+        }
+        if free + candidates.reduce(0, { $0 + reclaim($1) }) >= need {
+            for victim in candidates {
+                evict(victim, reason: "memory: made room for \(spec.id) at \(spec.effectiveBits(bits))-bit (needs ~\(gigabytes(need)) GB; ~\(gigabytes(free)) GB was free without swapping)")
+                free = available()
+                if free >= need { return estimate }
+            }
+        }
+        let message = refusalMessage(spec, bits: bits, needMB: need, freeMB: free, loaded: order.filter { $0 != spec.id })
+        state["refused"] = ["model": spec.id, "message": message, "at": Date().timeIntervalSince1970]; writeStatus(refreshInstalled: false)
+        fputs("{\"refused\":\(jsonString(spec.id)),\"message\":\(jsonString(message))}\n", stderr)
+        throw MemoryRefusal(message: message)
+    }
+    private func installedBytes(_ id: String) -> Int? {
+        ((installedCache ?? catalog.installed())[id] as? [String: Any])?["bytes"] as? Int
+    }
+    private func freePercent() -> Double { MemoryProbe.levelPercent() }
+    /// Critical memory pressure: keep one model (the first manual one loaded, else the first loaded), unload the rest.
     private func shed() {
-        for id in Array(order.dropFirst()) { unload(id) }
+        let keep = order.first { residency[$0] == .manual } ?? order.first
+        let level = freePercent()
+        for id in evictionOrder() where id != keep && !pinned.contains(id) { evict(id, reason: "memory pressure (kern.memorystatus_level \(Int(level))%)") }
         Memory.clearCache(); state["shed_at"] = Date().timeIntervalSince1970; state["idle_unloaded"] = true; writeStatus()
-        fputs("{\"shed\":true,\"kept\":\(order),\"free_pct\":\(freePercent())}\n", stderr)
+        fputs("{\"shed\":true,\"kept\":\(order),\"free_pct\":\(level)}\n", stderr)
     }
+    /// Every 30 s: pressure shed/trim, then Keep Hot per model — a model idle (no request since its last use or load)
+    /// longer than its class's window unloads; the next request loads it again.
     func idleTick() {
         locked {
             let free = freePercent()
             if order.count > 1 && free < shedPercent && state["loading"] is NSNull { shed(); return }
             if free < trimPercent { Memory.clearCache() }
-            let minutes = state["idle_minutes"] as? Int ?? 0
-            if minutes > 0 && !order.isEmpty && Date().timeIntervalSince1970 - (state["last_used"] as? Double ?? 0) > Double(minutes * 60) && state["loading"] is NSNull {
-                for id in Array(order) { unload(id) }
-                state["idle_unloaded"] = true; writeStatus()
+            guard state["loading"] is NSNull else { return }
+            let now = Date().timeIntervalSince1970
+            var unloaded = false
+            for id in order where !pinned.contains(id) {
+                let cls = residency[id] ?? .onDemand
+                let minutes = cls == .manual ? manualIdle : onDemandIdle
+                guard minutes > 0, now - (lastUsed[id] ?? now) > Double(minutes) * minuteSeconds else { continue }
+                evict(id, reason: "idle: unused for \(minutes) min (\(cls == .manual ? "manually loaded" : "loaded on demand"))")
+                unloaded = true
             }
+            if unloaded { state["idle_unloaded"] = true; writeStatus() }
         }
     }
     /// The item's original JSON type travels with its text: Von formats a dict as key: value lines, but a string that
@@ -283,8 +394,10 @@ final class Service {
             if groups[id] == nil { modelOrder.append(id) }
             groups[id, default: []].append(index)
         }
+        // Every model this request needs is in flight until it returns: loading a later one never evicts an earlier one.
+        pinned = Set(modelOrder); defer { pinned = [] }
         for id in modelOrder {
-            let agent = try load(id), indexes = groups[id]!
+            let agent = try load(id, as: .onDemand), indexes = groups[id]!
             func modelItem(_ index: Int) -> Item { item(items[index], ordered: orderedItems.indices.contains(index) ? orderedItems[index] : nil) }
             let start = Date()
             let answers = try predict(agent, id, indexes.map(modelItem), qs)
@@ -295,6 +408,7 @@ final class Service {
             }
             let per = (Date().timeIntervalSince(start) * 10000 / Double(max(1, accepted))).rounded() / 10
             for (index, result) in zip(indexes, answers) { results[index] = resultObject(result, id, per) }
+            lastUsed[id] = Date().timeIntervalSince1970; updateEntry(id)
             state["calls"] = (state["calls"] as? Int ?? 0) + 1
             state["items"] = (state["items"] as? Int ?? 0) + accepted; state["last_ms"] = per
         }
@@ -370,6 +484,9 @@ final class Service {
                     return (200, try judge(body, ordered: parser.parse()))
                 case "/load":
                     guard let id = body["model"] as? String else { throw ServiceError("'model'") }
+                    guard let manual = flag(body["manual"] ?? false) else { throw ServiceError("manual must be true or false") }
+                    // The app's menu sends manual; agents and scripts load on demand. A reload keeps a manual model manual.
+                    let cls: Residency = manual || residency[id] == .manual ? .manual : .onDemand
                     if body["bits"] != nil {
                         guard let bits = integer(body["bits"]) else { throw ServiceError("invalid literal for int() with base 10: '\(body["bits"]!)'") }
                         // Validate model and precision before touching state: a bad request must neither unload the
@@ -378,32 +495,59 @@ final class Service {
                         if let rule = Self.precisions[spec.runtime], !rule.0.contains(bits) {
                             throw ServiceError("\(id): \(rule.1)")
                         }
+                        // Memory is checked before the loaded precision is dropped (its estimate counts as freed).
+                        if models[id] != nil { try admit(spec, bits: bits, credit: footprint[id] ?? 0) }
                         let previous = precision[id]
                         precision[id] = bits; unload(id)
-                        do { _ = try load(id) } catch { precision[id] = previous; throw error }
+                        do { _ = try load(id, as: cls) } catch { precision[id] = previous; throw error }
                         return (200, ["loaded": order])
                     }
-                    _ = try load(id); return (200, ["loaded": order])
+                    _ = try load(id, as: cls); return (200, ["loaded": order])
                 case "/unload":
                     guard let id = body["model"] as? String else { throw ServiceError("'model'") }
-                    unload(id); return (200, ["loaded": order])
+                    unload(id); state["refused"] = NSNull(); writeStatus(refreshInstalled: false)
+                    return (200, ["loaded": order])
                 case "/delete":
                     guard let id = body["model"] as? String else { throw ServiceError("'model'") }
                     guard let spec = catalog.entries.first(where: { $0.id == id }) else { throw ServiceError("'\(id)'") }
                     unload(id); catalog.delete(spec); state.removeValue(forKey: "error"); writeStatus()
                     return (200, ["installed": catalog.installed()])
                 case "/settings":
-                    if let raw = body["idle_minutes"], let minutes = integer(raw) { state["idle_minutes"] = minutes }
-                    else if body["idle_minutes"] == nil { state["idle_minutes"] = state["idle_minutes"] as? Int ?? 0 }
-                    else { throw ServiceError("invalid literal for int() with base 10: '\(body["idle_minutes"]!)'") }
-                    state["last_used"] = Date().timeIntervalSince1970; writeStatus(); return (200, ["idle_minutes": state["idle_minutes"]!])
+                    // Validate everything before changing anything. idle_minutes (older clients) is the manual window.
+                    var minutes: [String: Int] = [:]
+                    for key in ["idle_minutes", "manual_idle_minutes", "on_demand_idle_minutes"] {
+                        guard let raw = body[key] else { continue }
+                        guard let value = integer(raw), value >= 0 else { throw ServiceError("invalid literal for int() with base 10: '\(raw)'") }
+                        minutes[key] = value
+                    }
+                    var swap: Bool?
+                    if let raw = body["allow_swap"] {
+                        guard let value = flag(raw) else { throw ServiceError("allow_swap must be true or false") }
+                        swap = value
+                    }
+                    if let v = minutes["idle_minutes"] { manualIdle = v }
+                    if let v = minutes["manual_idle_minutes"] { manualIdle = v }
+                    if let v = minutes["on_demand_idle_minutes"] { onDemandIdle = v }
+                    if let swap { allowSwap = swap; state["refused"] = NSNull() }
+                    publishSettings()
+                    state["last_used"] = Date().timeIntervalSince1970; writeStatus()
+                    // A body with only idle_minutes gets the reply older clients compare against.
+                    let legacyOnly = !body.keys.contains { ["manual_idle_minutes", "on_demand_idle_minutes", "allow_swap"].contains($0) }
+                    return (200, legacyOnly ? ["idle_minutes": manualIdle] : settings)
                 case "/shed": shed(); return (200, ["loaded": order])
                 case "/trim": Memory.clearCache(); return (200, ["ok": true])
                 case "/quit": quitting = true; return (200, ["bye": true])
                 default: return (404, ["error": "not found"])
                 }
             }
-        } catch { return (400, ["error": Self.message(error).prefix(500).description]) }
+        } catch let refusal as MemoryRefusal { return (507, ["error": refusal.message]) }
+        catch { return (400, ["error": Self.message(error).prefix(500).description]) }
+    }
+    /// JSON true/false, 1/0 or the strings "true"/"false"/"1"/"0" (the app's control body is strings).
+    private func flag(_ raw: Any) -> Bool? {
+        if let number = raw as? NSNumber { return number.boolValue }
+        if let string = raw as? String { return ["true": true, "1": true, "false": false, "0": false][string.lowercased()] }
+        return nil
     }
     /// Precisions each loader accepts, checked before a /load mutates anything.
     static let precisions: [String: (Set<Int>, String)] = ["laya": (LayaModel.precisions, LayaModel.precisionMessage),

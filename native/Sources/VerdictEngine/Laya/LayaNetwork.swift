@@ -21,6 +21,8 @@ struct LayaEncoderConfiguration: Decodable {
     var global_rope_theta: Float = 160000
     var local_rope_theta: Float = 10000
     var layer_types: [String]?
+    /// The positions the checkpoint was configured for (Von 1.1: 2048); nil when the config omits it.
+    var max_position_embeddings: Int?
     var rope_parameters: [String: RopeParameters]?
     struct RopeParameters: Decodable { let rope_theta: Float; var rope_type: String? }
 
@@ -42,6 +44,7 @@ struct LayaEncoderConfiguration: Decodable {
         global_rope_theta = (object["global_rope_theta"] as? NSNumber)?.floatValue ?? 160000
         local_rope_theta = (object["local_rope_theta"] as? NSNumber)?.floatValue ?? 10000
         layer_types = object["layer_types"] as? [String]
+        max_position_embeddings = (object["max_position_embeddings"] as? Int).flatMap { $0 > 0 ? $0 : nil }
         if let parameters = object["rope_parameters"] {
             rope_parameters = try JSONDecoder().decode([String: RopeParameters].self, from: JSONSerialization.data(withJSONObject: parameters))
         }

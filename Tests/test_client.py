@@ -141,4 +141,48 @@ class EngineLabelTests(unittest.TestCase):
         finally:
             verdict.status = saved
 
+    def test_status_shows_residency_keep_hot_and_refusal(self):
+        import io, contextlib
+        saved = verdict.status
+        refusal = 'von-1.2 at 16-bit needs ~2.0 GB; ~0.9 GB free without swapping. Unload laya-english, pick 8-bit, or allow swap in Verdict \u2192 Memory.'
+        try:
+            verdict.status = lambda: {'port': 1, 'calls': 0, 'last_ms': None, 'memory': {'available_mb': 900}, 'gpu': {'chip': 'M5 Max'},
+                                      'models': {'laya-english': {'device': 'mlx', 'engine': 'optimized', 'residency': 'manual'}},
+                                      'manual_idle_minutes': 0, 'on_demand_idle_minutes': 15, 'allow_swap': False,
+                                      'evictions': [{'model': 'laya-multilingual', 'residency': 'on_demand', 'reason': 'memory: made room for von-1.2 at 16-bit', 'at': 1}],
+                                      'refused': {'model': 'von-1.2', 'message': refusal, 'at': 2}}
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(verdict._main(['status']), 0)
+            text = out.getvalue()
+            self.assertIn('laya-english (Optimized \u00b7 M5 Max) [manual]', text)
+            self.assertIn('~0.9 GB free without swapping', text)
+            self.assertIn('keep hot: manual always, on demand 15 min idle  memory: automatic (never swap)', text)
+            self.assertIn('unloaded laya-multilingual (on demand): memory: made room for von-1.2 at 16-bit', text)
+            self.assertIn('refused: ' + refusal, text)
+        finally:
+            verdict.status = saved
+
+    def test_load_manual_flag_and_verbatim_errors(self):
+        import io, contextlib
+        saved = verdict._call, verdict.ensure_running
+        sent = []
+        def fake(method, path, body=None, timeout=600):
+            sent.append((path, body))
+            if body and body.get('model') == 'von-1.2':
+                raise verdict.VerdictError('von-1.2 at 16-bit needs ~2.0 GB; ~0.9 GB free without swapping. Allow swap in Verdict \u2192 Memory.')
+            return {'loaded': [body['model']]}
+        try:
+            verdict._call, verdict.ensure_running = fake, lambda: 1
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(verdict._main(['load', 'laya-english']), 0)
+                self.assertEqual(verdict._main(['load', 'laya-english', '--manual']), 0)
+            self.assertEqual(sent, [('/load', {'model': 'laya-english'}), ('/load', {'model': 'laya-english', 'manual': True})])
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                self.assertEqual(verdict._main(['load', 'von-1.2']), 1)
+            self.assertEqual(err.getvalue(), 'error: von-1.2 at 16-bit needs ~2.0 GB; ~0.9 GB free without swapping. Allow swap in Verdict \u2192 Memory.\n')
+        finally:
+            verdict._call, verdict.ensure_running = saved
+
 if __name__ == '__main__': unittest.main()

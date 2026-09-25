@@ -13,8 +13,14 @@ struct ModelSpec {
     /// Stored like explicit bits: the runtime's native precision (Laya 16, Von 32) is 0.
     var defaultBits: Int {
         guard let bits = raw["default_bits"] as? Int else { return 0 }
-        return bits == (runtime == "von" ? 32 : 16) ? 0 : bits
+        return bits == nativeBits ? 0 : bits
     }
+    /// Checkpoint precision: Laya fp16, Von f32. Helper bits 0 mean this.
+    var nativeBits: Int { runtime == "von" ? 32 : 16 }
+    /// Helper bits (0 = native) -> effective bits (16/8/4, 32 for Von).
+    func effectiveBits(_ bits: Int) -> Int { bits == 0 ? nativeBits : bits }
+    /// Offered precisions, highest first (the app's precision picker).
+    var precisionOptions: [Int] { runtime == "von" ? [32, 16, 8, 4] : [16, 8, 4] }
 }
 
 struct ServiceError: Error, CustomStringConvertible {
@@ -25,6 +31,8 @@ struct ServiceError: Error, CustomStringConvertible {
 final class Catalog {
     let entries: [ModelSpec]
     let raw: [[String: Any]]
+    /// Measured memory (benchmarks.json memory_mb: phys_footprint after load + warm-up), id -> effective bits -> MB.
+    let measuredMemory: [String: [Int: Double]]
     private let fm = FileManager.default
     private let cache: URL
 
@@ -44,6 +52,18 @@ final class Catalog {
             throw ServiceError("models.json not found")
         }
         raw = obj
+        // benchmarks.json ships next to models.json (Resources/, the app bundle's Contents/Resources); VERDICT_BENCHMARKS overrides.
+        let bench = env["VERDICT_BENCHMARKS"].map { URL(fileURLWithPath: $0) } ?? path.deletingLastPathComponent().appendingPathComponent("benchmarks.json")
+        var measured: [String: [Int: Double]] = [:]
+        if let data = try? Data(contentsOf: bench), let models = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+            for (id, value) in models {
+                guard let precisions = (value as? [String: Any])?["precisions"] as? [String: Any] else { continue }
+                for (bits, result) in precisions {
+                    if let b = Int(bits), let mb = ((result as? [String: Any])?["memory_mb"] as? NSNumber)?.doubleValue, mb > 0 { measured[id, default: [:]][b] = mb }
+                }
+            }
+        }
+        measuredMemory = measured
         entries = obj.compactMap { m in
             guard let id = m["id"] as? String else { return nil }
             return ModelSpec(id: id, repository: m["repository"] as? String ?? "", revision: m["revision"] as? String, runtime: m["runtime"] as? String ?? "laya", context: m["context"] as? Int ?? 8192, inputs: m["inputs"] as? [String] ?? [], raw: m)

@@ -18,12 +18,17 @@ import VerdictCore
     @Published private(set) var selectedPrecision: [String: Int] = [:]
     /// While true the status poller does not overwrite injected preview state.
     var previewing = false
+    /// Render harness only: menu settings and a running worker without touching config.json or starting one.
+    var previewConfiguration: Configuration?
+    var previewRunning = false
+    /// Keep Hot / Memory state for the menu.
+    var menuConfiguration: Configuration { previewConfiguration ?? (try? configuration()) ?? Configuration(executable: "") }
+    func previewPhase(_ next: WorkerPhase) { phase = next }
     @Published var busyModel: String?
     @Published var lastError: String?
     var onChange: (() -> Void)?
     private var process: Process?
     private var poller: Timer?
-    private var lastHotSet: [String]?
     private var restartAttempts = 0
     private var stopping = false
     private var memoryPressure: DispatchSourceMemoryPressure?
@@ -106,9 +111,7 @@ import VerdictCore
             proc.arguments = []
             var env = ProcessInfo.processInfo.environment
             env["VERDICT_SUPPORT_DIR"] = Self.support.path
-            env["VERDICT_PRELOAD"] = config.hotModels.joined(separator: ",")
-            env["VERDICT_IDLE_MINUTES"] = String(config.idleMinutes ?? 0)
-            if let data = try? JSONSerialization.data(withJSONObject: config.precision ?? [:]) { env["VERDICT_PRECISION"] = String(data: data, encoding: .utf8) }
+            env.merge(config.helperEnvironment) { _, new in new }
             proc.environment = env
             try FileManager.default.createDirectory(at: Self.support, withIntermediateDirectories: true)
             FileManager.default.createFile(atPath: Self.logURL.path, contents: nil)
@@ -188,13 +191,10 @@ import VerdictCore
         let next = VerdictCore.phase(for: decoded, processRunning: processRunning)
         if case .ready = next { restartAttempts = 0 }
         let changed = decoded != status || next != phase
-        // The hot set is the launch set. Idle/pressure unloads are transient and do not count.
-        if case .ready = next, decoded.loading == nil, decoded.idle_unloaded != true, !decoded.models.isEmpty || status?.models.isEmpty == false,
-           Set(lastHotSet ?? []) != Set(decoded.models.keys), var config = try? configuration(), Set(config.hotModels) != Set(decoded.models.keys) {
-            config.hotModels = decoded.models.keys.sorted(); try? save(config)
-        }
-        if case .ready = next, decoded.loading == nil, decoded.idle_unloaded != true {
-            lastHotSet = decoded.models.keys.sorted()
+        // The launch set is the manually loaded models. On-demand loads never join it; Keep Hot and memory unloads
+        // never leave it (only Unload/Delete in the table do).
+        if var config = try? configuration(), let hot = launchSet(config.hotModels, adding: decoded) {
+            config.hotModels = hot; try? save(config)
         }
         status = decoded; phase = next
         if changed { onChange?() }
@@ -216,20 +216,24 @@ import VerdictCore
         poll()
     }
 
-    /// The set of hot models is the launch set: what you leave loaded comes back next time.
-    /// Loads at the selected precision (the helper's own map may predate the selection).
+    /// A menu Load/Reload is a manual load: it joins the launch set (loads again at next launch) and follows the
+    /// "Manually loaded" Keep Hot window. Loads at the selected precision (the helper's own map may predate the selection).
     func load(_ id: String) {
         busyModel = id; lastError = nil; onChange?()
         let bits = precision(id)
         Task {
-            do { try await control("load", ["model": id, "bits": String(bits)]) } catch { lastError = error.localizedDescription }
+            do {
+                try await control("load", ["model": id, "bits": String(bits), "manual": "true"])
+                setHot(id, true)
+            } catch { lastError = error.localizedDescription }
             busyModel = nil; onChange?()
         }
     }
+    /// A menu Unload also removes the model from the launch set.
     func unload(_ id: String) {
-        busyModel = id; onChange?()
+        busyModel = id; lastError = nil; onChange?()
         Task {
-            do { try await control("unload", ["model": id]) } catch { lastError = error.localizedDescription }
+            do { try await control("unload", ["model": id]); setHot(id, false) } catch { lastError = error.localizedDescription }
             busyModel = nil; onChange?()
         }
     }
@@ -241,7 +245,7 @@ import VerdictCore
         }
     }
     func setHot(_ id: String, _ hot: Bool) {
-        guard var config = try? configuration() else { return }
+        guard var config = try? configuration(), config.hotModels.contains(id) != hot else { return }
         config.hotModels.removeAll { $0 == id }
         if hot { config.hotModels.append(id) }
         try? save(config)
@@ -250,12 +254,13 @@ import VerdictCore
 }
 
 extension Backend {
-    var idleMinutes: Int { (try? configuration())?.idleMinutes ?? 0 }
-    func setIdleMinutes(_ minutes: Int) {
-        guard var config = try? configuration() else { return }
-        config.idleMinutes = minutes
-        try? save(config)
-        Task { try? await control("settings", ["idle_minutes": String(minutes)]) }
+    /// Keep Hot and Memory choices: saved to config.json (the next launch's environment) and sent to the running helper.
+    func apply(_ action: MenuAction) {
+        guard let config = try? configuration() else { return }
+        let next = applying(action, to: config)
+        try? save(next)
+        if case .memory = action { lastError = nil }
+        Task { try? await control("settings", next.helperSettings) }
         onChange?()
     }
 }

@@ -152,10 +152,12 @@ A flame marks a hot model. Here English and Multilingual are ready; **Unload** f
   <img src="docs/images/models-current.png" alt="English and Multilingual hot, with precision controls and benchmark columns" width="900">
 </p>
 
-**Keep Hot** chooses between staying resident and unloading after an idle window. Unloaded models load again on the next judgement. Under memory pressure, Verdict drops its cache first, then sheds models rather than keeping them all resident.
+**Keep Hot** sets an idle window per kind of load. **Manually loaded** models (Load or Reload in the table; they also load again at the next launch) stay resident by default, or unload after 15, 30 or 60 idle minutes. Models **loaded on demand** (an agent's request needed one that was not hot) unload after 15 idle minutes by default; 5, 30, 60 minutes or Always are the other choices. Idle is counted per model from its last request, and an unloaded model loads again on the next request that needs it.
+
+**Memory → Automatic (never swap)**, the default, checks before every load that the model fits in memory macOS can hand out without swapping. If it does not, Verdict unloads idle models to make room — on-demand ones first, least recently used first, never one that is serving the current request — and otherwise refuses the load with the numbers and the ways out, for example `von-1.2 at 16-bit needs ~2.0 GB; ~0.9 GB free without swapping. Unload laya-multilingual, pick 8-bit, or allow swap in Verdict → Memory.` Agents and the CLI get that text as the error (HTTP 507); the models table shows it in its footer. **Allow loading into swap** skips the check. Under memory pressure Verdict still drops its cache first, then sheds models. The need is the model's measured memory at the selected precision plus 0.5 GB for activations; free memory is macOS's free, inactive and purgeable pages (capped by the kernel's own memory-pressure level) minus a safety margin of 10% of RAM, at least 1 GB.
 
 <p align="center">
-  <img src="docs/images/keep-hot.png" alt="Keep Hot menu: Always or unload after an idle window" width="360">
+  <img src="docs/images/keep-hot.png" alt="Keep Hot menu: idle windows for manually loaded models and for models loaded on demand" width="360">
 </p>
 
 ## Install
@@ -246,7 +248,7 @@ Judgement inputs stay local. The helper listens on `127.0.0.1`; the only network
 <details>
 <summary>Does it keep using memory when I am not working?</summary>
 
-With **Keep Hot → Always**, loaded models stay resident. Choose an idle window to release their memory between tasks; the next request pays the load time again. The menu shows live memory use. Quitting Verdict stops the worker.
+Models an agent's request loaded unload after 15 idle minutes by default; models you loaded from the menu stay resident unless you pick an idle window under **Keep Hot → Manually loaded**. The next request pays the load time again. **Memory → Automatic** keeps Verdict from loading a model into swap. The menu shows live memory use. Quitting Verdict stops the worker.
 
 </details>
 
