@@ -52,15 +52,21 @@ final class Service {
     }
     /// Which optimized paths a loaded model uses on this Mac. Anything not optimized is the stock fallback:
     /// same answers, slower. `optimized` is true only when every reported path is the fast one.
-    static func optimizations(_ agent: Any) -> [String: Any] {
+    static func optimizations(_ agent: Any, runtime: String, bits: Int) -> [String: Any] {
         var out: [String: Any] = [:], fast = true
         if let t = (agent as? TokenizerPathReporting)?.tokenizerPath { out["tokenizer"] = t; fast = fast && t == "fast" }
         if let k = (agent as? KernelPathReporting)?.kernelPath {
             let windowed = k.hasPrefix("windowed")
             out["attention"] = windowed ? "windowed" : "stock"; fast = fast && windowed
         }
+        // Neural accelerators run fp16/bf16 GEMMs only. Von's default is f32 by design (fp16 misses the ≤1%
+        // gate) and quantized GEMMs dequantize on the regular path: those are a precision choice, not a
+        // missing capability, so they do not mark the Mac as "standard".
         let nax = gpu["neural_accelerators"] as? Bool ?? false
-        out["matmul"] = nax ? "neural accelerators" : "standard GPU"; fast = fast && nax
+        let halfPrecision = runtime == "von" ? bits == 16 : (bits == 0 || bits == 16)
+        if !nax { out["matmul"] = "standard GPU"; fast = false }
+        else if halfPrecision { out["matmul"] = "neural accelerators" }
+        else { out["matmul"] = runtime == "von" ? "f32 (by design)" : "\(bits)-bit (regular GPU path)" }
         out["optimized"] = fast
         return out
     }
@@ -119,7 +125,7 @@ final class Service {
             var active = state["models"] as? [String: Any] ?? [:]
             active[id] = ["device": "mlx", "load_s": (Date().timeIntervalSince(start) * 10).rounded() / 10, "bits": bits]
             if let path = (agent as? KernelPathReporting)?.kernelPath, var entry = active[id] as? [String: Any] { entry["kernel"] = path; active[id] = entry }
-            if var entry = active[id] as? [String: Any] { entry["optimizations"] = Self.optimizations(agent); active[id] = entry }
+            if var entry = active[id] as? [String: Any] { entry["optimizations"] = Self.optimizations(agent, runtime: spec.runtime, bits: bits); active[id] = entry }
             state["models"] = active; state["loading"] = NSNull(); state["downloading"] = false; writeStatus()
             return agent
         } catch {

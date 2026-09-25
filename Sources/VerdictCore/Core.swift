@@ -64,7 +64,11 @@ public struct Optimizations: Codable, Equatable {
         var fast: [String] = [], fallback: [String] = []
         if let t = tokenizer { t == "fast" ? fast.append("fast tokenizer") : fallback.append("library tokenizer (tokenizer format not recognised)") }
         if let a = attention { a == "windowed" ? fast.append("windowed attention") : fallback.append("stock attention (kernel self-test did not pass)") }
-        if let m = matmul { m == "neural accelerators" ? fast.append("GPU neural accelerators") : fallback.append("standard GPU matmul (needs an M5-class GPU and macOS 26.2+)") }
+        if let m = matmul {
+            if m == "neural accelerators" { fast.append("GPU neural accelerators") }
+            else if m == "standard GPU" { fallback.append("standard GPU matmul (neural accelerators need an M5-class GPU and macOS 26.2+)") }
+            else { fast.append(m) }   // precision choice (f32 / quantized), not a missing capability
+        }
         let head = optimized ? "Optimized for this Mac" : "Standard on this Mac (fallback, same answers, slower)"
         return head + (fast.isEmpty ? "" : ": " + fast.joined(separator: ", ")) + (fallback.isEmpty ? "." : ". Fallback: " + fallback.joined(separator: "; ") + ".")
     }
