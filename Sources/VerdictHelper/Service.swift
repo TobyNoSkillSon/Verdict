@@ -42,7 +42,7 @@ final class Service {
         trimPercent = Double(env["VERDICT_TRIM_FREE_PCT"] ?? "") ?? 15
         if let data = env["VERDICT_PRECISION"]?.data(using: .utf8), let p = try? JSONSerialization.jsonObject(with: data) as? [String: Int] { precision = p }
         let now = Date().timeIntervalSince1970
-        // VERDICT_IDLE_MINUTES (older launchers and the bench/test harnesses) sets both classes unless the per-class
+        // VERDICT_IDLE_MINUTES (older launchers and test harnesses) sets both classes unless the per-class
         // variables are given; the app passes all three.
         let legacy = Int(env["VERDICT_IDLE_MINUTES"] ?? "")
         manualIdle = max(0, Int(env["VERDICT_MANUAL_IDLE_MINUTES"] ?? "") ?? legacy ?? 0)
@@ -50,7 +50,7 @@ final class Service {
         allowSwap = env["VERDICT_ALLOW_SWAP"] == "1"
         probe = MemoryProbe(environment: env)
         minuteSeconds = Double(env["VERDICT_TEST_MINUTE_SECONDS"] ?? "") ?? 60
-        state = ["models": [:], "calls": 0, "items": 0, "last_ms": NSNull(), "started": now, "port": NSNull(), "pid": Int(getpid()), "loading": NSNull(), "error": NSNull(), "last_used": now, "gpu": Self.gpu, "evictions": [], "refused": NSNull()]
+        state = ["api": Self.apiVersion, "models": [:], "calls": 0, "items": 0, "last_ms": NSNull(), "started": now, "port": NSNull(), "pid": Int(getpid()), "loading": NSNull(), "error": NSNull(), "last_used": now, "gpu": Self.gpu, "evictions": [], "refused": NSNull()]
         Memory.cacheLimit = cacheLimit * 1024 * 1024
         publishSettings()
     }
@@ -61,6 +61,15 @@ final class Service {
     private func publishSettings() { for (key, value) in settings { state[key] = value } }
     func start(port: Int) { locked { state["port"] = port; writeStatus() } }
     func finish() { locked { state["models"] = [:]; state["port"] = NSNull(); writeStatus() }; flushStatus() }
+    /// The app that launched this helper is gone (its stdin pipe closed): record the shutdown unless a request holds
+    /// the lock for more than two seconds, then exit.
+    func abandon() -> Never {
+        if lock.lock(before: Date().addingTimeInterval(2)) {
+            state["models"] = [:]; state["port"] = NSNull(); writeStatus(); lock.unlock()
+            flushStatus()
+        }
+        exit(0)
+    }
     func preload() {
         for id in (ProcessInfo.processInfo.environment["VERDICT_PRELOAD"] ?? "").split(separator: ",") {
             do { try locked { _ = try load(String(id), as: .manual) } }
@@ -410,9 +419,25 @@ final class Service {
             if groups[id] == nil { modelOrder.append(id) }
             groups[id, default: []].append(index)
         }
+        // bits: the precision every model this request uses runs at (like /load bits; it stays until changed). Validated
+        // for all of them before anything loads.
+        var requestedBits: [String: Int] = [:]
+        if let raw = body["bits"], !(raw is NSNull) {
+            for id in modelOrder { requestedBits[id] = try validBits(raw, for: id) }
+        }
         // Every model this request needs is in flight until it returns: loading a later one never evicts an earlier one.
         pinned = Set(modelOrder); defer { pinned = [] }
         for id in modelOrder {
+            if let bits = requestedBits[id] {
+                let spec = try catalog.spec(id)
+                if models[id] == nil {
+                    let previous = precision[id]
+                    precision[id] = bits
+                    do { _ = try load(id, as: .onDemand) } catch { precision[id] = previous; throw error }
+                } else if spec.effectiveBits(precision[id] ?? spec.defaultBits) != spec.effectiveBits(bits) {
+                    try reload(id, bits: bits, as: residency[id] == .manual ? .manual : .onDemand)
+                }
+            }
             let agent = try load(id, as: .onDemand), indexes = groups[id]!
             func modelItem(_ index: Int) -> Item { item(items[index], ordered: orderedItems.indices.contains(index) ? orderedItems[index] : nil) }
             let start = Date()
@@ -489,12 +514,67 @@ final class Service {
         if let string = raw as? String { return Int(string.trimmingCharacters(in: .whitespacesAndNewlines)) }
         return nil
     }
+    /// Public API version, reported in /v1/status as "api". Bumped only for incompatible changes to /v1.
+    static let apiVersion = 1
+    /// Public endpoints are served under /v1 and, for older clients, at their original unversioned paths.
+    /// /shed, /trim and /quit are internal (the app's memory-pressure hooks and shutdown): unversioned only.
+    static let publicRoutes: Set<String> = ["/status", "/judge", "/load", "/unload", "/delete", "/settings"]
+    static let versionedOnly: Set<String> = ["/models"]
+    static let internalRoutes: Set<String> = ["/shed", "/trim", "/quit"]
+    /// Request path -> route ("/v1/judge" and "/judge" -> "/judge"); nil for anything not served.
+    static func route(_ path: String) -> String? {
+        let bare = String(path.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).first ?? "")
+        if bare.hasPrefix("/v1/") {
+            let route = String(bare.dropFirst(3))
+            return publicRoutes.contains(route) || versionedOnly.contains(route) ? route : nil
+        }
+        return publicRoutes.contains(bare) || internalRoutes.contains(bare) ? bare : nil
+    }
+    /// config.json precision choices (id -> bits, 0 = native), as the app's Models table last saved them.
+    private func selectedPrecision() -> [String: Int] {
+        guard let data = try? Data(contentsOf: support.appendingPathComponent("config.json")),
+              let config = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return [:] }
+        return (config["precision"] as? [String: Any] ?? [:]).compactMapValues { ($0 as? NSNumber)?.intValue }
+    }
+    /// Parses and validates a precision for `id` without touching state.
+    private func validBits(_ raw: Any, for id: String) throws -> Int {
+        guard let bits = integer(raw) else { throw ServiceError("invalid literal for int() with base 10: '\(raw)'") }
+        let spec = try catalog.spec(id)
+        if let rule = Self.precisions[spec.runtime], !rule.0.contains(bits) { throw ServiceError("\(id): \(rule.1)") }
+        return bits
+    }
+    /// Loads `id` at `bits` (already validated), replacing a loaded precision. Memory is checked before the loaded
+    /// precision is dropped (what unloading it frees counts): a refusal changes nothing. If the new precision fails
+    /// after the old one was unloaded (a refusal on re-measure, a load error), the working model is put back as it was
+    /// and the original failure is reported.
+    private func reload(_ id: String, bits: Int, as cls: Residency) throws {
+        let spec = try catalog.spec(id)
+        let loadedClass = residency[id]
+        if models[id] != nil { try admit(spec, bits: bits, credit: reclaim(id)) }
+        let previous = precision[id]
+        precision[id] = bits; unload(id)
+        do { _ = try load(id, as: cls) } catch {
+            precision[id] = previous
+            if let loadedClass { restore(id, as: loadedClass) }
+            throw error
+        }
+    }
     func request(_ method: String, _ path: String, _ body: [String: Any], rawBody: Data? = nil) -> (Int, [String: Any]) {
         do {
             return try locked {
-                if method == "GET" { return path == "/status" ? (200, state.merging(["catalog": catalog.raw, "installed": catalog.installed(), "memory": memory()]) { _, new in new }) : (404, ["error": "not found"]) }
-                if method != "POST" { return (404, ["error": "not found"]) }
-                switch path {
+                guard let route = Self.route(path) else { return (404, ["error": "not found: \(method) \(path)"]) }
+                if method == "GET" {
+                    switch route {
+                    case "/status": return (200, state.merging(["catalog": catalog.raw, "installed": catalog.installed(), "memory": memory()]) { _, new in new })
+                    case "/models":
+                        let view = ModelsView.build(catalog: catalog.raw, benchmarks: catalog.benchmarks, loaded: state["models"] as? [String: Any] ?? [:],
+                                                    installed: catalog.installed(), selected: selectedPrecision())
+                        return (200, ["models": view])
+                    default: return (404, ["error": "\(path) takes POST"])
+                    }
+                }
+                if method != "POST" { return (404, ["error": "not found: \(method) \(path)"]) }
+                switch route {
                 case "/judge":
                     var parser = OrderedJSONParser(rawBody ?? Data("{}".utf8))
                     return (200, try judge(body, ordered: parser.parse()))
@@ -503,27 +583,10 @@ final class Service {
                     guard let manual = flag(body["manual"] ?? false) else { throw ServiceError("manual must be true or false") }
                     // The app's menu sends manual; agents and scripts load on demand. A reload keeps a manual model manual.
                     let cls: Residency = manual || residency[id] == .manual ? .manual : .onDemand
-                    if body["bits"] != nil {
-                        guard let bits = integer(body["bits"]) else { throw ServiceError("invalid literal for int() with base 10: '\(body["bits"]!)'") }
+                    if let raw = body["bits"] {
                         // Validate model and precision before touching state: a bad request must neither unload the
                         // working model nor leave an unusable precision behind.
-                        let spec = try catalog.spec(id)
-                        if let rule = Self.precisions[spec.runtime], !rule.0.contains(bits) {
-                            throw ServiceError("\(id): \(rule.1)")
-                        }
-                        // Memory is checked before the loaded precision is dropped (what unloading it frees counts):
-                        // a refusal here changes nothing.
-                        let loadedClass = residency[id]
-                        if models[id] != nil { try admit(spec, bits: bits, credit: reclaim(id)) }
-                        let previous = precision[id]
-                        precision[id] = bits; unload(id)
-                        do { _ = try load(id, as: cls) } catch {
-                            // The new precision failed after the old one was unloaded (a refusal on re-measure, a
-                            // load error): put the working model back as it was, and report the original failure.
-                            precision[id] = previous
-                            if let loadedClass { restore(id, as: loadedClass) }
-                            throw error
-                        }
+                        try reload(id, bits: try validBits(raw, for: id), as: cls)
                         return (200, ["loaded": order])
                     }
                     _ = try load(id, as: cls); return (200, ["loaded": order])
@@ -561,7 +624,7 @@ final class Service {
                 case "/shed": shed(); return (200, ["loaded": order])
                 case "/trim": Memory.clearCache(); return (200, ["ok": true])
                 case "/quit": quitting = true; return (200, ["bye": true])
-                default: return (404, ["error": "not found"])
+                default: return (404, ["error": "\(path) takes GET"])
                 }
             }
         } catch let refusal as MemoryRefusal { return (507, ["error": refusal.message]) }

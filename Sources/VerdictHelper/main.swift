@@ -45,7 +45,7 @@ final class HTTPServer {
     }
     private var timer: DispatchSourceTimer?
     private var boundPort = 0
-    /// Loopback is not a browser trust boundary. Local clients (the app, verdict.py, the bench) never send Origin, address
+    /// Loopback is not a browser trust boundary. Local clients (the app, the CLI, VerdictKit, verdict.py) never send Origin, address
     /// the helper as 127.0.0.1/localhost:<port> and post JSON. Refuse anything else before reading the body: a web page's
     /// request (Origin), DNS rebinding (foreign Host), and form/text "simple" POSTs that skip CORS preflight.
     static func refusal(method: String, headers: [String: String], port: Int) -> (Int, String)? {
@@ -95,7 +95,8 @@ final class HTTPServer {
         }
     }
     private func respond(_ connection: NWConnection, _ code: Int, _ body: [String: Any]) {
-        let data = (try? JSONSerialization.data(withJSONObject: body, options: [.fragmentsAllowed, .withoutEscapingSlashes])) ?? Data("{}".utf8)
+        // Sorted keys: stable output for clients and docs (models, answers and probabilities by name).
+        let data = (try? JSONSerialization.data(withJSONObject: body, options: [.fragmentsAllowed, .withoutEscapingSlashes, .sortedKeys])) ?? Data("{}".utf8)
         let reason = [200: "OK", 403: "Forbidden", 404: "Not Found", 415: "Unsupported Media Type", 507: "Insufficient Storage"][code] ?? "Bad Request"
         let header = "HTTP/1.1 \(code) \(reason)\r\nContent-Type: application/json\r\nContent-Length: \(data.count)\r\nConnection: close\r\n\r\n"
         connection.send(content: Data(header.utf8) + data, completion: .contentProcessed { [self] _ in
@@ -113,6 +114,17 @@ do {
         .appendingPathComponent("Resources/mlx.metallib")
     if FileManager.default.fileExists(atPath: bundledLibrary.path) { GPU.metallib = bundledLibrary }
     let service = try Service()
+    // The app keeps a pipe on our stdin and never writes to it: EOF means the app is gone (quit, crash, force-quit),
+    // so the helper exits instead of lingering. Opt-in: tests and scripts run the helper with other stdins.
+    if ProcessInfo.processInfo.environment["VERDICT_EXIT_ON_STDIN_EOF"] == "1" {
+        Thread.detachNewThread {
+            var byte: UInt8 = 0
+            while true {
+                let count = read(0, &byte, 1)
+                if count == 0 || (count < 0 && errno != EINTR) { service.abandon() }
+            }
+        }
+    }
     try HTTPServer(service).run()
 } catch {
     fputs("verdict-helper: \(error)\n", stderr)

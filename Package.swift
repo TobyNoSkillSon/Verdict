@@ -32,7 +32,7 @@ let package = Package(
             .product(name: "Tokenizers", package: "swift-transformers")
         ]),
         // The helper process the app launches: loopback HTTP service over VerdictEngine.
-        .executableTarget(name: "verdict-helper", dependencies: ["VerdictEngine", .product(name: "MLX", package: "mlx-swift")],
+        .executableTarget(name: "verdict-helper", dependencies: ["VerdictEngine", "VerdictCore", .product(name: "MLX", package: "mlx-swift")],
                           path: "Sources/VerdictHelper"),
         .testTarget(name: "VerdictCoreTests", dependencies: ["VerdictCore"])
     ]

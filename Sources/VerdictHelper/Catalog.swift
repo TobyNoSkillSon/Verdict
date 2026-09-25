@@ -33,6 +33,8 @@ final class Catalog {
     let raw: [[String: Any]]
     /// Measured memory (benchmarks.json memory_mb: phys_footprint after load + warm-up), id -> effective bits -> MB.
     let measuredMemory: [String: [Int: Double]]
+    /// benchmarks.json as shipped (id -> entry), for /v1/models.
+    let benchmarks: [String: Any]
     private let fm = FileManager.default
     private let cache: URL
 
@@ -55,7 +57,9 @@ final class Catalog {
         // benchmarks.json ships next to models.json (Resources/, the app bundle's Contents/Resources); VERDICT_BENCHMARKS overrides.
         let bench = env["VERDICT_BENCHMARKS"].map { URL(fileURLWithPath: $0) } ?? path.deletingLastPathComponent().appendingPathComponent("benchmarks.json")
         var measured: [String: [Int: Double]] = [:]
-        if let data = try? Data(contentsOf: bench), let models = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+        let benchmarkFile = (try? Data(contentsOf: bench)).flatMap { (try? JSONSerialization.jsonObject(with: $0)) as? [String: Any] }
+        benchmarks = benchmarkFile ?? [:]
+        if let models = benchmarkFile {
             for (id, value) in models {
                 guard let precisions = (value as? [String: Any])?["precisions"] as? [String: Any] else { continue }
                 for (bits, result) in precisions {
