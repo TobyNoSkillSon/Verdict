@@ -354,5 +354,7 @@ final class CoreTests: XCTestCase {
         status.error = "boom"
         XCTAssertEqual(footerNotice(lastError: nil, status: status, now: 1100), "boom")
         XCTAssertEqual(formatContext(2048), "2k")
+        XCTAssertEqual(formatContext(8192), "8k")
+        XCTAssertEqual(formatContext(32000), "32k")   // Jev: OpenRouter lists 32,000
     }
 }

@@ -66,8 +66,10 @@ public struct CatalogModel: Codable, Identifiable, Equatable {
     public var inputs: [String]?
 }
 
+/// "8k" for 8,192 (binary sizes) and "32k" for 32,000 (decimal ones, e.g. a hosted API's listed limit).
 public func formatContext(_ tokens: Int) -> String {
-    tokens >= 1024 ? "\(tokens / 1024)k" : String(tokens)
+    guard tokens >= 1000 else { return String(tokens) }
+    return tokens % 1024 == 0 ? "\(tokens / 1024)k" : "\(Int((Double(tokens) / 1000).rounded()))k"
 }
 
 /// Measured figures for one model at one precision. Every field is optional: absent = not measured ("—").

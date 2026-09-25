@@ -135,7 +135,7 @@
     "repository": "",
     "subfolder": "",
     "downloadBytes": 0,
-    "context": 65536,
+    "context": 32000,
     "languages": "English",
     "license": "proprietary API",
     "recommendation": "Hosted reference. Cannot run locally; shown for comparison only.",

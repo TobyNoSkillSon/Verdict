@@ -32,6 +32,14 @@ class DocsTests(unittest.TestCase):
                 continue
             seen.add(model)
             entry = bench[model]
+            if 'precisions' not in entry:                                 # hosted reference (Jev): one measured row
+                context = next(m['context'] for m in catalog if m['id'] == model)
+                self.assertEqual(cells[2], f'{round(context / 1000)}k', model)
+                self.assertAlmostEqual(number(cells[5]) / 100, entry['accuracy'], delta=0.0005, msg=model)
+                self.assertAlmostEqual(number(cells[6]), entry['ece'], delta=0.0005, msg=model)
+                self.assertAlmostEqual(number(cells[7].lstrip('~')), entry['ms'], delta=0.5, msg=model)
+                self.assertEqual(cells[8:], ['—'] * 3, model)                 # batched, energy, memory: not applicable
+                continue
             bits = native[model]
             r = entry['precisions'][str(bits)]
             self.assertEqual(int(cells[4]), bits, model)
@@ -41,7 +49,8 @@ class DocsTests(unittest.TestCase):
             self.assertAlmostEqual(number(cells[8]), r['items_per_s'], delta=0.5, msg=model)
             self.assertAlmostEqual(number(cells[9]), r['j_per_1k'], delta=0.5, msg=model)
             self.assertAlmostEqual(number(cells[10]) * 1000, r['memory_mb'], delta=5, msg=model)
-        self.assertEqual(seen, {m for m in bench if m != 'jev'})
+        self.assertEqual(seen, set(bench))
+        self.assertNotIn('not measured here', readme)                # Jev is measured on the suite now
 
     def test_no_stale_behaviour_claims(self):
         readme = (ROOT / 'README.md').read_text()
