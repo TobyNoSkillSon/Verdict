@@ -10,7 +10,12 @@ let package = Package(
     platforms: [.macOS(.v14)],
     products: [
         .executable(name: "Verdict", targets: ["Verdict"]),
-        .executable(name: "verdict-helper", targets: ["verdict-helper"])
+        .executable(name: "verdict-helper", targets: ["verdict-helper"]),
+        // Swift client for the local HTTP API (docs/API.md). No dependencies.
+        .library(name: "VerdictKit", targets: ["VerdictKit"]),
+        // The `verdict` command line (shipped as Contents/Helpers/verdict; the product name avoids clashing with
+        // the app binary "Verdict" on case-insensitive volumes).
+        .executable(name: "verdict-cli", targets: ["VerdictCLI"])
     ],
     dependencies: [
         // Laya 9×202 parity-qualified only with core 0.32.2 + precise Metal shaders.
@@ -34,6 +39,10 @@ let package = Package(
         // The helper process the app launches: loopback HTTP service over VerdictEngine.
         .executableTarget(name: "verdict-helper", dependencies: ["VerdictEngine", "VerdictCore", .product(name: "MLX", package: "mlx-swift")],
                           path: "Sources/VerdictHelper"),
-        .testTarget(name: "VerdictCoreTests", dependencies: ["VerdictCore"])
+        // Client library: discovers or launches the app, typed questions and results. Foundation only.
+        .target(name: "VerdictKit"),
+        .executableTarget(name: "VerdictCLI", dependencies: ["VerdictKit"]),
+        .testTarget(name: "VerdictCoreTests", dependencies: ["VerdictCore"]),
+        .testTarget(name: "VerdictKitTests", dependencies: ["VerdictKit", "VerdictCLI"])
     ]
 )

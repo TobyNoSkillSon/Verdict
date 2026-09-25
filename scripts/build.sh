@@ -11,11 +11,15 @@ IDENTITY="${VERDICT_SIGN_IDENTITY:--}"
 scripts/build-helper.sh
 DEVELOPER_DIR=/Library/Developer/CommandLineTools \
   /Library/Developer/CommandLineTools/usr/bin/swift build --build-system native -c release --product Verdict
+DEVELOPER_DIR=/Library/Developer/CommandLineTools \
+  /Library/Developer/CommandLineTools/usr/bin/swift build --build-system native -c release --product verdict-cli
 STAGE="$(mktemp -d "$ROOT/.build/.verdict-app.XXXXXX")"
 trap 'rm -rf "$STAGE"' EXIT
 BUNDLE="$STAGE/Verdict.app"
-mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources"
+mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources" "$BUNDLE/Contents/Helpers"
 cp .build/release/Verdict "$BUNDLE/Contents/MacOS/Verdict"
+# The `verdict` command line; install.sh links ~/.local/bin/verdict to it.
+cp .build/release/verdict-cli "$BUNDLE/Contents/Helpers/verdict"
 cp .build/release-helper/verdict-helper "$BUNDLE/Contents/MacOS/verdict-helper"
 cp .build/release-helper/mlx.metallib "$BUNDLE/Contents/Resources/mlx.metallib"
 cp Resources/Info.plist "$BUNDLE/Contents/Info.plist"
@@ -32,6 +36,7 @@ for size in 16 32 128 256 512; do
 done
 iconutil -c icns "$ICONSET" -o "$BUNDLE/Contents/Resources/Verdict.icns"
 codesign --force --sign "$IDENTITY" "$BUNDLE/Contents/MacOS/verdict-helper" >/dev/null
+codesign --force --sign "$IDENTITY" "$BUNDLE/Contents/Helpers/verdict" >/dev/null
 codesign --force --sign "$IDENTITY" "$BUNDLE" >/dev/null
 codesign --verify --deep --strict "$BUNDLE"
 mkdir -p "$(dirname "$APP")"
@@ -44,5 +49,5 @@ if ! mv "$BUNDLE" "$APP"; then
   [[ -z "$PREVIOUS" ]] || mv "$PREVIOUS" "$APP"
   echo 'Build finished but staging the app failed; previous app restored.' >&2; exit 1
 fi
-echo "Built $APP (native helper + Metal library; not installed)"
+echo "Built $APP (native helper + Metal library + verdict CLI; not installed)"
 [[ -z "$PREVIOUS" ]] || echo "Previous build retained at $PREVIOUS"

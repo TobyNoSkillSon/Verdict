@@ -46,15 +46,11 @@ if ! mv "$STAGED" "$DEST/Verdict.app"; then
   echo 'Install failed; previous app restored.' >&2; exit 1
 fi
 mkdir -p "$HOME/.local/bin" "$HOME/.local/share/verdict"
+# Python library for scripts (import verdict from ~/.local/share/verdict); the CLI is the app's own binary.
 install -m 644 clients/python/verdict.py "$HOME/.local/share/verdict/verdict.py"
 printf '%s\n' "$DEST/Verdict.app" > "$HOME/.local/share/verdict/app-path"
-cat > "$HOME/.local/bin/verdict" <<'SH'
-#!/bin/sh
-VERDICT_APP="$(cat "$HOME/.local/share/verdict/app-path")"
-export VERDICT_APP
-exec python3 "$HOME/.local/share/verdict/verdict.py" "$@"
-SH
-chmod 755 "$HOME/.local/bin/verdict"
+rm -f "$HOME/.local/bin/verdict"
+ln -s "$DEST/Verdict.app/Contents/Helpers/verdict" "$HOME/.local/bin/verdict"
 echo "Installed $DEST/Verdict.app and CLI ~/.local/bin/verdict"
 open -g "$DEST/Verdict.app"
 export VERDICT_APP="$DEST/Verdict.app"

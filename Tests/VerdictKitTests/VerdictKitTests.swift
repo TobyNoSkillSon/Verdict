@@ -1,0 +1,228 @@
+import XCTest
+@testable import VerdictKit
+
+/// Wire formats and parsing: no helper needed.
+final class WireTests: XCTestCase {
+    func testQuestionBuildersMatchWireFormat() {
+        XCTAssertEqual(Question.choice("q", ["a": "x", "b": "y"]).json.compact, #"{"type":"choice","instructions":"q","criteria":{"a":"x","b":"y"}}"#)
+        XCTAssertEqual(Question.choice("q", labels: ["a", "b"]).json.compact, #"{"type":"choice","instructions":"q","criteria":{"a":"a","b":"b"}}"#)
+        XCTAssertEqual(Question.score("q", levels: ["lo", "hi"]).json.compact, #"{"type":"score","instructions":"q","criteria":["lo","hi"]}"#)
+        XCTAssertEqual(Question.noul("q").json.compact, #"{"type":"noul","instructions":"q"}"#)
+        XCTAssertEqual(Question.noul("q", criteria: ["true": "yes", "false": "no"]).json.compact,
+                       #"{"type":"noul","instructions":"q","criteria":{"true":"yes","false":"no"}}"#)
+        let questions: Questions = ["z": .noul("first"), "a": .noul("second")]
+        XCTAssertEqual(questions.ids, ["z", "a"], "a dictionary literal keeps its order")
+    }
+
+    func testQuestionsFileRoundTripKeepsListsNullsAndOrder() throws {
+        let text = #"{"kind":{"type":"choice","instructions":"What?","criteria":["b","a"]},"x":{"type":"noul","instructions":"Is it?","criteria":{"true":null,"false":"no"}}}"#
+        let questions = try Questions(json: try JSON.parse(text))
+        XCTAssertEqual(questions.json.compact, text)
+        XCTAssertEqual(questions["kind"]?.labels, ["b", "a"])
+        XCTAssertThrowsError(try Questions(json: try JSON.parse(#"{"q":{"type":"nope","instructions":""}}"#))) { error in
+            XCTAssertEqual(error.localizedDescription, "Unknown question type 'nope'")
+        }
+        XCTAssertThrowsError(try Questions(json: .object([])))
+        let decoded = try JSONDecoder().decode(Question.self, from: Data(#"{"type":"score","instructions":"q","criteria":["lo","hi"]}"#.utf8))
+        XCTAssertEqual(decoded, .score("q", levels: ["lo", "hi"]))
+    }
+
+    func testJSONKeepsKeyOrderAndNumberLiterals() throws {
+        let text = #"{"b":1,"a":2.0,"c":[1e5,-0.5,true,null],"d":{"é":"x\ny\"\u0001"},"e":"\ud83d\ude00"}"#
+        let value = try JSON.parse(text)
+        XCTAssertEqual(value.members?.map(\.key), ["b", "a", "c", "d", "e"])
+        XCTAssertEqual(value["a"], .number("2.0"))
+        XCTAssertEqual(value["e"]?.string, "😀")
+        XCTAssertEqual(value.compact, #"{"b":1,"a":2.0,"c":[1e5,-0.5,true,null],"d":{"é":"x\ny\"\u0001"},"e":"😀"}"#)
+        // Python json.dumps(ensure_ascii=False) layout, as the CLI's --json prints.
+        XCTAssertEqual(value.spaced, #"{"b": 1, "a": 2.0, "c": [1e5, -0.5, true, null], "d": {"é": "x\ny\"\u0001"}, "e": "😀"}"#)
+        XCTAssertEqual(try JSON.parse(#"{"a":[]}"#).pretty, "{\n  \"a\": []\n}")
+        for bad in ["{", "[1,]", "01", "\"\\x\"", "tru", "{\"a\" 1}", "1 2"] {
+            XCTAssertThrowsError(try JSON.parse(bad), bad)
+        }
+    }
+
+    func testLintFlagsBadShapesOnly() {
+        let good: Questions = ["ok": .choice("q", ["a": "x", "other": "none of these"]), "ok2": .noul("Is it remote?"),
+                               "ok3": .score("q", levels: ["no deadline", "blocking today"])]
+        XCTAssertEqual(good.lint(), [])
+        let bad: Questions = ["a": .choice("q", ["a": "x", "b": "y"]), "b": .noul("how many?"), "c": .score("q", levels: ["low", "high"]),
+                              "d": .noul("urgent and billing?"), "e": .choice("q", labels: (0..<25).map(String.init))]
+        XCTAssertEqual(bad.lint().count, 6)   // 25 options is two problems: count and no escape option
+    }
+
+    func testResultsDecode() throws {
+        let data = Data(#"{"results":[{"answers":{"dept":{"choice":"billing","confidence":0.9,"probabilities":{"billing":0.9,"other":0.1}},"refund":{"confidence":0.86,"noul":0.86},"urg":{"confidence":0.4,"score":1.6}},"model":"m","ms":6.0},{"error":"too long","model":null,"ms":0}]}"#.utf8)
+        struct Reply: Decodable { let results: [Judgement] }
+        let results = try JSONDecoder().decode(Reply.self, from: data).results
+        XCTAssertEqual(results[0]["dept"]?.choice, "billing")
+        XCTAssertEqual(results[0]["dept"]?.probabilities?["other"], 0.1)
+        XCTAssertEqual(results[0]["refund"]?.value, 0.86)
+        XCTAssertEqual(results[0]["urg"]?.value, 1.6)
+        XCTAssertTrue(results[0].ok)
+        XCTAssertEqual(results[1].error, "too long"); XCTAssertNil(results[1].model); XCTAssertFalse(results[1].ok)
+    }
+
+    func testNotRunningWithoutLaunch() async throws {
+        let empty = FileManager.default.temporaryDirectory.appendingPathComponent("verdictkit-empty-\(UUID().uuidString)")
+        do {
+            _ = try await Verdict(launch: false, supportDirectory: empty)
+            XCTFail("found a helper in an empty support directory")
+        } catch let error as VerdictError {
+            XCTAssertEqual(error, .unavailable("Verdict is not running"))
+        }
+    }
+}
+
+/// The client against a real helper with stub models.
+final class HelperTests: XCTestCase {
+    var helper: StubHelper!
+    var verdict: Verdict!
+
+    override func setUp() async throws {
+        helper = try StubHelper()
+        verdict = try await Verdict(launch: false, supportDirectory: helper.support)
+    }
+    override func tearDown() { helper?.stop() }
+
+    func testDiscoveryAndStatus() async throws {
+        let status = try await verdict.status()
+        XCTAssertEqual(status.api, 1)
+        XCTAssertEqual(status.port, helper.port)
+        XCTAssertEqual(status.pid.map(Int32.init), helper.process.processIdentifier)
+        XCTAssertEqual(status.models, [:])
+        XCTAssertEqual(status.on_demand_idle_minutes, 15)
+    }
+
+    func testJudgeTypedQuestionsAndPerItemErrors() async throws {
+        let questions: Questions = [
+            "refund": .noul("Does the customer ask for money back?"),
+            "dept": .choice("Which team?", ["billing": "charges, refunds", "tech": "bugs", "other": "none of these"]),
+            "urgency": .score("How urgent is this?", levels: ["routine", "this week", "blocking today"]),
+        ]
+        let long = Array(repeating: "w", count: 9000).joined(separator: " ")
+        let items: [Item] = ["please refund me", ["subject": "invoice", "body": "charged twice"], Item(long), ["image": "/tmp/x.png"]]
+        let results = try await verdict.judge(items, questions)
+        XCTAssertEqual(results.count, 4)
+        XCTAssertEqual(results[0]["refund"]?.noul, 0.75)
+        XCTAssertEqual(results[0]["dept"]?.choice, "billing")
+        XCTAssertEqual(results[0]["dept"]?.probabilities?.keys.sorted(), ["billing", "other", "tech"])
+        XCTAssertEqual(results[0]["urgency"]?.score, 1)
+        XCTAssertEqual(results[0].model, "laya-english")
+        XCTAssertTrue(results[1].ok)
+        XCTAssertTrue(results[2].error?.contains("accepts 8192") == true, "\(results[2])")
+        XCTAssertEqual(results[2].model, "laya-english")
+        XCTAssertTrue(results[3].error?.contains("judges text") == true)
+        XCTAssertNil(results[3].model)
+        // Routing: non-ASCII goes to the multilingual model; an explicit model is honoured.
+        let routed = try await verdict.judge(["Zażółć gęślą jaźń", "plain"], questions)
+        XCTAssertEqual(routed.map(\.model), ["laya-multilingual", "laya-english"])
+        let one = try await verdict.judge("plain", ["x": .noul("Is it?")], model: "laya-multilingual")
+        XCTAssertEqual(one.model, "laya-multilingual")
+        // Batches are split and order is kept.
+        let many = try await verdict.judge((0..<10).map { "item \($0)" }, ["x": .noul("Is it?")], batch: 3)
+        XCTAssertEqual(many.count, 10)
+    }
+
+    func testJudgeBitsLoadsAtThatPrecision() async throws {
+        _ = try await verdict.judge(["x"], ["x": .noul("Is it?")], model: "laya-english", bits: 8)
+        var status = try await verdict.status()
+        XCTAssertEqual(status.models["laya-english"]?.bits, 8)
+        XCTAssertEqual(status.models["laya-english"]?.residency, "on_demand")
+        _ = try await verdict.judge(["x"], ["x": .noul("Is it?")], model: "laya-english", bits: 0)
+        status = try await verdict.status()
+        XCTAssertEqual(status.models["laya-english"]?.bits, 0)
+        do {
+            _ = try await verdict.judge(["x"], ["x": .noul("Is it?")], model: "laya-english", bits: 5)
+            XCTFail("5 bits accepted")
+        } catch VerdictError.api(let code, let message) {
+            XCTAssertEqual(code, 400)
+            XCTAssertEqual(message, "laya-english: Laya precision must be 16, 8 or 4 bits")
+        }
+        status = try await verdict.status()
+        XCTAssertEqual(status.models["laya-english"]?.bits, 0, "a refused precision changes nothing")
+    }
+
+    func testLoadUnloadManualAndDelete() async throws {
+        let loaded = try await verdict.load("von-1.2", manual: true)
+        XCTAssertEqual(loaded, ["von-1.2"])
+        var status = try await verdict.status()
+        XCTAssertEqual(status.models["von-1.2"]?.residency, "manual")
+        XCTAssertEqual(status.models["von-1.2"]?.engineLabel(chip: "M5 Max"), "Optimized · M5 Max")
+        _ = try await verdict.load("von-1.2", bits: 8)
+        status = try await verdict.status()
+        XCTAssertEqual(status.models["von-1.2"]?.bits, 8)
+        XCTAssertEqual(status.models["von-1.2"]?.residency, "manual", "a reload keeps a manual model manual")
+        let after = try await verdict.unload("von-1.2")
+        XCTAssertEqual(after, [])
+        do { try await verdict.load("jev"); XCTFail("hosted model loaded") }
+        catch VerdictError.api(let code, let message) { XCTAssertEqual(code, 400); XCTAssertTrue(message.contains("hosted"), message) }
+        let installed = try await verdict.delete("laya-english")
+        XCTAssertEqual(installed, [:])
+        let settings = try await verdict.settings(onDemandIdleMinutes: 5, allowSwap: true)
+        XCTAssertEqual(settings.on_demand_idle_minutes, 5); XCTAssertEqual(settings.allow_swap, true)
+    }
+
+    func testModelsReportPrecisionsAndDeltas() async throws {
+        _ = try await verdict.load("von-1.2")
+        var models = Dictionary(uniqueKeysWithValues: try await verdict.models().map { ($0.id, $0) })
+        let von = try XCTUnwrap(models["von-1.2"])
+        XCTAssertEqual(von.state, "hot")
+        XCTAssertEqual(von.precision, Model.Precision(selected: 16, default: 16, loaded: 16, options: [32, 16, 8, 4]))
+        XCTAssertEqual(von.benchmarks["32"]?.deltas, ["accuracy": "+0.1 pt", "ece": "\u{2212}0.001", "speed": "2.0× slower", "energy": "2.9× more energy"])
+        XCTAssertNil(von.benchmarks["16"]?.deltas)
+        XCTAssertEqual(von.benchmark, von.benchmarks["16"])
+        XCTAssertEqual(models["laya-english"]?.precision?.selected, 16)
+        XCTAssertEqual(models["laya-english"]?.state, "available")
+        XCTAssertNil(models["jev"]?.precision)
+        XCTAssertEqual(models["jev"]?.state, "hosted")
+        XCTAssertFalse(models["jev"]?.loadable ?? true)
+        XCTAssertNotNil(models["laya-english"]?.links["weights"])
+        XCTAssertNil(models["laya-english"]?.links["family"])
+        // The app's precision choices (config.json) are what a load uses: explicit choices win.
+        try Data(#"{"precision":{"von-1.2":0,"laya-english":8}}"#.utf8).write(to: helper.support.appendingPathComponent("config.json"))
+        models = Dictionary(uniqueKeysWithValues: try await verdict.models().map { ($0.id, $0) })
+        XCTAssertEqual(models["von-1.2"]?.precision?.selected, 32)
+        XCTAssertEqual(models["laya-english"]?.precision?.selected, 8)
+    }
+
+    func testRoutesStatusCodesAndSecurity() async throws {
+        var (code, body) = try await helper.raw("GET", "/status")
+        XCTAssertEqual(code, 200); XCTAssertEqual(body["api"] as? Int, 1, "the unversioned alias serves the same status")
+        (code, _) = try await helper.raw("GET", "/v1/status?x=1")
+        XCTAssertEqual(code, 200)
+        (code, body) = try await helper.raw("POST", "/v1/nope", body: "{}")
+        XCTAssertEqual(code, 404); XCTAssertEqual(body["error"] as? String, "not found: POST /v1/nope")
+        (code, _) = try await helper.raw("POST", "/v1/quit", body: "{}")
+        XCTAssertEqual(code, 404, "internal endpoints are not versioned")
+        (code, _) = try await helper.raw("GET", "/models")
+        XCTAssertEqual(code, 404, "new endpoints are /v1 only")
+        (code, body) = try await helper.raw("GET", "/v1/judge")
+        XCTAssertEqual(code, 404); XCTAssertEqual(body["error"] as? String, "/v1/judge takes POST")
+        (code, body) = try await helper.raw("POST", "/v1/judge", body: #"{"items":["x"],"questions":{"x":{"type":"noul","instructions":"q"}}}"#,
+                                            headers: ["Content-Type": "application/json", "Origin": "https://example.com"])
+        XCTAssertEqual(code, 403); XCTAssertEqual(body["error"] as? String, "cross-origin requests are not accepted")
+        (code, body) = try await helper.raw("POST", "/v1/judge", body: "{}", headers: ["Content-Type": "text/plain"])
+        XCTAssertEqual(code, 415); XCTAssertEqual(body["error"] as? String, "Content-Type must be application/json")
+        (code, body) = try await helper.raw("POST", "/v1/judge", body: #"{"items":[],"questions":{}}"#)
+        XCTAssertEqual(code, 400); XCTAssertEqual(body["error"] as? String, "items must be a nonempty list")
+        (code, body) = try await helper.raw("POST", "/v1/judge", body: "{not json")
+        XCTAssertEqual(code, 400)
+    }
+
+    func testMemoryRefusalIs507WithTheReason() async throws {
+        helper.stop()
+        let memory = FileManager.default.temporaryDirectory.appendingPathComponent("verdictkit-memory-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: memory) }
+        try Data(#"{"available_mb": 100}"#.utf8).write(to: memory)
+        helper = try StubHelper(environment: ["VERDICT_TEST_MEMORY_FILE": memory.path])
+        verdict = try await Verdict(launch: false, supportDirectory: helper.support)
+        do { try await verdict.load("laya-english"); XCTFail("loaded without memory") }
+        catch VerdictError.api(let code, let message) {
+            XCTAssertEqual(code, 507)
+            XCTAssertTrue(message.hasPrefix("laya-english at 16-bit needs ~"), message)
+        }
+        let status = try await verdict.status()
+        XCTAssertEqual(status.refused?.model, "laya-english")
+    }
+}

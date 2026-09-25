@@ -71,15 +71,19 @@ fi
 mkdir -p "$HOME/.local/bin" "$HOME/.local/share/verdict"
 install -m 644 "$DEST/Verdict.app/Contents/Resources/verdict.py" "$HOME/.local/share/verdict/verdict.py"
 printf '%s\n' "$DEST/Verdict.app" > "$HOME/.local/share/verdict/app-path"
-# Keep the unchanged Python client pointed at the installed app even when the
-# writable destination was ~/Applications rather than /Applications.
-cat > "$HOME/.local/bin/verdict" <<'SH'
+rm -f "$HOME/.local/bin/verdict"
+if [[ -x "$DEST/Verdict.app/Contents/Helpers/verdict" ]]; then
+  ln -s "$DEST/Verdict.app/Contents/Helpers/verdict" "$HOME/.local/bin/verdict"
+else
+  # Releases before the Swift CLI: their verdict.py is the command line.
+  cat > "$HOME/.local/bin/verdict" <<'SH'
 #!/bin/sh
 VERDICT_APP="$(cat "$HOME/.local/share/verdict/app-path")"
 export VERDICT_APP
 exec python3 "$HOME/.local/share/verdict/verdict.py" "$@"
 SH
-chmod 755 "$HOME/.local/bin/verdict"
+  chmod 755 "$HOME/.local/bin/verdict"
+fi
 echo "installed $DEST/Verdict.app, CLI ~/.local/bin/verdict"
 open -g "$DEST/Verdict.app"
 echo "starting…"
