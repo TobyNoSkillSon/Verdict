@@ -376,12 +376,17 @@ final class Service {
             var criteria: [(String, String)] = []
             if let entries = q["criteria"]?.fields {
                 // null means "no description" (the Von SDK and Laya's reference both use the bare label then).
-                criteria = entries.map { ($0.0, $0.1.isNull ? "" : ($0.1.text ?? $0.1.render())) }
+                criteria = entries.map { ($0.0, SystemOne.text($0.1)) }
             } else if let values = q["criteria"]?.arrayValues {
-                let labels = values.compactMap(\.text)
-                if labels.count == values.count { criteria = labels.map { ($0, $0) } }
+                // Choice labels must be strings; score levels may be structured (their JSON text is the level).
+                if kind == .score { criteria = values.map { (SystemOne.text($0), SystemOne.text($0)) } }
+                else {
+                    let labels = values.compactMap(\.text)
+                    if labels.count == values.count { criteria = labels.map { ($0, $0) } }
+                }
             }
-            return Question(id: id, kind: kind, instructions: q["instructions"]?.text ?? "", criteria: criteria, sourceJSON: q.render())
+            // Structured instructions (an object or array, as TypeSafe allows) reach the model as their JSON text.
+            return Question(id: id, kind: kind, instructions: SystemOne.text(q["instructions"]), criteria: criteria, sourceJSON: q.render())
         }
     }
     private func answer(_ a: Answer) -> [String: Any] {
@@ -399,13 +404,9 @@ final class Service {
         if let v = a.calibrated { out["calibrated"] = v }
         return out
     }
-    private func english(_ text: String) -> Bool {
-        let letters = text.unicodeScalars.filter { CharacterSet.letters.contains($0) }
-        return letters.isEmpty || Double(letters.filter { $0.value < 128 }.count) / Double(letters.count) > 0.995
-    }
     private func pick(_ raw: Any, requested: String) throws -> String {
         if requested != "auto" && !requested.isEmpty { return requested }
-        return english((raw as? String) ?? jsonString(raw)) ? "laya-english" : "laya-multilingual"
+        return SystemOne.english((raw as? String) ?? jsonString(raw)) ? "laya-english" : "laya-multilingual"
     }
     private func judge(_ body: [String: Any], ordered: OrderedJSON?) throws -> [String: Any] {
         guard let items = body["items"] as? [Any], !items.isEmpty else { throw ServiceError("items must be a nonempty list") }
@@ -443,7 +444,7 @@ final class Service {
             let agent = try load(id, as: .onDemand), indexes = groups[id]!
             func modelItem(_ index: Int) -> Item { item(items[index], ordered: orderedItems.indices.contains(index) ? orderedItems[index] : nil) }
             let start = Date()
-            let answers = try predict(agent, id, indexes.map(modelItem), qs)
+            let answers = try predict(agent, id, [RequestGroup(items: indexes.map(modelItem), questions: qs)])[0].results
             guard answers.count == indexes.count else { throw ServiceError("Model returned wrong result count") }
             let accepted = answers.reduce(0) { count, result in
                 if case .answers = result { return count + 1 }
@@ -462,20 +463,29 @@ final class Service {
         if ProcessInfo.processInfo.environment["VERDICT_PROFILE"] == "1" { FileHandle.standardError.write(Data("profile status-write \(ContinuousClock.now - w)\n".utf8)) }
         return ["results": results]
     }
-    /// Runs a request. If the optimized path throws or returns non-finite outputs, the request reruns on the stock
-    /// path. When that succeeds the optimized path was at fault: the model stays on stock for the rest of its loaded
-    /// lifetime (status engine "mlx" with the reason) and the switch is logged. When the stock run fails too, the
-    /// request itself was at fault: the model returns to its optimized path and the stock run's error is reported.
-    private func predict(_ agent: DecisionModel, _ id: String, _ items: [Item], _ qs: [Question]) throws -> [ItemResult] {
-        guard let paths = agent as? InferencePathSwitching, paths.optimizedPathActive else { return try Self.finite(agent.predict(items, qs)) }
+    /// Runs a request (or a merged batch of requests). If the optimized path throws or returns non-finite outputs, it
+    /// reruns on the stock path. When that succeeds the optimized path was at fault: the model stays on stock for the
+    /// rest of its loaded lifetime (status engine "mlx" with the reason) and the switch is logged. When the stock run
+    /// fails too, the request itself was at fault: the model returns to its optimized path and the stock run's error
+    /// is reported.
+    private func predict(_ agent: DecisionModel, _ id: String, _ groups: [RequestGroup]) throws -> [GroupResult] {
+        func run() throws -> [GroupResult] {
+            let out = try agent.predict(groups: groups)
+            guard out.count == groups.count, zip(out, groups).allSatisfy({ $0.results.count == $1.items.count }) else {
+                throw ServiceError("Model returned wrong result count")
+            }
+            _ = try Self.finite(out.flatMap(\.results))
+            return out
+        }
+        guard let paths = agent as? InferencePathSwitching, paths.optimizedPathActive else { return try run() }
         let failure: Error
-        do { return try Self.finite(agent.predict(items, qs)) } catch { failure = error }
+        do { return try run() } catch { failure = error }
         do { try paths.useStockPath(true) } catch {
             fputs("{\"stock_fallback\":\"\(id)\",\"unavailable\":\(jsonString(Self.message(error)))}\n", stderr)
             throw failure
         }
         do {
-            let answers = try Self.finite(agent.predict(items, qs))
+            let answers = try run()
             let reason = String(Self.message(failure).prefix(200))
             fallbacks[id] = reason
             if let spec = try? catalog.spec(id) {
@@ -488,6 +498,70 @@ final class Service {
         } catch {
             try? paths.useStockPath(false)
             throw error
+        }
+    }
+    /// Runs merged /v1/systemone requests (same model and precision, SystemOneBatcher) as one GPU pass and returns one
+    /// (status, body) per request. If the merged pass throws (a question the model refuses), each request runs alone
+    /// so only the offending one fails. Per-item refusals (over the context, a reserved token) are 422 on `state`.
+    func systemOne(_ calls: [SystemOneCall]) -> [(Int, [String: Any])] {
+        guard let first = calls.first else { return [] }
+        let id = first.model
+        return locked {
+            do {
+                pinned = [id]; defer { pinned = [] }
+                if let bits = first.bits {
+                    let spec = try catalog.spec(id)
+                    if models[id] == nil { _ = try load(id, as: .onDemand, bits: bits) }
+                    else if spec.effectiveBits(loadedBits[id] ?? 0) != spec.effectiveBits(bits) {
+                        try reload(id, bits: bits, as: residency[id] == .manual ? .manual : .onDemand)
+                    }
+                }
+                let agent = try load(id, as: .onDemand)
+                let groups = calls.map { RequestGroup(items: [$0.item], questions: $0.questions) }
+                let start = Date()
+                var outcomes: [Result<GroupResult, Error>]
+                do { outcomes = try predict(agent, id, groups).map { .success($0) } }
+                catch where groups.count > 1 {
+                    outcomes = groups.map { group in Result { try predict(agent, id, [group])[0] } }
+                }
+                catch { outcomes = [.failure(error)] }
+                var accepted = 0
+                let replies: [(Int, [String: Any])] = zip(calls, outcomes).map { call, outcome in
+                    switch outcome {
+                    case .failure(let error):
+                        let message = Self.message(error)
+                        if message.contains("Non-finite") || message.contains("wrong result count") {
+                            return SystemOne.failure(500, "api_error", message)
+                        }
+                        return SystemOne.unprocessable([ValidationIssue(loc: ["body", "questions"], msg: "Value error, " + message, type: "value_error")])
+                    case .success(let group):
+                        switch group.results[0] {
+                        case .error(let message):
+                            return SystemOne.unprocessable([ValidationIssue(loc: ["body", "state"], msg: "Value error, " + message.replacingOccurrences(of: "Item ", with: "State "), type: "value_error")])
+                        case .answers(let answers):
+                            accepted += 1
+                            let byID = NSMutableDictionary()
+                            for (index, question) in call.questions.enumerated() {
+                                guard let a = answers[question.id] else { continue }
+                                byID[NSString(string: question.id)] = SystemOne.answer(a, question, legend: call.legends[index])
+                            }
+                            return (200, ["model": id, "answers": byID, "usage": ["input_tokens": group.inputTokens[0], "output_tokens": 0]])
+                        }
+                    }
+                }
+                let per = (Date().timeIntervalSince(start) * 10000 / Double(max(1, accepted))).rounded() / 10
+                lastUsed[id] = Date().timeIntervalSince1970; updateEntry(id)
+                state["calls"] = (state["calls"] as? Int ?? 0) + calls.count
+                state["items"] = (state["items"] as? Int ?? 0) + accepted; state["last_ms"] = per
+                state["last_used"] = Date().timeIntervalSince1970; state["idle_unloaded"] = false
+                if Memory.cacheMemory > cacheLimit * 1_000_000 { Memory.clearCache() }
+                writeStatus(refreshInstalled: false, background: true)
+                return replies
+            } catch let refusal as MemoryRefusal {
+                return calls.map { _ in SystemOne.failure(507, "insufficient_memory_error", refusal.message) }
+            } catch {
+                return calls.map { _ in SystemOne.failure(500, "api_error", "\(id): " + Self.message(error)) }
+            }
         }
     }
     /// Every answer value must be finite: a NaN is a failed run, never a probability.
@@ -617,7 +691,7 @@ final class Service {
                         }
                         let view = ModelsView.build(catalog: catalog.raw, benchmarks: catalog.benchmarks, loaded: state["models"] as? [String: Any] ?? [:],
                                                     installed: catalog.installed(), selected: selected, recommended: recommended)
-                        return (200, ["models": view])
+                        return (200, ModelsView.listing(view, catalog: catalog.raw))
                     default: return (404, ["error": "\(path) takes POST"])
                     }
                 }

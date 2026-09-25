@@ -138,12 +138,16 @@ struct OrderedJSONParser {
 /// Response bodies: keys sorted, numbers in their shortest round-trip form (0.8828, not JSONSerialization's
 /// 0.88280000000000003), non-ASCII as UTF-8, `/` unescaped. Keys that differ only by Unicode normalization stay
 /// two keys (NSString keys, compared as written).
+/// A JSON value written verbatim into a response (legend descriptions keep the caller's structure and key order).
+struct RawJSON { let text: String }
+
 enum ResponseJSON {
     static func data(_ value: Any) -> Data { var out = ""; write(value, &out); return Data(out.utf8) }
     private static func string(_ s: String, _ out: inout String) { out += OrderedJSON.string(s).render() }
     private static func write(_ value: Any, _ out: inout String) {
         switch value {
         case is NSNull: out += "null"
+        case let raw as RawJSON: out += raw.text
         case let s as String: string(s, &out)
         case let n as NSDecimalNumber: out += n.stringValue
         case let n as NSNumber:

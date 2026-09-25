@@ -7,8 +7,10 @@ final class HTTPServer {
     private let listener: NWListener
     private let service: Service
     private let queue = DispatchQueue(label: "verdict.http", attributes: .concurrent)
+    private let batcher: SystemOneBatcher
     init(_ service: Service) throws {
         self.service = service
+        batcher = SystemOneBatcher(execute: service.systemOne)
         let requested = UInt16(ProcessInfo.processInfo.environment["VERDICT_PORT"] ?? "") ?? 0
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: NWEndpoint.Port(rawValue: requested)!)
@@ -80,28 +82,62 @@ final class HTTPServer {
                 guard length >= 0 && length <= 64 * 1024 * 1024 else { respond(connection, 400, ["error": "invalid Content-Length"]); return }
                 let parts = (lines.first ?? "").split(separator: " ")
                 guard parts.count >= 2 else { respond(connection, 400, ["error": "bad request"]); return }
+                let method = String(parts[0]), path = String(parts[1])
+                let systemOne = Self.systemOnePath(path)
+                // One request per connection (Connection: close). Keep-alive (VERDICT_KEEPALIVE=1, off by default) saved
+                // ~0.1 ms per sequential SDK call but made 500 concurrent typesafe-sdk calls 2–8x slower: httpx's pool
+                // polls every idle kept connection on each request.
+                let keep = ProcessInfo.processInfo.environment["VERDICT_KEEPALIVE"] == "1" && parts.count >= 3 && parts[2] == "HTTP/1.1" && !(headers["connection"]?.lowercased().contains("close") ?? false)
+                if headers["transfer-encoding"] != nil {
+                    respond(connection, 400, systemOne ? ["detail": ["error_type": "invalid_request_error", "message": "chunked request bodies are not supported; send Content-Length"]]
+                                                       : ["error": "chunked request bodies are not supported; send Content-Length"])
+                    return
+                }
                 // Checked before waiting for the body.
-                if let refused = Self.refusal(method: String(parts[0]), headers: headers, port: boundPort) {
-                    respond(connection, refused.0, ["error": refused.1]); return
+                if let refused = Self.refusal(method: method, headers: headers, port: boundPort) {
+                    respond(connection, refused.0, systemOne ? ["detail": ["error_type": refused.0 == 415 ? "invalid_request_error" : "permission_error", "message": refused.1]] : ["error": refused.1])
+                    return
                 }
                 if data.count < range.upperBound + length { read(connection, data); return }
+                let rawBody = data.subdata(in: range.upperBound..<(range.upperBound + length))
+                let next = keep ? data.subdata(in: (range.upperBound + length)..<data.count) : nil
+                if Self.route(path) == "/v1/systemone" {
+                    guard method == "POST" else { respond(connection, 405, ["detail": "Method Not Allowed"], next: next); return }
+                    switch SystemOne.validate(rawBody, catalog: service.catalog) {
+                    case .failure(let issues): let (code, body) = SystemOne.unprocessable(issues); respond(connection, code, body, next: next)
+                    case .success(let call): batcher.submit(call) { [self] reply in respond(connection, reply.0, reply.1, next: next) }
+                    }
+                    return
+                }
                 do {
-                    let rawBody = data.subdata(in: range.upperBound..<(range.upperBound + length))
                     let body = length == 0 ? [:] : try JSONSerialization.jsonObject(with: rawBody) as? [String: Any] ?? [:]
                     let (code, response) = service.request(String(parts[0]), String(parts[1]), body, rawBody: rawBody)
-                    respond(connection, code, response)
-                } catch { respond(connection, 400, ["error": String(describing: error).prefix(500).description]) }
+                    respond(connection, code, response, next: next)
+                } catch { respond(connection, 400, ["error": String(describing: error).prefix(500).description], next: next) }
             } else { read(connection, data) }
         }
     }
-    private func respond(_ connection: NWConnection, _ code: Int, _ body: [String: Any]) {
+    /// /v1/systemone and /v1/models answer in TypeSafe's error format (`{"detail": …}`).
+    static func systemOnePath(_ path: String) -> Bool {
+        let bare = path.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? path
+        return bare == "/v1/systemone" || bare == "/v1/models"
+    }
+    static func route(_ path: String) -> String? {
+        let bare = path.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? path
+        return bare == "/v1/systemone" ? bare : nil
+    }
+    static let reasons = [200: "OK", 400: "Bad Request", 403: "Forbidden", 404: "Not Found", 405: "Method Not Allowed", 415: "Unsupported Media Type",
+                          422: "Unprocessable Entity", 500: "Internal Server Error", 507: "Insufficient Storage"]
+    /// `next`: keep the connection and read the client's next request (bytes already received first); nil closes it.
+    private func respond(_ connection: NWConnection, _ code: Int, _ body: [String: Any], next: Data? = nil) {
         // Sorted keys (stable output for clients and docs), shortest round-trip numbers.
         let data = ResponseJSON.data(body)
-        let reason = [200: "OK", 403: "Forbidden", 404: "Not Found", 415: "Unsupported Media Type", 507: "Insufficient Storage"][code] ?? "Bad Request"
-        let header = "HTTP/1.1 \(code) \(reason)\r\nContent-Type: application/json\r\nContent-Length: \(data.count)\r\nConnection: close\r\n\r\n"
-        connection.send(content: Data(header.utf8) + data, completion: .contentProcessed { [self] _ in
-            connection.cancel()
-            if service.quitting { listener.cancel(); service.finish(); exit(0) }
+        let reason = Self.reasons[code] ?? "Bad Request"
+        // Every response carries a request id in TypeSafe's header (the SDKs expose it as result.request_id).
+        let header = "HTTP/1.1 \(code) \(reason)\r\nContent-Type: application/json\r\nContent-Length: \(data.count)\r\nx-typesafe-request-id: \(SystemOne.requestID())\r\nConnection: \(next == nil ? "close" : "keep-alive")\r\n\r\n"
+        connection.send(content: Data(header.utf8) + data, completion: .contentProcessed { [self] error in
+            if service.quitting { connection.cancel(); listener.cancel(); service.finish(); exit(0) }
+            if let next, error == nil { read(connection, next) } else { connection.cancel() }
         })
     }
 }

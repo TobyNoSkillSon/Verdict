@@ -82,4 +82,35 @@ enum ModelsView {
                     "recommendation": m["recommendation"] ?? NSNull()]
         }
     }
+
+    /// GET /v1/models: TypeSafe's `{"models": [{"name", "description", "release_date"}]}` listing every name the
+    /// `model` field accepts — the `auto` alias first, then each local model (with all of the fields above; `name` is
+    /// its id, `display_name` the human name) — plus `references`: hosted models shown for comparison that Verdict
+    /// does not serve (Jev).
+    static func listing(_ view: [[String: Any]], catalog: [[String: Any]]) -> [String: Any] {
+        func raw(_ id: String) -> [String: Any] { catalog.first { $0["id"] as? String == id } ?? [:] }
+        func described(_ entry: [String: Any]) -> [String: Any] {
+            var out = entry
+            let id = entry["id"] as? String ?? ""
+            let m = raw(id)
+            out["display_name"] = entry["name"] ?? id
+            out["name"] = id
+            out["release_date"] = m["release_date"] as? String ?? ""
+            var facts: [String] = []
+            if let backbone = m["backbone"] as? String, backbone != "closed" { facts.append(backbone + ((m["params"] as? String).map { " (\($0))" } ?? "")) }
+            if let languages = m["languages"] as? String { facts.append(languages) }
+            if let context = m["context"] as? Int { facts.append("\(context.formatted(.number.grouping(.automatic).locale(Locale(identifier: "en_US")))) tokens") }
+            let summary = [m["recommendation"] as? String, facts.isEmpty ? nil : facts.joined(separator: ", ") + "."].compactMap { $0 }.joined(separator: " ")
+            out["description"] = "\(entry["name"] as? String ?? id): \(summary)"
+            return out
+        }
+        let local = view.filter { $0["loadable"] as? Bool == true }.map(described)
+        let hosted = view.filter { $0["loadable"] as? Bool != true }.map(described)
+        let autoTargets = ["laya-english", "laya-multilingual"]
+        let released = autoTargets.compactMap { raw($0)["release_date"] as? String }.max() ?? ""
+        let alias: [String: Any] = ["name": "auto", "alias": true, "release_date": released,
+                                    "description": "Alias: laya-english for English text (letters at least 99.5% ASCII), laya-multilingual for anything else."]
+        return ["models": [alias] + local, "references": hosted]
+    }
 }
+
