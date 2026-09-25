@@ -270,11 +270,13 @@ final class Service {
         if allowSwap { return estimate }
         let need = estimate + MemoryProbe.headroomMB
         Memory.clearCache()   // our own reusable buffers are not free pages yet
-        func available() -> Double { max(0, probe.rawAvailableMB(loadedMB: loadedEstimateMB) + credit) }
+        func raw() -> Double { probe.rawAvailableMB(loadedMB: loadedEstimateMB) + credit }
+        func available() -> Double { max(0, raw()) }
         var free = available()
         if free >= need { return estimate }
         let candidates = evictionOrder().filter { $0 != spec.id && !pinned.contains($0) }
-        if free + candidates.reduce(0, { $0 + reclaim($1) }) >= need {
+        // Forecast from the raw (possibly negative) headroom: a deficit must be paid off before evictions help.
+        if raw() + candidates.reduce(0, { $0 + reclaim($1) }) >= need {
             for victim in candidates {
                 evict(victim, reason: "memory: made room for \(spec.id) at \(spec.effectiveBits(bits))-bit (needs ~\(gigabytes(need)) GB; ~\(gigabytes(free)) GB was free without swapping)")
                 free = available()

@@ -217,6 +217,21 @@ class ResidencyTests(unittest.TestCase):
         h.ok('/load', {'model': 'laya-english', 'bits': 4, 'manual': True})
         self.assertEqual((h.status()['models']['laya-english']['bits'], h.residency('laya-english')), (4, 'manual'))
 
+    def test_impossible_load_under_negative_headroom_evicts_nothing(self):
+        """Review 2 re-verify: the eviction forecast starts from the raw deficit, not a clamped zero."""
+        h = self.helper(available_mb=4000)
+        for model in ('laya-english', 'laya-multilingual', 'laya-typed-decisions'): h.ok('/load', {'model': model})
+        h.set_available(800)                                   # raw 800 − 2400 = −1600
+        # von-1.2 needs 2012; even unloading all three frees 2400: −1600 + 2400 = 800 < 2012. Refuse, evict nothing.
+        code, reply = h.call('/load', {'model': 'von-1.2'})
+        self.assertEqual(code, 507, reply)
+        self.assertEqual(h.loaded(), {'laya-english', 'laya-multilingual', 'laya-typed-decisions'})
+        self.assertEqual(h.evicted(), [])
+        # With the deficit paid off the same load evicts as usual: 2600 − 2400 = 200; +2400 ≥ 2012.
+        h.set_available(2600)
+        h.ok('/load', {'model': 'von-1.2'})
+        self.assertIn('von-1.2', h.loaded()); self.assertTrue(h.evicted())
+
     def test_reload_that_fails_after_unloading_restores_the_model(self):
         h = self.helper(VERDICT_TEST_LOAD_FAULT='laya-english@8')
         h.ok('/load', {'model': 'laya-english', 'bits': 16, 'manual': True})
