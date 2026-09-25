@@ -81,21 +81,15 @@ import VerdictCore
     /// True when the bundled native helper is present (the app is built with it).
     var runtimeReady: Bool { bundledHelper != nil }
 
-    /// Workers from earlier app instances (crash, force-quit) must not linger.
+    /// Workers from earlier app instances (crash, force-quit) must not linger. Matched by the executable they run
+    /// (this user's processes only), never by command-line text: a shell whose arguments mention the helper's path is
+    /// left alone. Both generations: an orphaned Python worker must not race the native helper for status.json.
     private func sweepStrayWorkers() {
-        let mine = process?.processIdentifier
-        // Sweep both generations: an orphaned Python worker must not race the native helper
-        // for status.json after an update.
-        for pattern in ["Verdict.app/Contents/MacOS/verdict-helper", "Verdict.app/Contents/Resources/worker.py"] {
-            let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep"); p.arguments = ["-f", pattern]
-            let pipe = Pipe(); p.standardOutput = pipe
-            try? p.run(); p.waitUntilExit()
-            let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-            for line in out.split(separator: "\n") {
-                if let pid = Int32(line.trimmingCharacters(in: .whitespaces)), pid != mine { kill(pid, SIGTERM) }
-            }
-        }
+        for pid in WorkerProcesses.strays(excluding: process?.processIdentifier) { kill(pid, SIGTERM) }
     }
+    /// Our end of the helper's stdin. Never written; when the app exits for any reason the pipe closes and the
+    /// helper (VERDICT_EXIT_ON_STDIN_EOF) exits too.
+    private var lifeline: Pipe?
 
     func start() {
         guard !processRunning else { return }
@@ -111,8 +105,11 @@ import VerdictCore
             proc.arguments = []
             var env = ProcessInfo.processInfo.environment
             env["VERDICT_SUPPORT_DIR"] = Self.support.path
+            env["VERDICT_EXIT_ON_STDIN_EOF"] = "1"
             env.merge(config.helperEnvironment) { _, new in new }
             proc.environment = env
+            let lifeline = Pipe()
+            proc.standardInput = lifeline
             try FileManager.default.createDirectory(at: Self.support, withIntermediateDirectories: true)
             FileManager.default.createFile(atPath: Self.logURL.path, contents: nil)
             let log = try FileHandle(forWritingTo: Self.logURL); log.seekToEndOfFile()
@@ -123,6 +120,7 @@ import VerdictCore
             try? FileManager.default.removeItem(at: Self.statusURL)
             try proc.run()
             process = proc
+            self.lifeline = lifeline
             lastError = nil
             phase = .starting
             startPolling()
