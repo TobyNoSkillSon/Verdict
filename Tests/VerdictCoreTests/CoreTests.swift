@@ -130,27 +130,35 @@ final class CoreTests: XCTestCase {
     }
 
     func testRecommendedPrecisionRule() {
-        // Within 0.5 pt of the best (55.4%): 16 and 8; 16 uses less energy. 4 is 0.6 pt down, excluded despite lowest J.
+        // Bar = native accuracy (55.4%) - 0.5 pt: 16 and 8 qualify; 16 uses less energy. 4 is 0.6 pt down, excluded
+        // despite the lowest energy.
         XCTAssertEqual(recommendedBits(bench([16: .init(accuracy: 0.554, ms: 8.2, j_per_1k: 422), 8: .init(accuracy: 0.551, ms: 9.9, j_per_1k: 470),
-                                             4: .init(accuracy: 0.548, ms: 9.6, j_per_1k: 300)])), 16)
-        // Exactly 0.5 pt below the best counts as within (float error absorbed): 32 at 48.0% vs best 48.5%.
-        XCTAssertEqual(recommendedBits(bench([32: .init(accuracy: 0.485, ms: 15, j_per_1k: 1050), 16: .init(accuracy: 0.480, ms: 7.4, j_per_1k: 345)])), 16)
+                                             4: .init(accuracy: 0.548, ms: 9.6, j_per_1k: 300)]), native: 16), 16)
+        // The bar is the native precision, not the best one: Von 1.1's 4-bit scores 48.5% (noise), native 48.0%;
+        // 16-bit's 47.9% is within 0.5 pt of native and uses the least energy.
+        let von11 = bench([32: .init(accuracy: 0.480, ms: 15.2, j_per_1k: 1050.2), 16: .init(accuracy: 0.479, ms: 7.43, j_per_1k: 345.5),
+                           8: .init(accuracy: 0.480, ms: 8.01, j_per_1k: 387.9), 4: .init(accuracy: 0.485, ms: 7.72, j_per_1k: 379.6)])
+        XCTAssertEqual(recommendedBits(von11, native: 32), 16)
+        // Exactly 0.5 pt below native counts as within (float error absorbed).
+        XCTAssertEqual(recommendedBits(bench([32: .init(accuracy: 0.480, ms: 15, j_per_1k: 1050), 16: .init(accuracy: 0.475, ms: 7.4, j_per_1k: 345)]), native: 32), 16)
+        XCTAssertEqual(recommendedBits(bench([32: .init(accuracy: 0.480, ms: 15, j_per_1k: 1050), 16: .init(accuracy: 0.4749, ms: 7.4, j_per_1k: 345)]), native: 32), 32)
         // Energy tie -> lower ms; energy and ms tie -> higher bits.
-        XCTAssertEqual(recommendedBits(bench([16: .init(accuracy: 0.5, ms: 8, j_per_1k: 400), 8: .init(accuracy: 0.5, ms: 7, j_per_1k: 400)])), 8)
-        XCTAssertEqual(recommendedBits(bench([16: .init(accuracy: 0.5, ms: 7, j_per_1k: 400), 8: .init(accuracy: 0.5, ms: 7, j_per_1k: 400)])), 16)
+        XCTAssertEqual(recommendedBits(bench([16: .init(accuracy: 0.5, ms: 8, j_per_1k: 400), 8: .init(accuracy: 0.5, ms: 7, j_per_1k: 400)]), native: 16), 8)
+        XCTAssertEqual(recommendedBits(bench([16: .init(accuracy: 0.5, ms: 7, j_per_1k: 400), 8: .init(accuracy: 0.5, ms: 7, j_per_1k: 400)]), native: 16), 16)
         // Missing fields: no accuracy = not measured (excluded, even with the lowest energy); missing energy ranks last,
         // then ms decides among those without energy.
-        XCTAssertEqual(recommendedBits(bench([16: .init(accuracy: 0.5, ms: 8, j_per_1k: 400), 8: .init(ms: 3, j_per_1k: 100)])), 16)
-        XCTAssertEqual(recommendedBits(bench([16: .init(accuracy: 0.5, ms: 8), 8: .init(accuracy: 0.5, ms: 9, j_per_1k: 900)])), 8)
-        XCTAssertEqual(recommendedBits(bench([16: .init(accuracy: 0.5, ms: 8), 8: .init(accuracy: 0.5, ms: 6)])), 8)
-        XCTAssertEqual(recommendedBits(bench([16: .init(accuracy: 0.5), 8: .init(accuracy: 0.5)])), 16)
-        // One measured precision: that one. Nothing measured: nil.
-        XCTAssertEqual(recommendedBits(bench([32: .init(accuracy: 0.588)])), 32)
-        XCTAssertNil(recommendedBits(bench([16: .init(ms: 4)])))
-        XCTAssertNil(recommendedBits(bench([:])))
-        XCTAssertNil(recommendedBits(nil))
+        XCTAssertEqual(recommendedBits(bench([16: .init(accuracy: 0.5, ms: 8, j_per_1k: 400), 8: .init(ms: 3, j_per_1k: 100)]), native: 16), 16)
+        XCTAssertEqual(recommendedBits(bench([16: .init(accuracy: 0.5, ms: 8), 8: .init(accuracy: 0.5, ms: 9, j_per_1k: 900)]), native: 16), 8)
+        XCTAssertEqual(recommendedBits(bench([16: .init(accuracy: 0.5, ms: 8), 8: .init(accuracy: 0.5, ms: 6)]), native: 16), 8)
+        XCTAssertEqual(recommendedBits(bench([16: .init(accuracy: 0.5), 8: .init(accuracy: 0.5)]), native: 16), 16)
+        // One measured precision (native): that one. Native unmeasured: no recommendation, even if others are measured.
+        XCTAssertEqual(recommendedBits(bench([32: .init(accuracy: 0.588)]), native: 32), 32)
+        XCTAssertNil(recommendedBits(bench([16: .init(accuracy: 0.5, j_per_1k: 300)]), native: 32))
+        XCTAssertNil(recommendedBits(bench([16: .init(ms: 4)]), native: 16))
+        XCTAssertNil(recommendedBits(bench([:]), native: 16))
+        XCTAssertNil(recommendedBits(nil, native: 16))
         // Offered options only: a stray 2-bit entry is never recommended.
-        XCTAssertEqual(recommendedBits(bench([16: .init(accuracy: 0.5, j_per_1k: 400), 2: .init(accuracy: 0.5, j_per_1k: 10)]), options: [16, 8, 4]), 16)
+        XCTAssertEqual(recommendedBits(bench([16: .init(accuracy: 0.5, j_per_1k: 400), 2: .init(accuracy: 0.5, j_per_1k: 10)]), native: 16, options: [16, 8, 4]), 16)
         // Reference (Jev) rows are excluded; the legacy flat shape decodes but is never recommended from.
         let jev = decodeBenchmarks(Data(#"{"jev": {"accuracy": 0.695, "ece": 0.246, "ms": 256, "source": "published"}}"#.utf8))["jev"]
         XCTAssertNil(recommendedBits(for: model("jev", runtime: "hosted", reference: true), benchmark: jev))
@@ -172,7 +180,7 @@ final class CoreTests: XCTestCase {
             XCTAssertEqual(benchmarks[m.id]?.default_bits, rec, "benchmarks.json default_bits \(m.id)")
             XCTAssertEqual(raw.first { $0["id"] as? String == m.id }?["default_bits"] as? Int, rec, "models.json default_bits \(m.id)")
         }
-        XCTAssertEqual(seen, ["laya-english": 16, "laya-multilingual": 16, "laya-typed-decisions": 16, "von-1.2": 16, "von-1.1": 4])
+        XCTAssertEqual(seen, ["laya-english": 16, "laya-multilingual": 16, "laya-typed-decisions": 16, "von-1.2": 16, "von-1.1": 16])
         XCTAssertNil(recommendedBits(for: try XCTUnwrap(catalog.first { $0.id == "jev" }), benchmark: benchmarks["jev"]))
     }
 
@@ -186,7 +194,7 @@ final class CoreTests: XCTestCase {
         // Von 1.2 with 32 selected, compared with the recommended 16 (shipped figures).
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let von = try XCTUnwrap(decodeBenchmarks(try Data(contentsOf: root.appendingPathComponent("Resources/benchmarks.json")))["von-1.2"])
-        let base = try XCTUnwrap(von.result(bits: try XCTUnwrap(recommendedBits(von, options: [32, 16, 8, 4]))))
+        let base = try XCTUnwrap(von.result(bits: try XCTUnwrap(recommendedBits(von, native: 32, options: [32, 16, 8, 4]))))
         let f32 = try XCTUnwrap(von.result(bits: 32))
         XCTAssertEqual(accuracyDelta(f32.accuracy, base: base.accuracy), Delta("+0.1 pt", .better))
         XCTAssertEqual(speedDelta(f32.ms, base: base.ms, short: true), Delta("2.0\u{00d7} slower", .worse))

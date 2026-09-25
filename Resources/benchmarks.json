@@ -396,7 +396,7 @@
     }
   },
   "von-1.1": {
-    "default_bits": 4,
+    "default_bits": 16,
     "precisions": {
       "32": {
         "accuracy": 0.48,

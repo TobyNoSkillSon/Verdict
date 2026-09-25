@@ -60,18 +60,22 @@ class PrecisionTests(unittest.TestCase):
     def test_recommended_rule_mirrors_core(self):
         from verdict import recommended_bits as rec
         R = lambda acc=None, ms=None, j=None: {k: v for k, v in (('accuracy', acc), ('ms', ms), ('j_per_1k', j)) if v is not None}
-        self.assertEqual(rec({16: R(0.554, 8.2, 422), 8: R(0.551, 9.9, 470), 4: R(0.548, 9.6, 300)}), 16)   # 4 is 0.6 pt down
-        self.assertEqual(rec({32: R(0.485, 15, 1050), 16: R(0.480, 7.4, 345)}), 16)                           # exactly 0.5 pt: within
-        self.assertEqual(rec({16: R(0.5, 8, 400), 8: R(0.5, 7, 400)}), 8)                                     # energy tie -> ms
-        self.assertEqual(rec({16: R(0.5, 7, 400), 8: R(0.5, 7, 400)}), 16)                                    # full tie -> higher bits
-        self.assertEqual(rec({16: R(0.5, 8, 400), 8: R(None, 3, 100)}), 16)                                   # no accuracy: unmeasured
-        self.assertEqual(rec({16: R(0.5, 8), 8: R(0.5, 9, 900)}), 8)                                          # missing energy ranks last
-        self.assertEqual(rec({16: R(0.5, 8), 8: R(0.5, 6)}), 8)
-        self.assertEqual(rec({16: R(0.5), 8: R(0.5)}), 16)
-        self.assertEqual(rec({32: R(0.588)}), 32)                                                             # one measured precision
-        self.assertIsNone(rec({16: R(None, 4)}))
-        self.assertIsNone(rec({}))
-        self.assertEqual(rec({16: R(0.5, j=400), 2: R(0.5, j=10)}, [16, 8, 4]), 16)                           # offered options only
+        self.assertEqual(rec({16: R(0.554, 8.2, 422), 8: R(0.551, 9.9, 470), 4: R(0.548, 9.6, 300)}, 16), 16)   # 4 is 0.6 pt down
+        von11 = {32: R(0.480, 15.2, 1050.2), 16: R(0.479, 7.43, 345.5), 8: R(0.480, 8.01, 387.9), 4: R(0.485, 7.72, 379.6)}
+        self.assertEqual(rec(von11, 32), 16)                                                                      # bar = native, not best
+        self.assertEqual(rec({'32': R(0.480, 15, 1050), '16': R(0.475, 7.4, 345)}, 32), 16)                      # exactly 0.5 pt: within
+        self.assertEqual(rec({32: R(0.480, 15, 1050), 16: R(0.4749, 7.4, 345)}, 32), 32)
+        self.assertEqual(rec({16: R(0.5, 8, 400), 8: R(0.5, 7, 400)}, 16), 8)                                     # energy tie -> ms
+        self.assertEqual(rec({16: R(0.5, 7, 400), 8: R(0.5, 7, 400)}, 16), 16)                                    # full tie -> higher bits
+        self.assertEqual(rec({16: R(0.5, 8, 400), 8: R(None, 3, 100)}, 16), 16)                                   # no accuracy: unmeasured
+        self.assertEqual(rec({16: R(0.5, 8), 8: R(0.5, 9, 900)}, 16), 8)                                          # missing energy ranks last
+        self.assertEqual(rec({16: R(0.5, 8), 8: R(0.5, 6)}, 16), 8)
+        self.assertEqual(rec({16: R(0.5), 8: R(0.5)}, 16), 16)
+        self.assertEqual(rec({32: R(0.588)}, 32), 32)                                                             # one measured precision
+        self.assertIsNone(rec({16: R(0.5, j=300)}, 32))                                                           # native unmeasured
+        self.assertIsNone(rec({16: R(None, 4)}, 16))
+        self.assertIsNone(rec({}, 16))
+        self.assertEqual(rec({16: R(0.5, j=400), 2: R(0.5, j=10)}, 16, [16, 8, 4]), 16)                           # offered options only
 
     def test_shipped_defaults_follow_the_rule(self):
         import json
@@ -83,10 +87,10 @@ class PrecisionTests(unittest.TestCase):
             if m.get('reference'):
                 self.assertNotIn('default_bits', m); continue
             _, results = _precisions(bench.get(m['id']), native_bits(m.get('runtime')))
-            seen[m['id']] = recommended_bits(results, precision_options(m.get('runtime')))
+            seen[m['id']] = recommended_bits(results, native_bits(m.get('runtime')), precision_options(m.get('runtime')))
             self.assertEqual(m['default_bits'], seen[m['id']], m['id'])                    # what the helper loads
             self.assertEqual(bench[m['id']]['default_bits'], seen[m['id']], m['id'])       # catalog data
-        self.assertEqual(seen, {'laya-english': 16, 'laya-multilingual': 16, 'laya-typed-decisions': 16, 'von-1.2': 16, 'von-1.1': 4})
+        self.assertEqual(seen, {'laya-english': 16, 'laya-multilingual': 16, 'laya-typed-decisions': 16, 'von-1.2': 16, 'von-1.1': 16})
 
     def test_models_default_to_recommended(self):
         import json
@@ -102,7 +106,7 @@ class PrecisionTests(unittest.TestCase):
             self.assertEqual(von['benchmarks']['32']['deltas'], {'accuracy': '+0.1 pt', 'ece': '\u22120.001',
                                                                  'speed': '2.0\u00d7 slower', 'energy': '2.9\u00d7 more energy'})
             self.assertNotIn('deltas', von['benchmarks']['16'])
-            self.assertEqual(ms['von-1.1']['precision']['selected'], 4)
+            self.assertEqual(ms['von-1.1']['precision']['selected'], 16)
             self.assertEqual(ms['laya-english']['precision']['selected'], 16)
             self.assertIsNone(ms['jev']['precision'])
             verdict._selected_precision = lambda: {'von-1.2': 0, 'laya-english': 8}          # explicit choices win

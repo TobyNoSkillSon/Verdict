@@ -123,22 +123,23 @@ public func configBits(effective bits: Int, native: Int) -> Int { bits == native
 
 // MARK: Recommended precision
 
-/// Accuracy margin (fraction, 0.005 = 0.5 points) within which a precision counts as matching the best.
+/// Accuracy margin (fraction, 0.005 = 0.5 points) a precision may lose against the native precision.
 public let recommendationMargin = 0.005
 
-/// The recommended precision: among measured precisions (accuracy present) whose accuracy is within 0.5 points of
-/// the model's best measured accuracy, the lowest energy per 1,000 judgements; ties → lower ms; then higher bits.
-/// A precision without energy (or ms) ranks after those with it. `options` limits the candidates to offered precisions.
-/// Nil when nothing is measured. client/verdict.py `recommended_bits` mirrors this rule.
-public func recommendedBits(_ benchmark: ModelBenchmark?, options: [Int]? = nil) -> Int? {
-    guard let benchmark else { return nil }
-    let measured: [(bits: Int, result: BenchmarkResult, accuracy: Double)] = benchmark.precisions.compactMap { key, r in
-        guard let bits = Int(key), let accuracy = r.accuracy, options?.contains(bits) ?? true else { return nil }
-        return (bits, r, accuracy)
+/// The recommended precision: among measured precisions (accuracy present) whose accuracy is at least the NATIVE
+/// precision's accuracy minus 0.5 points, the lowest energy per 1,000 judgements; ties → lower ms; then higher bits.
+/// The native precision is the reference, so benchmark noise at a lossy setting (e.g. 4-bit scoring above native)
+/// cannot move the bar. A precision without energy (or ms) ranks after those with it. `options` limits the
+/// candidates to offered precisions. Nil when the native precision has no measured accuracy.
+/// client/verdict.py `recommended_bits` mirrors this rule; scripts/measure_catalog.py writes default_bits with it.
+public func recommendedBits(_ benchmark: ModelBenchmark?, native: Int, options: [Int]? = nil) -> Int? {
+    guard let benchmark, let reference = benchmark.result(bits: native)?.accuracy else { return nil }
+    let measured: [(bits: Int, result: BenchmarkResult)] = benchmark.precisions.compactMap { key, r in
+        guard let bits = Int(key), let accuracy = r.accuracy, options?.contains(bits) ?? true,
+              // 1e-9 absorbs float error: 0.480 − 0.475 is not exactly 0.005.
+              accuracy >= reference - recommendationMargin - 1e-9 else { return nil }
+        return (bits, r)
     }
-    guard let best = measured.map(\.accuracy).max() else { return nil }
-    // 1e-9 absorbs float error: 0.485 − 0.480 is 0.0050000000000000044.
-    let candidates = measured.filter { $0.accuracy >= best - recommendationMargin - 1e-9 }
     func order(_ a: Double?, _ b: Double?) -> Bool? {
         switch (a, b) {
         case let (x?, y?): return x == y ? nil : x < y
@@ -147,7 +148,7 @@ public func recommendedBits(_ benchmark: ModelBenchmark?, options: [Int]? = nil)
         case (nil, nil): return nil
         }
     }
-    return candidates.min { a, b in
+    return measured.min { a, b in
         order(a.result.j_per_1k, b.result.j_per_1k) ?? order(a.result.ms, b.result.ms) ?? (a.bits > b.bits)
     }?.bits
 }
@@ -155,7 +156,7 @@ public func recommendedBits(_ benchmark: ModelBenchmark?, options: [Int]? = nil)
 /// Recommended precision for a catalog model; nil for the hosted reference and unmeasured models.
 public func recommendedBits(for model: CatalogModel, benchmark: ModelBenchmark?) -> Int? {
     guard model.reference != true else { return nil }
-    return recommendedBits(benchmark, options: precisionOptions(runtime: model.runtime))
+    return recommendedBits(benchmark, native: nativeBits(runtime: model.runtime), options: precisionOptions(runtime: model.runtime))
 }
 
 /// Default precision (effective bits) when config has no explicit choice: the recommended one, else native.

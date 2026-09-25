@@ -286,23 +286,25 @@ def _eff(bits, native):
     return native if not bits else int(bits)
 
 
-RECOMMENDATION_MARGIN = 0.005   # 0.5 accuracy points
+RECOMMENDATION_MARGIN = 0.005   # 0.5 accuracy points below the native precision
 
 
-def recommended_bits(results, options=None):
+def recommended_bits(results, native, options=None):
     """The recommended precision (mirrors VerdictCore.recommendedBits): among measured precisions (accuracy present)
-    within 0.5 points of the best measured accuracy, the lowest J/1k; ties -> lower ms; then higher bits. A precision
-    without energy (or ms) ranks after those with it. results: {bits: result}; None when nothing is measured."""
-    measured = [(int(b), r) for b, r in (results or {}).items()
-                if isinstance(r, dict) and r.get('accuracy') is not None and (options is None or int(b) in options)]
-    if not measured:
+    with accuracy >= the NATIVE precision's accuracy - 0.5 points, the lowest J/1k; ties -> lower ms; then higher bits.
+    A precision without energy (or ms) ranks after those with it. results: {bits: result}; None when the native
+    precision has no measured accuracy. scripts/measure_catalog.py writes default_bits with this function."""
+    results = {int(b): r for b, r in (results or {}).items() if isinstance(r, dict)}
+    reference = (results.get(int(native)) or {}).get('accuracy')
+    if reference is None:
         return None
-    best = max(r['accuracy'] for _, r in measured)
     inf = float('inf')
-    candidates = [(b, r) for b, r in measured if r['accuracy'] >= best - RECOMMENDATION_MARGIN - 1e-9]
+    candidates = [(b, r) for b, r in results.items()
+                  if r.get('accuracy') is not None and (options is None or b in options)
+                  and r['accuracy'] >= reference - RECOMMENDATION_MARGIN - 1e-9]
     key = lambda c: (inf if c[1].get('j_per_1k') is None else c[1]['j_per_1k'],
                      inf if c[1].get('ms') is None else c[1]['ms'], -c[0])
-    return min(candidates, key=key)[0]
+    return min(candidates, key=key)[0] if candidates else None
 
 
 _MINUS = '\u2212'
@@ -358,7 +360,7 @@ def models():
         native = native_bits(m.get('runtime'))
         default, results = _precisions(bench.get(m['id']), native)
         if not hosted:   # the recommended precision is the default: selection, loads and deltas
-            default = recommended_bits(results, precision_options(m.get('runtime'))) or native
+            default = recommended_bits(results, native, precision_options(m.get('runtime'))) or native
         sel = default if hosted else _eff(selected[m['id']], native) if m['id'] in selected else default
         loaded = s['models'].get(m['id'])
         base = results.get(default)

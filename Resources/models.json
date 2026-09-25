@@ -117,7 +117,7 @@
     "recommendation": "Option-marker decisions; compare with Laya before choosing a default.",
     "recommended": false,
     "runtime": "von",
-    "default_bits": 4,
+    "default_bits": 16,
     "inputs": [
       "text"
     ],
