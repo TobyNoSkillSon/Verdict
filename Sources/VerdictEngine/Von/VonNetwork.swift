@@ -10,7 +10,7 @@ private let vonGeGLU: @Sendable (MLXArray, MLXArray) -> MLXArray = compile(shape
 
 final class VonNetwork {
     /// Encoder weights/activations dtype: the original f32 by default (bits 0 or 32; fp16 fails the ≤1% gate vs the SDK
-    /// on near-tie items, native/perf/THEORY.md), fp16 at 16 bits and for the 8/4-bit quantized models (activations,
+    /// on near-tie items, lab/notes/THEORY.md), fp16 at 16 bits and for the 8/4-bit quantized models (activations,
     /// embeddings, norms and quantization scales). VERDICT_VON_DTYPE=fp32|fp16|bf16 overrides (A/B, tolerance curve).
     static func dtype(bits: Int) -> DType {
         switch ProcessInfo.processInfo.environment["VERDICT_VON_DTYPE"] {

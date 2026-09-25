@@ -4,7 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 if [[ "${VERDICT_BUILD:-release}" == release ]]; then
-  exec native/scripts/install-release.sh "${1:-$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)}"
+  exec scripts/install-release.sh "${1:-$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)}"
 fi
 [[ "${VERDICT_BUILD:-release}" == source ]] || { echo 'VERDICT_BUILD must be source or release' >&2; exit 2; }
 [[ "$(uname -m)" == arm64 ]] || { echo 'Verdict requires Apple Silicon' >&2; exit 1; }
@@ -46,7 +46,7 @@ if ! mv "$STAGED" "$DEST/Verdict.app"; then
   echo 'Install failed; previous app restored.' >&2; exit 1
 fi
 mkdir -p "$HOME/.local/bin" "$HOME/.local/share/verdict"
-install -m 644 client/verdict.py "$HOME/.local/share/verdict/verdict.py"
+install -m 644 clients/python/verdict.py "$HOME/.local/share/verdict/verdict.py"
 printf '%s\n' "$DEST/Verdict.app" > "$HOME/.local/share/verdict/app-path"
 cat > "$HOME/.local/bin/verdict" <<'SH'
 #!/bin/sh

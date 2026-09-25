@@ -8,22 +8,22 @@ case "$APP" in /Applications/*|"$HOME"/Applications/*)
   echo 'Refusing to install from build.sh; use scripts/install.sh after review.' >&2; exit 1;;
 esac
 IDENTITY="${VERDICT_SIGN_IDENTITY:--}"
-native/scripts/build-helper.sh
+scripts/build-helper.sh
 DEVELOPER_DIR=/Library/Developer/CommandLineTools \
-  /Library/Developer/CommandLineTools/usr/bin/swift build --build-system native -c release
+  /Library/Developer/CommandLineTools/usr/bin/swift build --build-system native -c release --product Verdict
 STAGE="$(mktemp -d "$ROOT/.build/.verdict-app.XXXXXX")"
 trap 'rm -rf "$STAGE"' EXIT
 BUNDLE="$STAGE/Verdict.app"
 mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources"
 cp .build/release/Verdict "$BUNDLE/Contents/MacOS/Verdict"
-cp native/.build/release-helper/verdict-helper "$BUNDLE/Contents/MacOS/verdict-helper"
-cp native/.build/release-helper/mlx.metallib "$BUNDLE/Contents/Resources/mlx.metallib"
+cp .build/release-helper/verdict-helper "$BUNDLE/Contents/MacOS/verdict-helper"
+cp .build/release-helper/mlx.metallib "$BUNDLE/Contents/Resources/mlx.metallib"
 cp Resources/Info.plist "$BUNDLE/Contents/Info.plist"
 if [[ -n "${VERDICT_RELEASE_VERSION:-}" ]]; then
   /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERDICT_RELEASE_VERSION" "$BUNDLE/Contents/Info.plist" >/dev/null
 fi
 cp Resources/models.json Resources/benchmarks.json Resources/SKILL.md "$BUNDLE/Contents/Resources/"
-cp client/verdict.py "$BUNDLE/Contents/Resources/verdict.py"
+cp clients/python/verdict.py "$BUNDLE/Contents/Resources/verdict.py"
 ICONSET="$STAGE/Verdict.iconset"; mkdir -p "$ICONSET"
 xcrun swift scripts/icon.swift "$ICONSET/icon_512x512@2x.png"
 for size in 16 32 128 256 512; do

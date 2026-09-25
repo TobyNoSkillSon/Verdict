@@ -307,7 +307,7 @@ def recommended_bits(results, native, options=None):
     """The recommended precision (mirrors VerdictCore.recommendedBits): among measured precisions (accuracy present)
     with accuracy >= the NATIVE precision's accuracy - 0.5 points, the lowest J/1k; ties -> lower ms; then higher bits.
     A precision without energy (or ms) ranks after those with it. results: {bits: result}; None when the native
-    precision has no measured accuracy. scripts/measure_catalog.py writes default_bits with this function."""
+    precision has no measured accuracy. The benchmark tooling writes default_bits with this function."""
     results = {int(b): r for b, r in (results or {}).items() if isinstance(r, dict)}
     reference = (results.get(int(native)) or {}).get('accuracy')
     if reference is None:

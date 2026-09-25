@@ -2,7 +2,7 @@ import Foundation
 
 /// The contract between the helper (routing, HTTP, lifecycle) and each model family.
 /// Mirrors Resources/worker.py: same field names, same rounding, same per-item errors.
-/// Owned by the coordinator; change by agreement (see native/PLAN.md).
+/// Owned by the coordinator; change by agreement (see lab/notes/PLAN.md).
 
 /// One typed question. `criteria` is ordered: Choice labels with descriptions, or Score levels.
 public enum QuestionKind: String, Codable, Sendable { case choice, score, noul }

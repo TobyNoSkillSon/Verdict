@@ -29,7 +29,7 @@ public final class VonModel: DecisionModel, KernelPathReporting, InferencePathSw
     private var stockTokenizer = false
     private let configData: Data, tokenData: Data
     /// FastByteBPE when Von's tokenizer.json has the validated ModernBERT shape (zero mismatches vs the SDK's
-    /// transformers tokenizer on 141k texts, native/perf/tokcheck.py --model von-1.x); swift-transformers otherwise.
+    /// transformers tokenizer on 141k texts, lab/perf/tokcheck.py --model von-1.x); swift-transformers otherwise.
     private let fastEncode: ((String, Bool) -> [Int])?
     private let maskID: Int
     private let maskToken: String
@@ -43,7 +43,7 @@ public final class VonModel: DecisionModel, KernelPathReporting, InferencePathSw
     private struct QuestionInfo { let keys: [String]; let texts: [String]; let nullRow: VonPreparedRow?; var null: Float? }
     private var questionCache: [Data: QuestionInfo] = [:]
 
-    // A/B switches (native/perf/THEORY.md); defaults are the measured best.
+    // A/B switches (lab/notes/THEORY.md); defaults are the measured best.
     static let env = ProcessInfo.processInfo.environment
     /// 0 and 32 both load the original f32 weights (the native precision).
     public static let precisions: Set<Int> = [0, 32, 16, 8, 4]
@@ -67,7 +67,7 @@ public final class VonModel: DecisionModel, KernelPathReporting, InferencePathSw
         guard ["von-1.1","von-1.2"].contains(id) else { throw VonError.invalid("Unknown Von model '\(id)'") }
         // 0: the original f32 weights (passes the ≤1% gate vs the SDK). 16: fp16 weights/activations, ~3x faster and
         // half the memory, max |dp| 0.08 on near-tie items (outside the gate; opt-in like Laya's 8/4-bit). 8/4: encoder
-        // Linears quantized (group 64) with fp16 activations: less memory, lossy by design (drift: native/perf/THEORY.md).
+        // Linears quantized (group 64) with fp16 activations: less memory, lossy by design (drift: lab/notes/THEORY.md).
         guard Self.precisions.contains(bits) else { throw VonError.invalid(Self.precisionMessage) }
         self.id = id
         let configData = try Data(contentsOf: snapshot.appendingPathComponent("tokenizer_config.json"))

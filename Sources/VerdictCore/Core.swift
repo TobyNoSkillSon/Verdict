@@ -161,7 +161,7 @@ public let recommendationMargin = 0.005
 /// The native precision is the reference, so benchmark noise at a lossy setting (e.g. 4-bit scoring above native)
 /// cannot move the bar. A precision without energy (or ms) ranks after those with it. `options` limits the
 /// candidates to offered precisions. Nil when the native precision has no measured accuracy.
-/// client/verdict.py `recommended_bits` mirrors this rule; scripts/measure_catalog.py writes default_bits with it.
+/// clients/python/verdict.py `recommended_bits` mirrors this rule; the benchmark tooling writes default_bits with it.
 public func recommendedBits(_ benchmark: ModelBenchmark?, native: Int, options: [Int]? = nil) -> Int? {
     guard let benchmark, let reference = benchmark.result(bits: native)?.accuracy else { return nil }
     let measured: [(bits: Int, result: BenchmarkResult)] = benchmark.precisions.compactMap { key, r in
@@ -334,7 +334,7 @@ public struct GPUStatus: Codable, Equatable {
 
 /// The engine label next to a hot model: "Optimized · M5 Max" on Verdict's optimized path, else "MLX" (not fully
 /// optimized: the stock path or partly optimized; `engineHelp` says which).
-/// Both work; the label says which path answers. client/verdict.py `engine_label` mirrors it.
+/// Both work; the label says which path answers. clients/python/verdict.py `engine_label` mirrors it.
 public func engineLabel(_ model: LoadedModel, chip: String?) -> String {
     guard model.optimizedEngine else { return "MLX" }
     guard let chip, !chip.isEmpty else { return "Optimized" }
@@ -472,9 +472,9 @@ public func formatBytes(_ bytes: Int64) -> String {
 public let modelRequest = """
 Add a decision model to Verdict (menu-bar app that keeps typed-question models hot on this Mac; project at ~/Projects/Verdict or github.com/TobyNoSkillSon/Verdict).
 
-A candidate needs: open weights with a licence that allows local use; a predict(state, questions) interface over choice / score / noul questions returning per-answer probabilities; an architecture that can be implemented on mlx-swift (Verdict's helper is native Swift; see native/PLAN.md).
+A candidate needs: open weights with a licence that allows local use; a predict(state, questions) interface over choice / score / noul questions returning per-answer probabilities; an architecture that can be implemented on mlx-swift (Verdict's helper is native Swift).
 
-Steps: (1) find the weights and runtime, verify the licence; (2) add a catalog entry to Resources/models.json (id, name, backbone, params, repository, context, languages, license, recommendation); (3) if it is not a Laya checkpoint, implement a DecisionModel + ModelLoader in native/Sources/VerdictEngine and register it by the catalog's runtime field in native/Sources/VerdictHelper/Registry.swift; (4) prove parity against the model's reference implementation on fixed fixtures (see native/fixtures and scripts/oracle.py); (5) run scripts/benchmark.py so it appears with measured accuracy, calibration and speed; (6) run the tests (xcrun swift test; python3 Tests/edge_pass.py). Report what you verified and what remains uncertain.
+Steps: (1) find the weights and runtime, verify the licence; (2) add a catalog entry to Resources/models.json (id, name, backbone, params, repository, context, languages, license, recommendation); (3) if it is not a Laya checkpoint, implement a DecisionModel + ModelLoader in Sources/VerdictEngine and register it by the catalog's runtime field in Sources/VerdictHelper/Registry.swift; (4) prove parity against the model's reference implementation: run both on the same fixed items and compare the per-answer probabilities; (5) measure accuracy, calibration and speed before adding its numbers to Resources/benchmarks.json; (6) build and test (scripts/build.sh; xcrun swift test). Report what you verified and what remains uncertain.
 """
 
 // MARK: Keep Hot and Memory menus

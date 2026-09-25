@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Build the Swift CLI with the stable CLT compiler and MLX shaders with Xcode.
+# Build verdict-helper with the stable CLT compiler and MLX shaders with Xcode.
+# Output: .build/release-helper/{verdict-helper,mlx.metallib} (override: VERDICT_HELPER_OUTPUT_DIR).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-PROJECT="$(cd "$ROOT/.." && pwd)"
 OUT="${VERDICT_HELPER_OUTPUT_DIR:-$ROOT/.build/release-helper}"
 cd "$ROOT"
 
@@ -10,7 +10,7 @@ xcrun metal --version >/dev/null
 # SwiftPM's native builder uses the stable Swift 6.3 compiler. Its default
 # swiftbuild backend on this host is not equivalent for mlx-swift.
 DEVELOPER_DIR=/Library/Developer/CommandLineTools \
-  /Library/Developer/CommandLineTools/usr/bin/swift build --build-system native -c release
+  /Library/Developer/CommandLineTools/usr/bin/swift build --build-system native -c release --product verdict-helper
 # Xcode compiles the shaders in mlx-swift_Cmlx.bundle; never ship its Swift 6.4 binary.
 # This setting is coupled to the pinned mlx-swift core above: both together
 # matched the Python oracle across all Laya fixtures; either change alone did not.
@@ -37,7 +37,7 @@ DEVELOPER_DIR=/Library/Developer/CommandLineTools \
   /Library/Developer/CommandLineTools/usr/bin/swiftc -parse-as-library -O \
   -sdk /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk \
   "$ROOT/scripts/check-helper-ui.swift" -o "$STAGE/check-helper-ui"
-VERDICT_HELPER_BINARY="$STAGE/verdict-helper" VERDICT_CATALOG="$PROJECT/Resources/models.json" \
+VERDICT_HELPER_BINARY="$STAGE/verdict-helper" VERDICT_CATALOG="$ROOT/Resources/models.json" \
 VERDICT_HELPER_UI_CHECK="$STAGE/check-helper-ui" \
 python3 - <<'PY'
 import json, os, pathlib, re, subprocess, tempfile, urllib.request
