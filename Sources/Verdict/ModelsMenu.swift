@@ -166,7 +166,7 @@ struct ModelTable: View {
                 .help(reference ? model.recommendation : "\(model.backbone) · \(model.languages) · \(model.context) tokens. \(model.recommendation) License: \(model.license).")
             inputIcons(model).frame(width: W.inputs, alignment: .leading)
             Text(formatContext(model.context)).frame(width: W.context, alignment: .trailing)
-                .help("Maximum tokens per item, questions included. Longer items are cut from the end.")
+                .help("Maximum tokens per item, questions included. A longer item gets its own error; it is never truncated.")
             Text(reference ? "" : model.params).frame(width: W.params, alignment: .trailing)
             precisionPicker(model, loadedBits: hot ? effectiveBits(config: loaded?.bits ?? 0, native: native(model)) : nil, loading: loading)
                 .frame(width: W.bits, alignment: .leading)

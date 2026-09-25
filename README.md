@@ -38,7 +38,7 @@ Verdict is a local runtime for this class: whichever System One models suit your
 
 Ask a coding agent to work through hundreds of search results or thousands of transcript turns and it either reads everything, filling its context, or samples and guesses.
 
-System One models are built for this work: they answer typed questions about each item — is this relevant, which category fits, where does it fall on a rubric — instead of writing prose. Laya English takes about **6 ms per text item** in the recorded benchmark, and about 2 ms per item when a batch shares the same questions. But loading a model takes 5–20 seconds, and a script runs for two — so nobody calls one from a script.
+System One models are built for this work: they answer typed questions about each item — is this relevant, which category fits, where does it fall on a rubric — instead of writing prose. Laya English takes about **8 ms for a single text item** in the recorded benchmark, and under 2 ms per item when a batch shares the same questions. But loading a model takes 5–20 seconds, and a script runs for two — so nobody calls one from a script.
 
 Verdict keeps the models hot — loaded and ready. The agent sends items and questions over loopback through a Python client or the `verdict` CLI, then sorts or filters the answers in code. Judgements stay on your Mac.
 
@@ -146,7 +146,7 @@ Downloading and loading happen before a model can answer. The table shows the op
   <img src="docs/images/models-downloading.png" alt="Laya English loading, with a progress indicator in the table footer" width="900">
 </p>
 
-A flame marks a hot model. Here English and Multilingual are ready; **Unload** frees a model's memory without deleting its weights. The table also exposes per-model precision (16, 8 or 4 bits); changing it on a hot model reloads it in place.
+A flame marks a hot model. Here English and Multilingual are ready; **Unload** frees a model's memory without deleting its weights. The table also exposes per-model precision (Laya 16, 8 or 4 bits; Von 32, 16, 8 or 4). Selecting a precision shows its measured numbers and does not reload anything; on a hot model at another precision, **Unload** becomes **Reload**, which loads the selection.
 
 <p align="center">
   <img src="docs/images/models-current.png" alt="English and Multilingual hot, with precision controls and benchmark columns" width="900">
@@ -207,26 +207,26 @@ verdict skill                              # prints the skill; hand it to your a
 
 ## Models
 
-The System One models Verdict runs today: the Laya family, for text, on MLX. Jev is listed for reference only; it is hosted and closed. New open System One models are added to the catalog as they prove out on a Mac.
+The System One models Verdict runs today: the Laya and Von families, for text, natively on MLX (no Python runtime). Jev is listed for reference only; it is hosted and closed. New open System One models are added to the catalog as they prove out on a Mac.
 
-The recorded text benchmarks compare topic classification on AG News and emotion classification on DAIR Emotion, zero-shot with a `Choice` question. Accuracy is the mean across those sets; calibration is expected calibration error (lower is better); speed is median time per item. The benchmark file records `n = 500` for each Laya model. These results do not establish accuracy on your task. `scripts/benchmark.py` is the reproduction entry point.
+The recorded benchmark runs a 25-task suite (topic, intent, emotion, review stars, NLI, relevance, safety and multilingual sets), zero-shot, at each model's native precision on one Apple M5 Max (macOS 26.6), 25 September 2026. Accuracy is the mean across tasks; calibration is expected calibration error (lower is better); single is the median wall time for one item per request; batched is items per second on 1,000 job ads × 2 questions; energy is net SoC joules per 1,000 judgements; memory is the loaded footprint. These results do not establish accuracy on your task. Every precision's numbers are in [`Resources/benchmarks.json`](Resources/benchmarks.json) and `verdict models --all`; `scripts/measure_catalog.py` is the reproduction entry point.
 
-| Model | Inputs | Params | Context | Languages | Accuracy | Calibration | Speed |
-|---|---|---|---|---|---|---|---|
-| **Laya · English** | text | 421M | 8k | English | 76.4% | 0.096 | 6 ms |
-| Laya · Typed decisions | text | 421M | 8k | English | 76.3% | 0.252 ⚠ | 6 ms |
-| **Laya · Multilingual** | text | 322M | 8k | 100+ | 71.7% | 0.113 | 4 ms |
-| Jev · TypeSafe (hosted, reference) | text | — | 64k | English | 69.5%† | 0.246† | 256 ms† |
+| Model | Params | Context | Languages | Bits | Accuracy | Calibration | Single | Batched | Energy | Memory |
+|---|---|---|---|---|---|---|---|---|---|---|
+| **Laya · English** | 421M | 8k | English | 16 | 50.8% | 0.208 | 7.7 ms | 608/s | 374 J/1k | 1.27 GB |
+| Laya · Typed decisions | 421M | 8k | English | 16 | 55.4% | 0.117 | 8.2 ms | 607/s | 422 J/1k | 1.36 GB |
+| **Laya · Multilingual** | 322M | 8k | 100+ | 16 | 53.7% | 0.252 ⚠ | 5.4 ms | 1,406/s | 183 J/1k | 1.06 GB |
+| Von · 1.2 | 395M | 8k | English | 32 | 52.7% | 0.093 | 15.9 ms | 219/s | 1,100 J/1k | 2.23 GB |
+| Von · 1.1 | 395M | 8k | English | 32 | 48.0% | 0.155 | 15.2 ms | 228/s | 1,050 J/1k | 2.24 GB |
 
-
-⚠ Laya Typed decisions has poorly calibrated confidence in these results. Do not treat their probabilities as reliable thresholds without validation on your data. † Jev figures are published reference results, not measured here; Verdict cannot load or call it. The image and audio timings are approximate, not part of the recorded text benchmark.
+⚠ Laya Multilingual's confidence is poorly calibrated in these results (the models table flags calibration error above 0.25). Do not treat its probabilities as reliable thresholds without validation on your data. Von's 16-bit precision is 2–3× faster and uses ~0.8 GB less with accuracy within 0.1 points in this suite, but it moves near-tie probabilities by up to ~0.08, so f32 stays the default. Jev · TypeSafe (hosted, 64k context) is a reference only: its published figures (69.5% accuracy, 0.246 calibration error, 256 ms) cover two sets (AG News, DAIR Emotion), are not measured here and are not comparable with the table; Verdict cannot load or call it.
 
 <details>
 <summary>Context, precision and limits</summary>
 
-**Context.** Laya runs at its encoder's real limit of 8,192 tokens (its shipped config says 512; on 300 long BBC articles with the decisive text after 800 tokens of filler, accuracy was 26% at 512 and 91% at 1,024 and above). Questions count toward the budget. Over-limit items return errors rather than truncated judgements.
+**Context.** Laya and Von run at the encoder's real limit of 8,192 tokens (Laya's shipped config says 512; on 300 long BBC articles with the decisive text after 800 tokens of filler, accuracy was 26% at 512 and 91% at 1,024 and above). Questions count toward the budget. An over-limit item gets its own error in the results — never a truncated judgement — and the rest of the batch is answered.
 
-**Precision.** Laya defaults to 16-bit (fp32 measured identical; 8-bit costs 0.2 points and saves ~350 MB per model, 4-bit costs a point and saves ~530 MB; neither is faster). Change it per model in the table.
+**Precision.** Laya's native precision is 16-bit (8 and 4 bits save memory, cost up to a point of accuracy and are not faster). Von's native precision is 32-bit f32, the only setting that matches the Von SDK within 0.0001; 16, 8 and 4 bits are opt-in. Select a precision in the table to see its numbers; **Reload** applies it to a loaded model.
 
 **Limits.** Each judgement sees one item, not the whole collection. Sort scores in code; do not expect cross-item reasoning. Use ordinary code for counting, arithmetic and date comparisons. Keep choice labels distinct, include an escape option, and write rubric levels as checkable situations. Test domain-specific rules on labelled examples before relying on them.
 
