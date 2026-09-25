@@ -79,9 +79,11 @@ final class Service {
             }
         }
         return ["rss_mb": lastRSS.1, "mlx_active_mb": (Double(Memory.activeMemory) / 1e6).rounded(), "mlx_cache_mb": (Double(Memory.cacheMemory) / 1e6).rounded(),
-                "available_mb": probe.availableMB(loadedMB: loadedEstimateMB).rounded()]
+                "available_mb": probe.availableMB(loadedMB: loadedReclaimMB).rounded()]
     }
-    private var loadedEstimateMB: Double { footprint.values.reduce(0, +) }
+    /// What unloading every loaded model would free (`reclaim`); the test probe counts exactly this as in use, so a
+    /// reload credit or an eviction gives back what the probe took (the real probe measures pages instead).
+    private var loadedReclaimMB: Double { order.reduce(0) { $0 + reclaim($1) } }
     /// Which optimized paths a loaded model uses on this Mac. Anything not optimized is the stock fallback:
     /// same answers, slower. `optimized` is true only when every reported path is the fast one.
     static func optimizations(_ agent: Any, runtime: String, bits: Int) -> [String: Any] {
@@ -270,7 +272,7 @@ final class Service {
         if allowSwap { return estimate }
         let need = estimate + MemoryProbe.headroomMB
         Memory.clearCache()   // our own reusable buffers are not free pages yet
-        func raw() -> Double { probe.rawAvailableMB(loadedMB: loadedEstimateMB) + credit }
+        func raw() -> Double { probe.rawAvailableMB(loadedMB: loadedReclaimMB) + credit }
         func available() -> Double { max(0, raw()) }
         var free = available()
         if free >= need { return estimate }

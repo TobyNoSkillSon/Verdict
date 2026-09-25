@@ -1,7 +1,8 @@
 """Residency classes, per-class Keep Hot, the never-swap memory check and model context limits.
 
 Stub models (no weights), an isolated support directory and the helper's test hooks:
-  VERDICT_TEST_MEMORY_FILE     fake memory probe: {"available_mb": N} minus the estimates of loaded models
+  VERDICT_TEST_MEMORY_FILE     fake memory probe: {"available_mb": N} minus what unloading the loaded models
+                               frees (resident weights; stub models: their estimates)
   VERDICT_BENCHMARKS           round memory_mb figures so the arithmetic below is exact
   VERDICT_TEST_MINUTE_SECONDS  seconds per Keep Hot minute; VERDICT_TEST_IDLE_TICK_S the idle-check interval
 

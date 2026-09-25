@@ -34,8 +34,9 @@ struct MemoryRefusal: Error, LocalizedError {
 /// file-backed, and speculative pages are counted once (as file-backed). inactive_count is not used: it overlaps both
 /// purgeable and file-backed pages, and its anonymous remainder is compressed or swapped, not freed. The memorystatus
 /// minimum makes a Mac already under pressure refuse loads. Test hooks, re-read on every check:
-/// VERDICT_TEST_MEMORY_FILE = JSON {"available_mb": N} → raw = N − the estimates of the models loaded now (so
-/// evictions free what they are expected to); VERDICT_TEST_VM_STATS = JSON with the counters above, page_size and
+/// VERDICT_TEST_MEMORY_FILE = JSON {"available_mb": N} → raw = N − what unloading the models loaded now would free
+/// (resident weights, else the load estimate: the same figure a reload credit and the eviction forecast use, so an
+/// unload gives back exactly what it took); VERDICT_TEST_VM_STATS = JSON with the counters above, page_size and
 /// memorystatus_level in place of the kernel's.
 struct MemoryProbe {
     static let headroomMB = 512.0
@@ -53,7 +54,7 @@ struct MemoryProbe {
     func availableMB(loadedMB: Double) -> Double { max(0, rawAvailableMB(loadedMB: loadedMB)) }
 
     /// `raw` above: negative when memory is already short.
-    /// `loadedMB`: Σ load estimates of the models loaded now (used by the test probe only).
+    /// `loadedMB`: Σ reclaimable MB of the models loaded now (used by the test probe only).
     func rawAvailableMB(loadedMB: Double) -> Double {
         if let testFile {
             let base = (Self.json(testFile)?["available_mb"] as? NSNumber)?.doubleValue ?? 0
