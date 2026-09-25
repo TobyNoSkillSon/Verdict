@@ -35,7 +35,7 @@ from verdict import judge, status
 results = judge(items, questions, model="auto", batch=64)
 ```
 
-`items` can be strings or dicts (dicts are shown to the model as JSON, so name the fields). Items with image, audio or video paths return a per-item error; Verdict judges text...}` in its position — nothing is truncated.
+`items` can be strings or dicts (Laya sees a dict as JSON, Von as `key: value` lines, so name the fields; a string stays a string even when it looks like JSON). Choice labels must be unique. Von reserves `[MASK]` for its option markers: an item containing it gets a per-item error, and a question containing it is refused. Items with image, audio or video paths return a per-item error; Verdict judges text...}` in its position — nothing is truncated.
 
 ## Writing questions
 

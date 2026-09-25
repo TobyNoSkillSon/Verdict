@@ -33,9 +33,9 @@ public final class VonModel: DecisionModel, KernelPathReporting {
     private let temperature: Double
     private let prior: [String: Double]?
     private let network: VonNetwork
-    /// Per question, across requests (agents repeat questions): option keys/texts and the zero-shot Noul null
-    /// logit bias, which depends only on the question. Keyed by the question JSON as exact UTF-8 bytes.
-    private struct QuestionInfo { let keys: [String]; let texts: [String]; var null: Float? }
+    /// Per question, across requests (agents repeat questions): option keys/texts, the validated zero-shot Noul null
+    /// row and its logit bias, which depend only on the question. Keyed by the question JSON as exact UTF-8 bytes.
+    private struct QuestionInfo { let keys: [String]; let texts: [String]; let nullRow: VonPreparedRow?; var null: Float? }
     private var questionCache: [Data: QuestionInfo] = [:]
 
     // A/B switches (native/perf/THEORY.md); defaults are the measured best.
@@ -97,10 +97,16 @@ public final class VonModel: DecisionModel, KernelPathReporting {
         fastEncode?(text, addSpecialTokens) ?? tokenizer!.encode(text: text, addSpecialTokens: addSpecialTokens)
     }
     private func state(_ item: Item) -> String {
-        // The helper preserves an ordered JSON rendering. SDK _format_state for
-        // dict items enumerates insertion-order top-level fields as key: value.
-        guard item.text.first == "{", let pairs = VonJSON.topLevel(item.text) else { return item.text }
-        return pairs.map { "\($0.0): \(VonJSON.pythonValue($0.1))" }.joined(separator: "\n")
+        // SDK _format_state: a str is used as is (even when it looks like JSON); a dict enumerates its
+        // insertion-order top-level fields as `key: str(value)` lines (the helper preserves an ordered JSON
+        // rendering); anything else is str(state).
+        switch item.kind {
+        case .text: return item.text
+        case .object:
+            guard let pairs = VonJSON.topLevel(item.text) else { return item.text }
+            return pairs.map { "\($0.0): \(VonJSON.pythonValue($0.1))" }.joined(separator: "\n")
+        case .value: return VonJSON.pythonValue(item.text)
+        }
     }
     private func descriptions(_ question: Question) -> ([String],[String]) {
         switch question.kind {
@@ -119,17 +125,39 @@ public final class VonModel: DecisionModel, KernelPathReporting {
         return "\(prefix) \(sepToken) \(options.map { "\(maskToken) \($0.trimmingCharacters(in: .whitespacesAndNewlines))" }.joined(separator: " "))"
     }
     public func prepare(_ item: Item, _ question: Question) throws -> VonPreparedRow {
-        try row(pack(state(item), question.instructions, descriptions(question).1))
+        let texts = try validated(question).1, prepared = row(pack(state(item), question.instructions, texts))
+        guard prepared.markers.count == texts.count else { throw VonError.invalid(markerMessage) }
+        return prepared
     }
-    private func row(_ packed: String) throws -> VonPreparedRow {
+    private func row(_ packed: String) -> VonPreparedRow {
         let ids = encode(packed)
-        let markers = ids.indices.filter { ids[$0] == maskID }
-        guard !markers.isEmpty else { throw VonError.invalid("Von question needs option markers") }
-        return VonPreparedRow(ids: ids, markers: markers)
+        return VonPreparedRow(ids: ids, markers: ids.indices.filter { ids[$0] == maskID })
+    }
+    /// The SDK packs a literal mask token in user text as one more marker (it then scores K + extra markers and
+    /// zips the first K probabilities with the labels: an invalid distribution). Von refuses it instead.
+    private var markerMessage: String {
+        "Item contains the literal mask token '\(maskToken)', which Von reserves for option markers; remove or replace it."
+    }
+    /// Request-level checks before any tokenization or GPU work: nonempty options and labels distinct as exact
+    /// bytes (as JSON object keys are; list criteria may repeat a label). Returns option keys and texts.
+    private func validated(_ question: Question) throws -> ([String], [String]) {
+        switch question.kind {
+        case .choice:
+            guard !question.criteria.isEmpty else { throw VonError.invalid("Choice criteria must be a nonempty dictionary or list") }
+            guard Probabilities.distinct(question.criteria.map(\.0)) else { throw VonError.invalid("Choice labels must be unique") }
+        case .score:
+            guard !question.criteria.isEmpty else { throw VonError.invalid("Score criteria must be a nonempty list") }
+        case .noul: break
+        }
+        return descriptions(question)
     }
     /// Raw logits for prepared rows (parity tests), as one chunk.
     public func logits(_ rows: [VonPreparedRow]) throws -> [[Float]] {
         guard !rows.isEmpty, rows.count <= Self.rowCap else { throw VonError.invalid("Expected 1...\(Self.rowCap) Von rows") }
+        guard let long = rows.map(\.ids.count).max(), long <= contextLimit else {
+            throw VonError.invalid("Row needs \(rows.map(\.ids.count).max() ?? 0) tokens; Von accepts \(contextLimit).")
+        }
+        guard rows.allSatisfy({ !$0.markers.isEmpty }) else { throw VonError.invalid("Von rows need option markers") }
         let values = network.collect(network.launch(rows.map(\.ids), rows.map(\.markers), length: paddedLength(rows)), markers: rows.map(\.markers))
         if Self.trace { log(rows, values) }
         return values
@@ -188,31 +216,48 @@ public final class VonModel: DecisionModel, KernelPathReporting {
             a.confidence = rounded(Swift.max(p[0], 1 - p[0]))
         case .choice:
             a.choice = keys[values.firstIndex(of: values.max()!)!]
-            a.probabilities = Dictionary(uniqueKeysWithValues: zip(keys,p).map { ($0.0,rounded($0.1)) })
+            a.probabilities = Probabilities(labels: keys, values: p.map { rounded($0) })
             a.confidence = rounded(bounded, digits: 1000)
         case .score:
-            a.probabilities = Dictionary(uniqueKeysWithValues: zip(keys,p).map { ($0.0,rounded($0.1)) })
+            a.probabilities = Probabilities(labels: keys, values: p.map { rounded($0) })
             a.score = rounded(p.enumerated().reduce(Double(0)) { $0 + Double($1.offset) * $1.element }, digits: 100)
             a.confidence = rounded(bounded, digits: 1000)
         }
         return a
     }
+    private func questionKey(_ question: Question) -> Data { Data((question.sourceJSON ?? LayaModel.questionJSON(question)).utf8) }
+    /// Validated question info; tokenizer work only, never a forward pass (the null pass is `nullBias`).
     private func cachedQuestion(_ question: Question) throws -> QuestionInfo {
-        let key = Data((question.sourceJSON ?? LayaModel.questionJSON(question)).utf8)
-        if let hit = questionCache[key], hit.null != nil || !needsNull(question) { return hit }
-        let (keys, texts) = descriptions(question)
-        var info = QuestionInfo(keys: keys, texts: texts, null: nil)
-        if needsNull(question) {
-            // Zero-shot Noul: the SDK's null pass (empty state) for this question, one row alone.
-            let lg = try logits([row(pack("", question.instructions, texts))])[0]
-            let bias = lg[0] - lg[1]
-            info.null = prior.map { Float($0["a"] ?? 0)*bias + Float($0["b"] ?? 0) } ?? 0.7*bias
+        let key = questionKey(question)
+        if let hit = questionCache[key] { return hit }
+        let (keys, texts) = try validated(question)
+        // The question without any item: its markers must be exactly the options' (a literal mask token in the
+        // instructions or an option would add one), and it is the zero-shot Noul null row.
+        let bare = row(pack("", question.instructions, texts))
+        guard bare.markers.count == texts.count else {
+            throw VonError.invalid("Question '\(question.id)' contains the literal mask token '\(maskToken)', which Von reserves for option markers; remove or replace it.")
         }
-        if Self.cacheNull {
-            if questionCache.count >= 512 { questionCache.removeAll(keepingCapacity: true) }
-            questionCache[key] = info
-        }
+        let info = QuestionInfo(keys: keys, texts: texts, nullRow: needsNull(question) ? bare : nil, null: nil)
+        if Self.cacheNull { remember(key, info) }
         return info
+    }
+    private func remember(_ key: Data, _ info: QuestionInfo) {
+        if questionCache[key] == nil && questionCache.count >= 512 { questionCache.removeAll(keepingCapacity: true) }
+        questionCache[key] = info
+    }
+    /// Zero-shot Noul: the SDK's null pass (empty state) for this question, one row alone. Run only once some item
+    /// of the request fits the context, and never for an over-context null row.
+    private func nullBias(_ question: Question, _ info: QuestionInfo) throws -> Float? {
+        guard let nullRow = info.nullRow else { return nil }
+        if let null = info.null { return null }
+        guard nullRow.ids.count <= contextLimit else {
+            throw VonError.invalid("Question '\(question.id)' needs about \(nullRow.ids.count) tokens; Von accepts \(contextLimit).")
+        }
+        let lg = try logits([nullRow])[0]
+        let bias = lg[0] - lg[1]
+        let null = prior.map { Float($0["a"] ?? 0)*bias + Float($0["b"] ?? 0) } ?? 0.7*bias
+        if Self.cacheNull { var cached = info; cached.null = null; remember(questionKey(question), cached) }
+        return null
     }
     private func needsNull(_ q: Question) -> Bool { q.kind == .noul && q.criteria.allSatisfy { $0.1.isEmpty } }
 
@@ -222,17 +267,23 @@ public final class VonModel: DecisionModel, KernelPathReporting {
         var results = [[String: Answer]](repeating: [:],count: items.count)
         var errors: [Int:String] = [:]
         var rows: [VonPreparedRow] = [], meta: [(item: Int, question: Int)] = []
-        let infos = try questions.map(cachedQuestion)
-        let tn = clock.now
+        // Validation and tokenization first: no forward pass (not even the cached null pass) runs before every
+        // row is known to fit the context and carry exactly its options' markers.
+        var infos = try questions.map(cachedQuestion)
         let states = items.map(state)
         var stateTokens = [Int](repeating: 1, count: items.count)
         for (i,s) in states.enumerated() {
-            let prepared = try zip(questions, infos).map { try row(pack(s, $0.instructions, $1.texts)) }
+            let prepared = zip(questions, infos).map { row(pack(s, $0.instructions, $1.texts)) }
             let count = prepared.map { $0.ids.count }.max() ?? 0
             if count > contextLimit { errors[i] = "Item needs about \(count) tokens; Von accepts \(contextLimit)."; continue }
+            if zip(prepared, infos).contains(where: { $0.markers.count != $1.texts.count }) { errors[i] = markerMessage; continue }
             // Calibration input: the state's own token count, once per item (was once per row).
             stateTokens[i] = max(1, encode(s, addSpecialTokens: false).count)
             for (q,r) in prepared.enumerated() { rows.append(r); meta.append((i,q)) }
+        }
+        let tn = clock.now
+        if !rows.isEmpty {
+            for q in infos.indices { infos[q].null = try nullBias(questions[q], infos[q]) }
         }
         let t1 = clock.now
         // Rows in length order, chunks of <= 64 rows under the token budget (as Laya fp16): less padding and bounded
@@ -253,6 +304,8 @@ public final class VonModel: DecisionModel, KernelPathReporting {
             if Self.trace { log(chunk, values) }
             for (r,lg) in values.enumerated() {
                 let (i,q) = meta[slots[r]]
+                // Validated above; never map a different number of logits onto the labels.
+                guard lg.count == infos[q].keys.count else { errors[i] = markerMessage; continue }
                 results[i][questions[q].id] = answer(lg, stateTokens: stateTokens[i], question: questions[q], keys: infos[q].keys, null: infos[q].null)
             }
         }
@@ -271,7 +324,7 @@ public final class VonModel: DecisionModel, KernelPathReporting {
         if Self.profile {
             let t2 = clock.now, real = rows.reduce(0) { $0 + $1.ids.count }
             func ms(_ d: Duration) -> String { String(format: "%.1f", Double(d.components.attoseconds) / 1e15 + Double(d.components.seconds) * 1000) }
-            FileHandle.standardError.write(Data("profile \(id) items=\(items.count) rows=\(rows.count) chunks=\(chunks.count) tokens=\(real) padded=\(padded) questions=\(ms(tn - t0))ms prepare=\(ms(t1 - tn))ms forward+post=\(ms(t2 - t1))ms\n".utf8))
+            FileHandle.standardError.write(Data("profile \(id) items=\(items.count) rows=\(rows.count) chunks=\(chunks.count) tokens=\(real) padded=\(padded) prepare=\(ms(tn - t0))ms null=\(ms(t1 - tn))ms forward+post=\(ms(t2 - t1))ms\n".utf8))
         }
         return items.indices.map { errors[$0].map(ItemResult.error) ?? .answers(results[$0]) }
     }

@@ -29,7 +29,7 @@ private final class StubModel: DecisionModel {
                 case .choice:
                     a.choice = q.criteria.first?.0
                     a.confidence = 0.9
-                    a.probabilities = Dictionary(uniqueKeysWithValues: q.criteria.map { ($0.0, 0.1) })
+                    a.probabilities = Probabilities(labels: q.criteria.map(\.0), values: q.criteria.map { _ in 0.1 })
                 case .score: a.score = 1; a.confidence = 0.5
                 }
                 out[q.id] = a
@@ -51,7 +51,7 @@ func loader(runtime: String) throws -> ModelLoader.Type {
     _ = preciseMatmulConfigured
     if ProcessInfo.processInfo.environment["VERDICT_STUB_MODELS"] == "1" { return StubLoader.self }
     guard let type = productionLoaders[runtime] else {
-        throw ServiceError("Native \(runtime) loader is not ready; the Python worker remains the production path")
+        throw ServiceError("No native loader for runtime '\(runtime)'; Verdict runs only models with a native helper loader")
     }
     return type
 }

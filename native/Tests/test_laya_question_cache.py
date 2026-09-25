@@ -44,7 +44,7 @@ class Helper:
 
     def __exit__(self, *exc):
         try:
-            urllib.request.urlopen(urllib.request.Request(self.base + '/quit', data=b'{}'), timeout=10).read()
+            urllib.request.urlopen(urllib.request.Request(self.base + '/quit', data=b'{}', headers={'Content-Type': 'application/json'}), timeout=10).read()
         except Exception:
             pass
         try:
@@ -67,6 +67,16 @@ class QuestionCacheCanonicalEquivalence(unittest.TestCase):
             both = warm.judge({'a': {'type': 'noul', 'instructions': NFC}, 'b': {'type': 'noul', 'instructions': NFD}})
             self.assertEqual(both['a'], expected_nfc)
             self.assertEqual(both['b'], expected_nfd)
+
+    def test_nfc_and_nfd_choice_labels_are_two_labels(self):
+        """Distinct JSON keys stay distinct labels (byte-exact, like the Python reference's dict), not a 400 or a trap."""
+        labels = {unicodedata.normalize('NFC', 'café'): 'coffee order', unicodedata.normalize('NFD', 'café'): 'tea order'}
+        self.assertEqual(len(labels), 2)
+        with Helper() as helper:
+            answer = helper.judge({'q': {'type': 'choice', 'instructions': 'Which order?', 'criteria': labels}})['q']
+            self.assertEqual(sorted(answer['probabilities']), sorted(labels))
+            self.assertAlmostEqual(sum(answer['probabilities'].values()), 1, delta=0.001)
+            self.assertIn(answer['choice'], labels)
 
 
 if __name__ == '__main__':

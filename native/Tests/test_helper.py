@@ -156,6 +156,14 @@ class HelperTests(unittest.TestCase):
             'choice': {'type': 'choice', 'instructions': 'pick', 'criteria': {'z-last': 'first', 'a-first': 'second'}}}})
         self.assertEqual(r['results'][0]['answers']['choice']['choice'], 'z-last')
 
+    def test_canonically_equivalent_labels_stay_distinct(self):
+        """Review #1: "é" and "e\u0301" are two JSON keys; the answer keeps both (the stub trapped on them)."""
+        labels = {'\u00e9': 'first', 'e\u0301': 'second'}
+        r = self.call('POST', '/judge', {'items': ['x'], 'model': 'laya-english', 'questions': {
+            'c': {'type': 'choice', 'instructions': 'pick', 'criteria': labels}}})
+        self.assertEqual(sorted(r['results'][0]['answers']['c']['probabilities']), sorted(labels))
+        self.assertIsNone(self.proc.poll())
+
     def test_shed_unload_settings_trim(self):
         self.call('POST', '/unload', {'model': 'laya-multilingual'})
         self.call('POST', '/unload', {'model': 'laya-english'})

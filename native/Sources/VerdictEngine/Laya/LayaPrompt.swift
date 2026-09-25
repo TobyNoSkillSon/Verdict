@@ -93,7 +93,8 @@ public final class LayaPrompt {
         switch question.kind {
         case .choice:
             guard !question.criteria.isEmpty else { throw LayaError.invalid("Choice criteria must be a nonempty dictionary or list") }
-            guard Set(question.criteria.map(\.0)).count == question.criteria.count else { throw LayaError.invalid("Choice labels must be unique") }
+            // Byte-exact, like JSON object keys: "é" and "e\u{301}" are two labels (Swift's Set would merge them).
+            guard Probabilities.distinct(question.criteria.map(\.0)) else { throw LayaError.invalid("Choice labels must be unique") }
             return question.criteria.map { $0.1.isEmpty ? $0.0 : "\($0.0): \($0.1)" }
         case .score:
             guard !question.criteria.isEmpty else { throw LayaError.invalid("Score criteria must be a nonempty list") }

@@ -49,9 +49,12 @@ public final class LayaModel: DecisionModel, KernelPathReporting {
     static let profile = ProcessInfo.processInfo.environment["VERDICT_PROFILE"] == "1"
     private var questionCache: [Data: (template: LayaPrompt.QuestionTemplate, count: Int)] = [:]
 
+    /// 0 = the native fp16 weights (16 means the same).
+    public static let precisions: Set<Int> = [0, 16, 8, 4]
+    public static let precisionMessage = "Laya precision must be 16, 8 or 4 bits"
     public init(id: String, snapshot: URL, bits: Int = 0) throws {
         guard ["laya-english", "laya-multilingual", "laya-typed-decisions"].contains(id) else { throw LayaError.invalid("Unknown Laya model '\(id)'") }
-        guard [0, 16, 8, 4].contains(bits) else { throw LayaError.invalid("Laya precision must be 16, 8 or 4 bits") }
+        guard Self.precisions.contains(bits) else { throw LayaError.invalid(Self.precisionMessage) }
         self.id = id; self.bits = bits
         let agent = try JSONSerialization.jsonObject(with: Data(contentsOf: snapshot.appendingPathComponent("rl_agent_config.json"))) as? [String: Any] ?? [:]
         guard let headLayers = agent["head_layers"] as? Int, headLayers >= 0, agent["encoder"] != nil else { throw LayaError.invalid("Laya config must specify encoder and head_layers") }
@@ -264,10 +267,10 @@ public final class LayaModel: DecisionModel, KernelPathReporting {
         case .choice:
             let winner = p.firstIndex(of: p.max()!)!
             result.choice = question.criteria[winner].0
-            result.probabilities = Dictionary(uniqueKeysWithValues: zip(question.criteria, p).map { ($0.0.0, rounded(Double($0.1))) })
+            result.probabilities = Probabilities(labels: question.criteria.map(\.0), values: p.map { rounded(Double($0)) })
         case .score:
             result.score = rounded(p.enumerated().reduce(0) { $0 + Double($1.offset) * Double($1.element) })
-            result.probabilities = Dictionary(uniqueKeysWithValues: p.enumerated().map { (String($0.offset), rounded(Double($0.element))) })
+            result.probabilities = Probabilities(labels: p.indices.map(String.init), values: p.map { rounded(Double($0)) })
         }
         return result
     }

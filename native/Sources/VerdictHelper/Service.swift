@@ -160,9 +160,18 @@ final class Service {
             }
         }
     }
+    /// The item's original JSON type travels with its text: Von formats a dict as key: value lines, but a string that
+    /// happens to look like JSON stays the string (SDK _format_state).
     private func item(_ raw: Any, ordered: OrderedJSON?) -> Item {
-        if let ordered { return Item(text: ordered.text ?? ordered.render()) }
-        return Item(text: (raw as? String) ?? jsonString(raw))
+        if let ordered {
+            switch ordered {
+            case .string(let text): return Item(text: text, kind: .text)
+            case .object: return Item(text: ordered.render(), kind: .object)
+            default: return Item(text: ordered.render(), kind: .value)
+            }
+        }
+        if let text = raw as? String { return Item(text: text, kind: .text) }
+        return Item(text: jsonString(raw), kind: raw is [String: Any] ? .object : .value)
     }
     private func containsMedia(_ raw: Any) -> Bool {
         guard let dict = raw as? [String: Any] else { return false }
@@ -187,7 +196,12 @@ final class Service {
     private func answer(_ a: Answer) -> [String: Any] {
         var out: [String: Any] = [:]
         if let v = a.choice { out["choice"] = v }
-        if let v = a.probabilities { out["probabilities"] = v }
+        if let v = a.probabilities {
+            // NSString keys compare literally, so byte-distinct labels ("é" / "e\u{301}") stay two JSON keys.
+            let labelled = NSMutableDictionary()
+            for (label, p) in v { labelled[NSString(string: label)] = p }
+            out["probabilities"] = labelled
+        }
         if let v = a.confidence { out["confidence"] = v }
         if let v = a.noul { out["noul"] = v }
         if let v = a.score { out["score"] = v }
