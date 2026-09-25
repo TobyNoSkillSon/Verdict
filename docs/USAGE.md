@@ -12,7 +12,7 @@
   - **Loaded on demand** (a request or an agent's `verdict load` needed it): 5, 15 (default), 30 or 60 min idle, or Always. On-demand loads do not join the launch set.
 - **Memory** — **Fit in free memory** (default): checks free memory before loading and avoids swap: a model loads only if it fits in memory that is free at that moment. Before a load, need = the model's measured memory at that precision (benchmarks.json `memory_mb`; else weights on disk scaled to the precision + 0.77 GB) + 0.5 GB activation headroom; free = min((free − speculative) + file-backed + purgeable pages, kern.memorystatus_level × RAM) − max(1 GB, 10% of RAM) (disjoint page counts; inactive anonymous pages are not counted; re-checked after a download). Best-effort at load time, not a no-swap guarantee. Short of it, Verdict unloads idle models (on demand before manual, least recently used first, never one serving the current request) and re-checks after each; if even that cannot free enough, nothing is unloaded and the load is refused (HTTP 507) with the reason and what to do. **Allow swap (slower)** skips the check: the load goes ahead and macOS moves data to disk, which can slow everything, other apps included. The submenu shows current free memory (`~X GB free now`) and the last model unloaded to make room; `verdict status` lists recent unloads and the last refusal.
 - **Bits** (in the Models table) — Laya 16 (native), 8 or 4; Von 32 (native), 16, 8 or 4. The row shows accuracy, calibration error, ms/item, energy (J per 1,000 judgements) and memory for the selected precision, with differences from the recommended precision in green (better) or red (worse). The recommended precision (marked in the Bits control) is the lowest energy within 0.5 accuracy points of the native precision; it is what a load uses until you pick another. On a loaded model at another precision, **Unload** becomes **Reload**, which loads the selection.
-- **Restart Worker** / **Launch at Login** / **Quit**.
+- **Restart Worker** / **Launch at Login** / **Support the developer…** (GitHub Sponsors) / **Quit Verdict**.
 
 Quitting Verdict stops the worker; nothing else keeps the models loaded.
 
@@ -61,6 +61,6 @@ Swift code uses VerdictKit, a library product of this package: `let verdict = tr
 ## Troubleshooting
 
 - **Worker exited / orange header** — open the log from the header. Reinstall with `git pull && scripts/install.sh` if the helper is missing or damaged.
-- **First load is slow** — that is the download (~0.6–0.85 GB per model). Later loads take a few seconds.
+- **First load is slow** — that is the download (0.6–1.6 GB per model). Later loads take a few seconds.
 - **`verdict` says not running and the app is installed elsewhere** — set `VERDICT_APP=/path/to/Verdict.app`.
 - **Wrong language model** — pass `--model laya-multilingual`; auto-routing only switches on non-ASCII text.
