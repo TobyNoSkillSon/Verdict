@@ -133,7 +133,7 @@ Bold is the recommended precision. Von's 32-bit rows run on the regular GPU path
 <details>
 <summary>Context and limits</summary>
 
-**Context.** Laya and Von 1.2 run at the encoder's limit of 8,192 tokens. Laya's shipped config says 512; on 300 long news articles with the decisive text after 800 tokens of filler, accuracy was 26% at 512 tokens and 91% at 1,024 and above. Von 1.1 accepts 2,048 tokens, the `max_position_embeddings` in its checkpoint. Questions count toward the budget. An item that does not fit gets its own error in the results — it is never truncated — and the rest of the batch is answered.
+**Context.** Laya and Von 1.2 run at the encoder's limit of 8,192 tokens. (Laya's upstream default is 512 tokens; Verdict loads it at the full 8,192.) Von 1.1 accepts 2,048 tokens, the `max_position_embeddings` in its checkpoint. Questions count toward the budget. An item that does not fit gets its own error in the results — it is never truncated — and the rest of the batch is answered.
 
 **Limits.** Each judgement sees one item, not the collection: sort scores in code rather than expecting cross-item reasoning, and use ordinary code for counting, arithmetic and dates. Keep choice labels distinct, include an escape option such as `other`, and write rubric levels as checkable situations. Test domain-specific rules on labelled examples before relying on them.
 
@@ -242,7 +242,7 @@ let results = try await verdict.judge(tickets, [
 
 Judgement inputs never leave your Mac. The API listens on `127.0.0.1` only and refuses requests that carry a browser `Origin` header or a foreign `Host`. It has no authentication, so any process on your Mac can call it; do not forward the port. The only network traffic is the app download at install and model weights from Hugging Face on first use. There is no telemetry and no hosted fallback.
 
-Verdict judges text. An item with an `image`, `audio` or `video` field comes back as a per-item error: the multimodal decision models we tried were far larger and worse at the job than the text models.
+Verdict judges text. An item with an `image`, `audio` or `video` field comes back as a per-item error.
 
 ## Building from source
 

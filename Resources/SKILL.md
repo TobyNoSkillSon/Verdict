@@ -5,7 +5,7 @@ description: Triage many items with Verdict, the local System One model service.
 
 # Triage with Verdict
 
-Verdict keeps System One models (decision models: the Laya family) loaded on this Mac. It judges text; for images, audio or video use another tool. You write typed questions in code, send many items, and get a probability per answer back — no text generated. **The model decides, your code acts.** Your context goes to the shortlist, not the pile.
+Verdict keeps System One models (decision models: Laya and Von) loaded on this Mac. It judges text; for images, audio or video use another tool. You write typed questions in code, send many items, and get a probability per answer back — no text generated. **The model decides, your code acts.** Your context goes to the shortlist, not the pile.
 
 ## 1. Decide it fits
 
@@ -43,7 +43,7 @@ questions = {
 results = judge(hits, questions)          # list in, list out, same order; a single item returns a single Result
 ```
 
-Answers compare like values: `r.relevant > 0.6`, `r.kind == "source"`; detail is `r.kind.probabilities`, `.confidence`. A falsy result means that item failed — usually over the model's context (8,192 tokens; nothing is truncated): `r.error` says why, the rest of the batch is unaffected. If Verdict is down, `judge()` raises; it never invents answers.
+Answers compare like values: `r.relevant > 0.6`, `r.kind == "source"`; detail is `r.kind.probabilities`, `.confidence`. A falsy result means that item failed — usually over the model's context (8,192 tokens; 2,048 for Von 1.1; nothing is truncated): `r.error` says why, the rest of the batch is unaffected. If Verdict is down, `judge()` raises; it never invents answers.
 
 Shell, for a JSONL file: `verdict judge --questions q.json --field text --sort relevant --top 20 < items.jsonl` prints one short line per item (`#index  name=value …  | snippet`; `--json` for every probability). q.json holds the same questions as plain JSON: `{"relevant": {"type": "noul", "instructions": "…"}, "kind": {"type": "choice", "instructions": "…", "criteria": {"source": "…", "other": "…"}}}`. `verdict --help` covers the rest.
 
@@ -57,7 +57,7 @@ curl -s "http://127.0.0.1:$PORT/v1/judge" -H 'Content-Type: application/json' \
 
 It returns `{"results": [{"answers": {"relevant": {"noul": 0.93, "confidence": 0.93}}, "model": "laya-english", "ms": 4.1}, …]}` in item order; an item it could not judge has `"error"` instead of `"answers"`. The repository's `docs/API.md` documents every endpoint.
 
-Model choice: default routing (plain English → Laya English, other scripts → Laya Multilingual) is right for most work. `verdict models` shows each model's measured accuracy, calibration, speed and links; `verdict info <model>` its model cards. Plain-ASCII Polish or German: pass `model="laya-multilingual"`.
+Model choice: default routing (plain English → Laya English, other scripts → Laya Multilingual) is right for most work. `verdict models` shows each model's measured accuracy, calibration, speed and links; `verdict info <model>` its model cards. Plain-ASCII Polish or German: pass `model="laya-multilingual"`. Von 1.2 (`model="von-1.2"`) is the best-calibrated local model on the benchmark, for English.
 
 ## 4. Act on the answers
 
