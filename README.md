@@ -122,7 +122,7 @@ Items that exceed a model's context return an error in their original position; 
 
 To choose a model, `verdict models` lists the catalog with measured numbers and weights links, and `verdict info <model>` shows the benchmark breakdown and links to the upstream model card, weights and runtime (`--json` on both, or `models()` in Python), so an agent can read the model cards and decide.
 
-See [the user guide](docs/USAGE.md) for the client, CLI and worker protocol.
+See [the user guide](docs/USAGE.md) for the CLI and Python client, and [the API reference](docs/API.md) for the local HTTP API.
 
 </details>
 
@@ -170,7 +170,7 @@ A flame marks a hot model. Here English and Multilingual are ready; **Unload** f
 | | Why | If missing |
 |---|---|---|
 | Apple Silicon, macOS 14+ | MLX runs on the Apple GPU | — |
-| `python3` (any, incl. macOS's own) | only for the `verdict` CLI and Python client, which use the standard library | `xcode-select --install` |
+| `python3` (any, incl. macOS's own) | only for the installer and the Python client, which use the standard library | `xcode-select --install` |
 | Internet | ~20 MB app download; each model downloads the first time it is needed (~0.8 GB for Laya English) | — |
 | Disk | ~1 GB; +0.6–0.8 GB per extra Laya model | — |
 

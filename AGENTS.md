@@ -2,7 +2,7 @@
 
 Your user asked you to install Verdict: a menu-bar app that keeps local decision models loaded so you can judge many items in milliseconds. Do this, then tell them what you did.
 
-1. **Check.** Apple Silicon Mac, macOS 14+, and `python3` for the CLI (macOS's own is fine). The installer checks and prints the one command that fixes anything missing — pass it to the user and stop.
+1. **Check.** Apple Silicon Mac, macOS 14+, and `python3` for the installer and the Python library (macOS's own is fine). The installer checks and prints the one command that fixes anything missing — pass it to the user and stop.
 2. **Install.** From this repository: `scripts/install.sh`. It downloads the prebuilt app for this version with curl, verifies its SHA-256 and signature, puts it in `/Applications` (or `~/Applications`), starts it, and waits until it answers. It prints a few short lines and ends with `ready: …`. Nothing is loaded or downloaded yet: the first judge downloads its model (~0.8 GB for Laya English, once) and loads it on demand. Never download the zip through a browser.
 3. **Install the skill into your own harness.** `verdict skill` prints it (`verdict skill --install DIR` writes `DIR/triage/SKILL.md` if your harness uses skill folders). Put it wherever your harness keeps skills, the way you normally would. Read it once; it tells you when Verdict is worth using and how to write questions.
 4. **Verify.** `verdict status` should say `models: none loaded` — a fresh install loads nothing. Run one judgement; it loads the model on demand (the first time it also downloads it, so allow a minute or two):
@@ -12,4 +12,4 @@ Your user asked you to install Verdict: a menu-bar app that keeps local decision
 
 Updating: `git pull && scripts/install.sh`. Models and settings are kept; an idle Verdict is quit and restarted automatically. Uninstall: quit the app, delete it, `~/Library/Application Support/Verdict`, `~/.local/bin/verdict` and `~/.local/share/verdict`.
 
-Output is plain and short by design: `verdict judge` prints one line per item (`#index  name=value …  | snippet`); add `--json` only when you need every probability.
+Output is plain and short by design: `verdict judge` prints one line per item (`#index  name=value …  | snippet`); add `--json` only when you need every probability. Other languages call the local HTTP API the CLI and libraries use: `docs/API.md`.

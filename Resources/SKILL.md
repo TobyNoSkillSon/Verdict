@@ -45,7 +45,17 @@ results = judge(hits, questions)          # list in, list out, same order; a sin
 
 Answers compare like values: `r.relevant > 0.6`, `r.kind == "source"`; detail is `r.kind.probabilities`, `.confidence`. A falsy result means that item failed — usually over the model's context (8,192 tokens; nothing is truncated): `r.error` says why, the rest of the batch is unaffected. If Verdict is down, `judge()` raises; it never invents answers.
 
-Shell, for a JSONL file: `verdict judge --questions q.json --field text --sort relevant --top 20 < items.jsonl` prints one short line per item (`--json` for every probability). `verdict --help` covers the rest.
+Shell, for a JSONL file: `verdict judge --questions q.json --field text --sort relevant --top 20 < items.jsonl` prints one short line per item (`#index  name=value …  | snippet`; `--json` for every probability). q.json holds the same questions as plain JSON: `{"relevant": {"type": "noul", "instructions": "…"}, "kind": {"type": "choice", "instructions": "…", "criteria": {"source": "…", "other": "…"}}}`. `verdict --help` covers the rest.
+
+Any other language calls the local HTTP API directly; the Python library, the `verdict` command and Swift's VerdictKit are thin clients of it. The port is in `status.json` (start the app with `open -g -a Verdict` if it is not running):
+
+```sh
+PORT=$(plutil -extract port raw -o - "$HOME/Library/Application Support/Verdict/status.json")
+curl -s "http://127.0.0.1:$PORT/v1/judge" -H 'Content-Type: application/json' \
+  -d '{"items": ["…", "…"], "questions": {"relevant": {"type": "noul", "instructions": "Is this hit about the password-reset flow?"}}}'
+```
+
+It returns `{"results": [{"answers": {"relevant": {"noul": 0.93, "confidence": 0.93}}, "model": "laya-english", "ms": 4.1}, …]}` in item order; an item it could not judge has `"error"` instead of `"answers"`. The repository's `docs/API.md` documents every endpoint.
 
 Model choice: default routing (plain English → Laya English, other scripts → Laya Multilingual) is right for most work. `verdict models` shows each model's measured accuracy, calibration, speed and links; `verdict info <model>` its model cards. Plain-ASCII Polish or German: pass `model="laya-multilingual"`.
 
