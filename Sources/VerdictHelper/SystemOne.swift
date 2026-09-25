@@ -269,8 +269,8 @@ enum SystemOne {
 /// Merges concurrent /v1/systemone requests into GPU batches. Requests queue while a batch runs; when it finishes, the
 /// oldest waiting request's model and precision are served next, together with every other waiting request for the
 /// same model and precision (up to `maxRows` question rows). A request arriving at an idle batcher starts a batch at
-/// once; after a merged batch the next one waits briefly for the clients' follow-up requests (`window`). Replies go
-/// out on their own queue so response encoding overlaps the next batch.
+/// once, and so does the next batch after one finishes (`window` can make it wait for the clients' follow-ups).
+/// Replies go out on their own queue so response encoding overlaps the next batch.
 final class SystemOneBatcher {
     struct Pending {
         let call: SystemOneCall
@@ -282,7 +282,8 @@ final class SystemOneBatcher {
     private let queue = DispatchQueue(label: "verdict.systemone", qos: .userInitiated)
     private let replies = DispatchQueue(label: "verdict.systemone.replies", qos: .userInitiated, attributes: .concurrent)
     private let execute: ([SystemOneCall]) -> [(Int, [String: Any])]
-    /// VERDICT_BATCH_WINDOW_MS: after a merged batch, wait up to this long for its clients' next requests (default 2).
+    /// VERDICT_BATCH_WINDOW_MS: after a merged batch, wait up to this long for its clients' next requests. Default 0:
+    /// 1, 2 and 4 ms measured no gain with 100–500 concurrent typesafe-sdk calls (their next requests take longer).
     let window: Double
     /// VERDICT_BATCH_MAX_ROWS: question rows per merged batch (default 4096).
     let maxRows: Int
@@ -291,7 +292,7 @@ final class SystemOneBatcher {
 
     init(execute: @escaping ([SystemOneCall]) -> [(Int, [String: Any])]) {
         let env = ProcessInfo.processInfo.environment
-        window = max(0, Double(env["VERDICT_BATCH_WINDOW_MS"] ?? "") ?? 2) / 1000
+        window = max(0, Double(env["VERDICT_BATCH_WINDOW_MS"] ?? "") ?? 0) / 1000
         maxRows = max(1, Int(env["VERDICT_BATCH_MAX_ROWS"] ?? "") ?? 4096)
         merging = env["VERDICT_BATCH"] != "0"
         self.execute = execute
