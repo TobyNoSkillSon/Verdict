@@ -13,7 +13,9 @@ import VerdictCore
     @Published var status: WorkerStatus?
     @Published private(set) var phase: WorkerPhase = .stopped
     @Published private(set) var catalog: [CatalogModel] = []
-    @Published private(set) var benchmarks: [String: BenchmarkResult] = [:]
+    @Published private(set) var benchmarks: [String: ModelBenchmark] = [:]
+    /// config.precision mirrored so the table redraws while the menu is open.
+    @Published private(set) var selectedPrecision: [String: Int] = [:]
     /// While true the status poller does not overwrite injected preview state.
     var previewing = false
     @Published var busyModel: String?
@@ -44,8 +46,10 @@ import VerdictCore
     func loadCatalog() {
         let url = Bundle.main.url(forResource: "models", withExtension: "json") ?? URL(fileURLWithPath: "Resources/models.json")
         if let data = try? Data(contentsOf: url), let list = try? JSONDecoder().decode([CatalogModel].self, from: data) { catalog = list }
-        let bench = Bundle.main.url(forResource: "benchmarks", withExtension: "json") ?? URL(fileURLWithPath: "Resources/benchmarks.json")
-        if let data = try? Data(contentsOf: bench), let map = try? JSONDecoder().decode([String: BenchmarkResult].self, from: data) { benchmarks = map }
+        let bench = ProcessInfo.processInfo.environment["VERDICT_BENCHMARKS"].map { URL(fileURLWithPath: $0) }
+            ?? Bundle.main.url(forResource: "benchmarks", withExtension: "json") ?? URL(fileURLWithPath: "Resources/benchmarks.json")
+        if let data = try? Data(contentsOf: bench) { benchmarks = decodeBenchmarks(data) }
+        selectedPrecision = (try? configuration())?.precision ?? [:]
     }
 
     func configuration() throws -> Configuration {
@@ -213,10 +217,12 @@ import VerdictCore
     }
 
     /// The set of hot models is the launch set: what you leave loaded comes back next time.
+    /// Loads at the selected precision (the helper's own map may predate the selection).
     func load(_ id: String) {
         busyModel = id; lastError = nil; onChange?()
+        let bits = precision(id)
         Task {
-            do { try await control("load", ["model": id]) } catch { lastError = error.localizedDescription }
+            do { try await control("load", ["model": id, "bits": String(bits)]) } catch { lastError = error.localizedDescription }
             busyModel = nil; onChange?()
         }
     }
@@ -255,18 +261,17 @@ extension Backend {
 }
 
 extension Backend {
-    func precision(_ id: String) -> Int { (try? configuration())?.precision?[id] ?? 0 }
-    /// Per-model precision; a hot model reloads at the new precision.
+    /// Config bits for the selected precision (0 = native).
+    func precision(_ id: String) -> Int { selectedPrecision[id] ?? 0 }
+    /// Records the selection only; the table shows its numbers and a loaded model offers Reload.
     func setPrecision(_ id: String, _ bits: Int) {
-        guard var config = try? configuration(), precision(id) != bits else { return }
+        guard precision(id) != bits else { return }
+        selectedPrecision[id] = bits
+        guard var config = try? configuration() else { return }
         var map = config.precision ?? [:]; map[id] = bits; config.precision = map
         try? save(config)
-        if status?.models[id] != nil {
-            busyModel = id; onChange?()
-            Task {
-                do { try await control("load", ["model": id, "bits": String(bits)]) } catch { lastError = error.localizedDescription }
-                busyModel = nil; onChange?()
-            }
-        } else { onChange?() }
+        onChange?()
     }
+    /// Render harness only: replaces the selection without writing config.json.
+    func previewSelections(_ map: [String: Int]) { selectedPrecision = map }
 }

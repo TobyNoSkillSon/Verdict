@@ -39,4 +39,20 @@ class CatalogTests(unittest.TestCase):
             if m.get('repository'):
                 self.assertTrue(m['links'].get('weights', '').startswith('https://huggingface.co/'), m['id'])
 
+class PrecisionTests(unittest.TestCase):
+    def test_deltas_match_the_app(self):
+        from verdict import deltas
+        base = {'accuracy': 0.561, 'ece': 0.117, 'ms': 4.6, 'j_per_1k': 380}
+        self.assertEqual(deltas({'accuracy': 0.557, 'ece': 0.129, 'ms': 3.4, 'j_per_1k': 304}, base),
+                         {'accuracy': '\u22120.4 pt', 'ece': '+0.012', 'speed': '35% faster', 'energy': '20% less energy'})
+        self.assertEqual(deltas({'ms': 5.52, 'j_per_1k': 437}, base), {'speed': '20% slower', 'energy': '15% more energy'})
+        self.assertEqual(deltas({'ms': 4.6}, {'ms': 14.2}), {'speed': '3.1\u00d7 faster'})
+        self.assertEqual(deltas({}, base), {})
+
+    def test_both_benchmark_shapes(self):
+        from verdict import _precisions
+        self.assertEqual(_precisions({'accuracy': 0.7, 'source': 'published'}, 16), (16, {16: {'accuracy': 0.7, 'source': 'published'}}))
+        self.assertEqual(_precisions({'default_bits': 32, 'precisions': {'32': {'accuracy': 0.5}, '8': 'bad', 'x': {}}}, 32), (32, {32: {'accuracy': 0.5}}))
+        self.assertEqual(_precisions(None, 32), (32, {}))
+
 if __name__ == '__main__': unittest.main()

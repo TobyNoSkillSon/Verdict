@@ -11,7 +11,7 @@ public struct Configuration: Codable, Equatable {
     public var hotModels: [String]           // loaded at launch, kept resident
     public var launchAtLogin: Bool
     public var idleMinutes: Int?             // 0 or nil = always hot
-    public var precision: [String: Int]?     // model id -> 0 (fp16), 8 or 4
+    public var precision: [String: Int]?     // model id -> 0 (native: Laya fp16, Von fp32), 16, 8 or 4
     public init(executable: String, hotModels: [String] = ["laya-english"], launchAtLogin: Bool = false, idleMinutes: Int? = 0) {
         self.executable = executable; self.hotModels = hotModels; self.launchAtLogin = launchAtLogin; self.idleMinutes = idleMinutes
     }
@@ -42,14 +42,155 @@ public func formatContext(_ tokens: Int) -> String {
     tokens >= 1024 ? "\(tokens / 1024)k" : String(tokens)
 }
 
+/// Measured figures for one model at one precision. Every field is optional: absent = not measured ("—").
 public struct BenchmarkResult: Codable, Equatable {
-    public var source: String
+    public var accuracy: Double?
+    public var accuracy_en: Double?
+    public var accuracy_ml: Double?
+    public var ece: Double?
+    public var ms: Double?              // single-item p50 wall
+    public var items_per_s: Double?     // batched throughput
+    public var j_per_1k: Double?        // net energy per 1,000 judgements (batched)
+    public var memory_mb: Double?       // phys_footprint loaded, after warm-up
+    public var sets: [String: Double]?
+    public var n_tasks: Int?
     public var n: Int?
-    public var sets: [String: Double]
-    public var ece: Double
-    public var ms: Double
-    public var accuracy: Double
+    public var source: String?
+    public var date: String?
+    public var hardware: String?
     public var note: String?
+    public init(accuracy: Double? = nil, ece: Double? = nil, ms: Double? = nil, j_per_1k: Double? = nil, memory_mb: Double? = nil, source: String? = nil) {
+        self.accuracy = accuracy; self.ece = ece; self.ms = ms; self.j_per_1k = j_per_1k; self.memory_mb = memory_mb; self.source = source
+    }
+}
+
+/// One model's entry in benchmarks.json: `{"default_bits": 16|32, "precisions": {"16": {...}, "8": {...}}}`.
+/// The older flat shape (one result per model, e.g. the published jev entry) decodes as a single result at the default precision.
+public struct ModelBenchmark: Codable, Equatable {
+    public var default_bits: Int?
+    public var precisions: [String: BenchmarkResult]
+    public init(default_bits: Int?, precisions: [Int: BenchmarkResult]) {
+        self.default_bits = default_bits
+        self.precisions = Dictionary(uniqueKeysWithValues: precisions.map { (String($0.key), $0.value) })
+    }
+    private enum Keys: String, CodingKey { case default_bits, precisions }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        default_bits = try? c.decodeIfPresent(Int.self, forKey: .default_bits)
+        if c.contains(.precisions) {
+            // Tolerate a malformed precision entry rather than dropping the whole model.
+            let raw = (try? c.decode([String: FailableResult].self, forKey: .precisions)) ?? [:]
+            precisions = raw.compactMapValues(\.value)
+        } else {
+            precisions = [String(default_bits ?? 16): try BenchmarkResult(from: decoder)]
+        }
+    }
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: Keys.self)
+        try c.encodeIfPresent(default_bits, forKey: .default_bits)
+        try c.encode(precisions, forKey: .precisions)
+    }
+    /// Result at an effective precision (16/8/4/32 — never the config's 0).
+    public func result(bits: Int) -> BenchmarkResult? { precisions[String(bits)] }
+    public func defaultResult(nativeBits: Int) -> BenchmarkResult? { result(bits: default_bits ?? nativeBits) }
+}
+
+private struct FailableResult: Decodable {
+    let value: BenchmarkResult?
+    init(from decoder: Decoder) throws { value = try? BenchmarkResult(from: decoder) }
+}
+
+/// Decodes benchmarks.json; a malformed model entry is skipped, not fatal.
+public func decodeBenchmarks(_ data: Data) -> [String: ModelBenchmark] {
+    guard let raw = try? JSONDecoder().decode([String: FailableModel].self, from: data) else { return [:] }
+    return raw.compactMapValues(\.value)
+}
+private struct FailableModel: Decodable {
+    let value: ModelBenchmark?
+    init(from decoder: Decoder) throws { value = try? ModelBenchmark(from: decoder) }
+}
+
+// MARK: Precision
+
+/// Native weight precision: Laya checkpoints are fp16, Von fp32.
+public func nativeBits(runtime: String?) -> Int { runtime == "von" ? 32 : 16 }
+/// Offered precisions, highest first. Never below 4.
+public func precisionOptions(runtime: String?) -> [Int] { runtime == "von" ? [32, 16, 8, 4] : [16, 8, 4] }
+/// Config/helper bits (0 = native) → effective bits.
+public func effectiveBits(config bits: Int, native: Int) -> Int { bits == 0 ? native : bits }
+/// Effective bits → config/helper bits: the native precision is stored as 0.
+public func configBits(effective bits: Int, native: Int) -> Int { bits == native ? 0 : bits }
+
+/// What the load button does for a model with a selected precision and, if loaded, its loaded precision.
+public enum LoadAction: Equatable { case load, unload, reload }
+public func loadAction(selected: Int, loaded: Int?, native: Int) -> LoadAction {
+    guard let loaded else { return .load }
+    return effectiveBits(config: loaded, native: native) == effectiveBits(config: selected, native: native) ? .unload : .reload
+}
+
+// MARK: Deltas vs the default precision
+
+public enum DeltaTone: Equatable { case better, worse, neutral }
+public struct Delta: Equatable {
+    public var text: String
+    public var tone: DeltaTone
+    public init(_ text: String, _ tone: DeltaTone) { self.text = text; self.tone = tone }
+}
+
+private let minus = "\u{2212}"
+private func signed(_ value: Double, _ format: String) -> String {
+    let body = String(format: format, abs(value))
+    return (value < 0 ? minus : "+") + body
+}
+
+/// Accuracy (fractions 0…1) → "−0.4 pt"; higher is better. Differences under 0.05 pt read as "±0.0 pt".
+public func accuracyDelta(_ value: Double?, base: Double?) -> Delta? {
+    guard let value, let base else { return nil }
+    let points = (value - base) * 100
+    if abs(points) < 0.05 { return Delta("±0.0 pt", .neutral) }
+    return Delta(signed(points, "%.1f") + " pt", points > 0 ? .better : .worse)
+}
+
+/// Calibration error → "+0.012"; lower is better. Differences under 0.0005 read as "±0.000".
+public func eceDelta(_ value: Double?, base: Double?) -> Delta? {
+    guard let value, let base else { return nil }
+    let d = value - base
+    if abs(d) < 0.0005 { return Delta("±0.000", .neutral) }
+    return Delta(signed(d, "%.3f"), d < 0 ? .better : .worse)
+}
+
+/// Latency (ms per item) → "35% faster" / "20% slower" as a rate change (base/value − 1);
+/// from 2× on it reads "2.4× faster". Under 1% reads "same speed".
+public func speedDelta(_ ms: Double?, base: Double?, short: Bool = false) -> Delta? {
+    guard let ms, let base, ms > 0, base > 0 else { return nil }
+    let faster = ms < base
+    let ratio = faster ? base / ms : ms / base
+    let word = faster ? "faster" : "slower"
+    if ratio - 1 < 0.01 { return Delta(short ? "same" : "same speed", .neutral) }
+    let amount = ratio >= 2 ? String(format: "%.1f×", ratio) : String(format: "%.0f%%", (ratio - 1) * 100)
+    if amount == "0%" { return Delta(short ? "same" : "same speed", .neutral) }
+    return Delta("\(amount) \(word)", faster ? .better : .worse)
+}
+
+/// Energy per 1,000 judgements → "20% less energy" / "15% more energy" (fraction of the default). Under 1% reads "same energy".
+public func energyDelta(_ joules: Double?, base: Double?, short: Bool = false) -> Delta? {
+    guard let joules, let base, base > 0 else { return nil }
+    let change = joules / base - 1
+    let suffix = short ? "" : " energy"
+    if abs(change) < 0.005 { return Delta("same" + suffix, .neutral) }
+    return Delta(String(format: "%.0f%%", abs(change) * 100) + (change < 0 ? " less" : " more") + suffix, change < 0 ? .better : .worse)
+}
+
+/// Megabytes → "782 MB" / "1.26 GB", formatted like the On disk column.
+public func formatMemory(_ mb: Double?) -> String? {
+    guard let mb else { return nil }
+    return formatBytes(Int64((mb * 1_000_000).rounded()))
+}
+
+/// "4.6 ms" under 10 ms, else whole milliseconds.
+public func formatMs(_ ms: Double?) -> String? {
+    guard let ms else { return nil }
+    return ms < 10 ? String(format: "%.1f ms", ms) : String(format: "%.0f ms", ms)
 }
 
 /// Which optimized paths a loaded model uses on this Mac (from the helper). Anything not optimized is the
@@ -59,6 +200,9 @@ public struct Optimizations: Codable, Equatable {
     public var attention: String?
     public var matmul: String?
     public var optimized: Bool
+    public init(tokenizer: String? = nil, attention: String? = nil, matmul: String? = nil, optimized: Bool) {
+        self.tokenizer = tokenizer; self.attention = attention; self.matmul = matmul; self.optimized = optimized
+    }
     /// One line for a tooltip: what is fast, and what fell back and why.
     public var summary: String {
         var fast: [String] = [], fallback: [String] = []
@@ -142,8 +286,9 @@ public func latencyLine(_ status: WorkerStatus?) -> String? {
     return parts.isEmpty ? nil : parts.joined(separator: " · ")
 }
 
+/// Decimal byte counts with a fixed en_US decimal point, like the app's other numbers ("842.6 MB").
 public func formatBytes(_ bytes: Int64) -> String {
-    ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+    bytes.formatted(.byteCount(style: .file).locale(Locale(identifier: "en_US")))
 }
 
 /// Copied by "Copy Skill for Your Agent": a complete SKILL.md an agent can drop into its skills folder.
@@ -161,4 +306,3 @@ Steps: (1) find the weights and runtime, verify the licence; (2) add a catalog e
 
 public let keepHotChoices: [(minutes: Int, title: String)] = [(0, "Always"), (15, "15 minutes after use"), (60, "1 hour after use"), (240, "4 hours after use")]
 
-public let precisionChoices: [(bits: Int, title: String)] = [(0, "fp16"), (8, "8-bit"), (4, "4-bit")]

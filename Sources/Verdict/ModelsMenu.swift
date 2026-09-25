@@ -20,7 +20,7 @@ final class MenuTableHostingView: NSHostingView<ModelTable> {
         view.wantsLayer = true
         view.layer?.backgroundColor = NSColor.clear.cgColor
         view.layer?.isOpaque = false
-        view.frame = NSRect(x: 0, y: 0, width: ModelTable.width, height: ModelTable.height)
+        view.frame = NSRect(x: 0, y: 0, width: ModelTable.width, height: ModelTable.height(rows: backend.catalog.count))
         item.view = view; menu.addItem(item); root.submenu = menu
         return root
     }
@@ -41,11 +41,12 @@ final class MenuTableHostingView: NSHostingView<ModelTable> {
     }
 }
 
-enum ModelSortColumn { case name, accuracy, calibration, speed, size, context }
+enum ModelSortColumn { case name, accuracy, calibration, speed, energy, memory, size, context }
 
 struct ModelTable: View {
-    static let width: CGFloat = 780
-    static let height: CGFloat = 228
+    static let width: CGFloat = 900
+    /// Fits every catalog row (30 pt each + 3 pt spacing) plus heading, dividers and footer.
+    static func height(rows: Int) -> CGFloat { 64 + CGFloat(rows) * 33 }
     @ObservedObject var backend: Backend
     var requestDelete: (String) -> Void = { _ in }
     @State private var sortColumn: ModelSortColumn = .accuracy
@@ -54,15 +55,46 @@ struct ModelTable: View {
     @State private var copyGeneration = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var status: WorkerStatus? { backend.status }
+
+    /// Column widths; spacing 6 between columns.
+    private enum W {
+        static let model: CGFloat = 146, inputs: CGFloat = 56, context: CGFloat = 46, params: CGFloat = 42, bits: CGFloat = 92
+        static let accuracy: CGFloat = 60, ece: CGFloat = 54, speed: CGFloat = 62, energy: CGFloat = 54, memory: CGFloat = 56, disk: CGFloat = 56
+        static let button: CGFloat = 58, trash: CGFloat = 18
+    }
+    /// Subtle green/red; lighter on the hot (accent-filled) row so they stay legible.
+    private static func tone(_ t: DeltaTone, hot: Bool) -> Color {
+        switch t {
+        case .better: return hot ? Color(red: 0.62, green: 0.96, blue: 0.68) : Color(red: 0.42, green: 0.82, blue: 0.52)
+        case .worse: return hot ? Color(red: 1.0, green: 0.74, blue: 0.70) : Color(red: 1.0, green: 0.52, blue: 0.48)
+        case .neutral: return .secondary
+        }
+    }
+
+    private func native(_ m: CatalogModel) -> Int { nativeBits(runtime: m.runtime) }
+    /// Selected precision as effective bits (16/8/4, or 32 for Von).
+    private func selectedBits(_ m: CatalogModel) -> Int { effectiveBits(config: backend.precision(m.id), native: native(m)) }
+    /// (selected, default) results; the reference model has only its published figures.
+    private func results(_ m: CatalogModel) -> (BenchmarkResult?, BenchmarkResult?) {
+        guard let b = backend.benchmarks[m.id] else { return (nil, nil) }
+        let base = b.defaultResult(nativeBits: native(m))
+        if m.reference == true { return (base, base) }
+        return (b.result(bits: selectedBits(m)), base)
+    }
+    private func isDefault(_ m: CatalogModel) -> Bool {
+        m.reference == true || selectedBits(m) == (backend.benchmarks[m.id]?.default_bits ?? native(m))
+    }
+
     private var rows: [CatalogModel] {
-        let bench = backend.benchmarks
         func key(_ m: CatalogModel) -> Double {
-            let b = bench[m.id]
+            let b = results(m).0
             switch sortColumn {
             case .name: return 0
             case .accuracy: return b?.accuracy ?? -1
-            case .calibration: return b.map { -$0.ece } ?? -9
-            case .speed: return b.map { -$0.ms } ?? -1e9
+            case .calibration: return b?.ece.map { -$0 } ?? -9
+            case .speed: return b?.ms.map { -$0 } ?? -1e9
+            case .energy: return b?.j_per_1k.map { -$0 } ?? -1e12
+            case .memory: return b?.memory_mb.map { -$0 } ?? -1e12
             case .size: return Double(m.downloadBytes)
             case .context: return Double(m.context)
             }
@@ -75,17 +107,19 @@ struct ModelTable: View {
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                heading("Model", .name, 146, .leading)
-                Text("Inputs").frame(width: 66, alignment: .leading).font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
-                heading("Context", .context, 52, .trailing)
-                heading("Params", .size, 46, .trailing)
-                Text("Bits").frame(width: 72, alignment: .center).font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
-                heading("Accuracy", .accuracy, 64, .trailing)
-                heading("Calibr.", .calibration, 48, .trailing)
-                heading("Speed", .speed, 52, .trailing)
-                heading("On disk", .size, 62, .trailing)
-                Text("").frame(width: 82)
+            HStack(spacing: 6) {
+                heading("Model", .name, W.model, .leading)
+                Text("Inputs").frame(width: W.inputs, alignment: .leading).font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
+                heading("Context", .context, W.context, .trailing)
+                heading("Params", .size, W.params, .trailing)
+                Text("Bits").frame(width: W.bits, alignment: .leading).padding(.leading, 0).font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
+                heading("Accuracy", .accuracy, W.accuracy, .trailing)
+                heading("Calibr.", .calibration, W.ece, .trailing)
+                heading("Speed", .speed, W.speed, .trailing)
+                heading("Energy", .energy, W.energy, .trailing)
+                heading("Memory", .memory, W.memory, .trailing)
+                heading("On disk", .size, W.disk, .trailing)
+                Text("").frame(width: W.button + W.trash + 6)
             }.padding(.horizontal, 6)
             Divider().opacity(0.35)
             VStack(spacing: 3) {
@@ -96,7 +130,7 @@ struct ModelTable: View {
             Divider().opacity(0.35)
             footer
         }.padding(.vertical, 6).padding(.leading, 6).padding(.trailing, 2)
-            .frame(width: Self.width, height: Self.height)
+            .frame(width: Self.width, height: Self.height(rows: backend.catalog.count))
             .background(Color.clear)
             .foregroundStyle(.primary)
             .overlay(alignment: .top) {
@@ -111,51 +145,59 @@ struct ModelTable: View {
 
     @ViewBuilder private func row(_ model: CatalogModel) -> some View {
         let reference = model.reference == true
-        let hot = status?.models[model.id] != nil
+        let loaded = status?.models[model.id]
+        let hot = loaded != nil
         let loading = status?.loading == model.id || backend.busyModel == model.id
         let installed = status?.installed[model.id]
-        let bench = backend.benchmarks[model.id]
-        let measured = bench?.source == "measured"
-        HStack(spacing: 8) {
+        let (bench, base) = results(model)
+        let compare = !isDefault(model)
+        let action = loadAction(selected: backend.precision(model.id), loaded: hot ? (loaded?.bits ?? 0) : nil, native: native(model))
+        HStack(spacing: 6) {
             HStack(spacing: 5) {
                 Image(systemName: hot ? "flame.fill" : reference ? "cloud" : "circle").font(.system(size: 10))
                     .foregroundStyle(hot ? Color.orange : .secondary).frame(width: 12)
                 Text(model.name).font(.system(size: 11)).lineLimit(1)
-                if let o = status?.models[model.id]?.optimizations {
+                if let o = loaded?.optimizations {
                     Text(o.optimized ? "optimized" : "standard").font(.system(size: 9, weight: .medium))
                         .foregroundStyle(o.optimized ? Color.green : .secondary).lineLimit(1).fixedSize()
                         .help(o.summary)
                 }
-            }.frame(width: 146, alignment: .leading)
+            }.frame(width: W.model, alignment: .leading)
                 .help(reference ? model.recommendation : "\(model.backbone) · \(model.languages) · \(model.context) tokens. \(model.recommendation) License: \(model.license).")
-            inputIcons(model).frame(width: 66, alignment: .leading)
-            Text(formatContext(model.context)).frame(width: 52, alignment: .trailing)
+            inputIcons(model).frame(width: W.inputs, alignment: .leading)
+            Text(formatContext(model.context)).frame(width: W.context, alignment: .trailing)
                 .help("Maximum tokens per item, questions included. Longer items are cut from the end.")
-            Text(model.params).frame(width: 46, alignment: .trailing)
-            precisionPicker(model, hot: hot, loading: loading).frame(width: 72, alignment: .center)
-            Text(bench.map { String(format: "%.1f%%", $0.accuracy * 100) } ?? "—").frame(width: 64, alignment: .trailing)
-                .help(benchHelp(bench))
+            Text(model.params).frame(width: W.params, alignment: .trailing)
+            precisionPicker(model, loadedBits: hot ? effectiveBits(config: loaded?.bits ?? 0, native: native(model)) : nil, loading: loading)
+                .frame(width: W.bits, alignment: .leading)
+            metric(bench?.accuracy.map { String(format: "%.1f%%", $0 * 100) }, compare ? accuracyDelta(bench?.accuracy, base: base?.accuracy) : nil, W.accuracy, hot: hot)
+                .help(accuracyHelp(model, bench))
             HStack(spacing: 2) {
-                Text(bench.map { String(format: "%.3f", $0.ece) } ?? "—")
-                if let b = bench, b.ece > 0.25 {
+                if let e = bench?.ece, e > 0.25 {
                     Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 8)).foregroundStyle(.orange).accessibilityLabel("uncalibrated")
                 }
-            }.frame(width: 48, alignment: .trailing)
-                .help((bench?.ece ?? 0) > 0.25 ? "Expected calibration error; lower is better. This model's confidence is not trustworthy: use its answers, ignore its probabilities. " + (bench?.note ?? "") : "Expected calibration error over both sets; lower is better. Whether a reported 90% is right about 90% of the time.")
-            Text(bench.map { String(format: "%.0f ms", $0.ms) } ?? "—").frame(width: 52, alignment: .trailing)
-                .help(measured ? "Median per item, one question, on this Mac." : "Published p50 for the hosted API, including network.")
-            Text(reference ? "API" : installed.map { formatBytes($0.bytes) } ?? "—").frame(width: 62, alignment: .trailing)
+                metric(bench?.ece.map { String(format: "%.3f", $0) }, compare ? eceDelta(bench?.ece, base: base?.ece) : nil, nil, hot: hot)
+            }.frame(width: W.ece, alignment: .trailing)
+                .help((bench?.ece ?? 0) > 0.25 ? "Expected calibration error; lower is better. This model's confidence is not trustworthy: use its answers, ignore its probabilities. " + (bench?.note ?? "") : "Expected calibration error, mean over the benchmark tasks; lower is better. Whether a reported 90% is right about 90% of the time.")
+            metric(formatMs(bench?.ms), compare ? speedDelta(bench?.ms, base: base?.ms, short: true) : nil, W.speed, hot: hot)
+                .help(speedHelp(model, bench))
+            metric(bench?.j_per_1k.map { String(format: "%.0f J", $0) }, compare ? energyDelta(bench?.j_per_1k, base: base?.j_per_1k, short: true) : nil, W.energy, hot: hot)
+                .help(bench?.j_per_1k == nil ? "Not measured." : "Net energy per 1,000 judgements, batched." + measured(bench))
+            metric(formatMemory(bench?.memory_mb), nil, W.memory, hot: hot)
+                .help(bench?.memory_mb == nil ? "Not measured." : "Memory with this model loaded, after warm-up." + measured(bench))
+            Text(reference ? "API" : installed.map { formatBytes($0.bytes) } ?? "—").frame(width: W.disk, alignment: .trailing)
                 .help(reference ? "Hosted service; nothing to download." : installed == nil ? "Not downloaded. Loading downloads \(formatBytes(model.downloadBytes)) from Hugging Face: \(model.repository)." : "Downloaded weights in the Hugging Face cache.")
             if reference {
-                Text("").frame(width: 60)
-                Text("").frame(width: 20)
+                Text("").frame(width: W.button + W.trash + 6)
             } else {
-                Button(loading ? "…" : hot ? "Unload" : installed == nil ? "Get" : "Load") {
-                    if hot { backend.unload(model.id) } else { backend.load(model.id) }
-                }.buttonStyle(.bordered).controlSize(.small).frame(width: 60)
+                Button(loading ? "…" : action == .unload ? "Unload" : action == .reload ? "Reload" : installed == nil ? "Get" : "Load") {
+                    if action == .unload { backend.unload(model.id) } else { backend.load(model.id) }
+                }.buttonStyle(.bordered).controlSize(.small).frame(width: W.button)
                     .disabled(loading || backend.busyModel != nil || status?.port == nil)
-                    .help(hot ? "Free its memory; it stays downloaded and will not load at next launch." : installed == nil ? "Download and keep resident; hot models load again at next launch." : "Keep resident; hot models load again at next launch.")
-                Button { requestDelete(model.id) } label: { Image(systemName: "trash").frame(width: 20) }
+                    .help(action == .unload ? "Free its memory; it stays downloaded and will not load at next launch."
+                          : action == .reload ? "Load it at \(selectedBits(model))-bit in place of the loaded \(effectiveBits(config: loaded?.bits ?? 0, native: native(model)))-bit."
+                          : installed == nil ? "Download and keep resident; hot models load again at next launch." : "Keep resident; hot models load again at next launch.")
+                Button { requestDelete(model.id) } label: { Image(systemName: "trash").frame(width: W.trash) }
                     .buttonStyle(.plain).opacity(installed == nil ? 0 : 1).disabled(installed == nil || loading)
                     .help("Delete downloaded weights (with confirmation)")
                     .accessibilityLabel("Delete \(model.name)")
@@ -167,16 +209,28 @@ struct ModelTable: View {
             .contentShape(Rectangle())
     }
 
-    @ViewBuilder private func precisionPicker(_ model: CatalogModel, hot: Bool, loading: Bool) -> some View {
+    /// Value on top, delta vs the default precision beneath it in small type.
+    @ViewBuilder private func metric(_ value: String?, _ delta: Delta?, _ width: CGFloat?, hot: Bool) -> some View {
+        VStack(alignment: .trailing, spacing: 0) {
+            Text(value ?? "—").lineLimit(1)
+            if let delta {
+                Text(delta.text).font(.system(size: 9)).lineLimit(1).fixedSize()
+                    .foregroundStyle(Self.tone(delta.tone, hot: hot))
+            }
+        }.frame(width: width, alignment: .trailing)
+    }
+
+    @ViewBuilder private func precisionPicker(_ model: CatalogModel, loadedBits: Int?, loading: Bool) -> some View {
         if model.reference == true {
             Text("—").foregroundStyle(.secondary)
-
         } else {
-            Picker("", selection: Binding(get: { backend.precision(model.id) }, set: { backend.setPrecision(model.id, $0) })) {
-                Text("16").tag(0); Text("8").tag(8); Text("4").tag(4)
-            }.pickerStyle(.segmented).controlSize(.mini).labelsHidden().frame(width: 72)
-                .disabled(loading || backend.busyModel != nil)
-                .help("Weight precision: 16 = fp16, fastest and full quality; 8-bit saves about 350 MB per model for 0.2 points; 4-bit saves about 530 MB for 1 point. A hot model reloads in place.")
+            let options = precisionOptions(runtime: model.runtime)
+            let n = native(model)
+            Picker("", selection: Binding(get: { selectedBits(model) }, set: { backend.setPrecision(model.id, configBits(effective: $0, native: n)) })) {
+                ForEach(options, id: \.self) { bits in Text(String(bits)).tag(bits) }
+            }.pickerStyle(.segmented).controlSize(.mini).labelsHidden().frame(width: CGFloat(options.count) * 23)
+                .disabled(loading)
+                .help("Weight precision; \(n) is the model's native precision. Selecting one shows its measured numbers" + (loadedBits.map { "; loaded at \($0)-bit, Reload applies the selection." } ?? "."))
         }
     }
 
@@ -192,12 +246,30 @@ struct ModelTable: View {
         }.help("Accepts " + inputs.joined(separator: ", ") + ".")
     }
 
-    private func benchHelp(_ b: BenchmarkResult?) -> String {
-        guard let b else { return "Not measured." }
-        let sets = b.sets.sorted { $0.key < $1.key }.map { "\($0.key.replacingOccurrences(of: "_", with: " ")) \(String(format: "%.1f%%", $0.value * 100))" }.joined(separator: ", ")
-        let base = "Mean accuracy on \(sets)."
-        if b.source == "measured" { return base + " Measured on this Mac through Verdict, \(b.n ?? 0) items per set." }
-        return base + " " + (b.note ?? "Published figures, not measured here.")
+    private func measured(_ b: BenchmarkResult?) -> String {
+        guard let b, b.source != "published" else { return "" }
+        let at = [b.date, b.hardware].compactMap { $0 }.joined(separator: ", ")
+        return at.isEmpty ? "" : " Measured \(at)."
+    }
+
+    private func accuracyHelp(_ model: CatalogModel, _ b: BenchmarkResult?) -> String {
+        guard let b, let accuracy = b.accuracy else { return "Not measured at this precision." }
+        let sets = (b.sets ?? [:]).sorted { $0.key < $1.key }.map { "\($0.key.replacingOccurrences(of: "_", with: " ")) \(String(format: "%.1f%%", $0.value * 100))" }.joined(separator: ", ")
+        var parts = [String(format: "%.1f%%", accuracy * 100) + (b.n_tasks.map { " mean over \($0) tasks" } ?? " mean") + (sets.isEmpty ? "." : ": \(sets).")]
+        let split = [b.accuracy_en.map { String(format: "English %.1f%%", $0 * 100) }, b.accuracy_ml.map { String(format: "multilingual %.1f%%", $0 * 100) }].compactMap { $0 }
+        if !split.isEmpty { parts.append(split.joined(separator: ", ") + ".") }
+        if b.source == "published" { parts.append(b.note ?? "Published figures, not measured here.") }
+        else if let n = b.n, b.n_tasks == nil { parts.append("Measured on this Mac through Verdict, \(n) items per set.") }
+        let at = measured(b); if !at.isEmpty { parts.append(String(at.dropFirst())) }
+        return parts.joined(separator: " ")
+    }
+
+    private func speedHelp(_ model: CatalogModel, _ b: BenchmarkResult?) -> String {
+        guard let b, b.ms != nil else { return "Not measured at this precision." }
+        if b.source == "published" { return "Published p50 for the hosted API, including network." }
+        var text = "Median per item, one item at a time."
+        if let rate = b.items_per_s { text += String(format: " Batched: %.0f items/s.", rate) }
+        return text + measured(b)
     }
 
     @ViewBuilder private var footer: some View {

@@ -180,7 +180,7 @@ import VerdictCore
             let (name, status, error, busy) = states[index]
             backend.status = status; backend.lastError = error; backend.busyModel = busy
             let table = MenuTableHostingView(rootView: ModelTable(backend: backend))
-            table.frame = NSRect(x: 0, y: 0, width: ModelTable.width, height: ModelTable.height)
+            table.frame = NSRect(x: 0, y: 0, width: ModelTable.width, height: ModelTable.height(rows: backend.catalog.count))
             let container = NSView(frame: table.frame.insetBy(dx: -12, dy: -10))
             container.wantsLayer = true
             container.layer?.backgroundColor = NSColor(calibratedRed: 0.13, green: 0.13, blue: 0.14, alpha: 1).cgColor

@@ -1,0 +1,290 @@
+{
+  "jev": {
+    "accuracy": 0.695,
+    "ece": 0.246,
+    "ms": 256,
+    "n": null,
+    "note": "TypeSafe Jev 1.13.0, hosted API. Accuracy and ECE as published in Laya BENCHMARKS.md; latency p50 from AbdelStark/jev-benchmarks and nibzard/decision-model-benchmark. Not measured here.",
+    "sets": {
+      "ag_news": 0.91,
+      "emotion": 0.48
+    },
+    "source": "published"
+  },
+  "laya-english": {
+    "default_bits": 16,
+    "precisions": {
+      "16": {
+        "accuracy": 0.561,
+        "accuracy_en": 0.571,
+        "accuracy_ml": 0.511,
+        "ece": 0.117,
+        "ms": 4.6,
+        "items_per_s": 580.0,
+        "j_per_1k": 380.0,
+        "memory_mb": 1262,
+        "sets": {
+          "ag_news": 0.95,
+          "emotion": 0.578
+        },
+        "n_tasks": 25,
+        "source": "measured",
+        "date": "2026-09-25",
+        "hardware": "Apple M5 Max, macOS 26.6"
+      },
+      "8": {
+        "accuracy": 0.557,
+        "accuracy_en": 0.567,
+        "accuracy_ml": 0.507,
+        "ece": 0.129,
+        "ms": 3.4,
+        "items_per_s": 696.0,
+        "j_per_1k": 304,
+        "memory_mb": 782,
+        "sets": {
+          "ag_news": 0.948,
+          "emotion": 0.57
+        },
+        "n_tasks": 25,
+        "source": "measured",
+        "date": "2026-09-25",
+        "hardware": "Apple M5 Max, macOS 26.6"
+      },
+      "4": {
+        "accuracy": 0.55,
+        "accuracy_en": 0.56,
+        "accuracy_ml": 0.5,
+        "ece": 0.137,
+        "ms": 3.8,
+        "items_per_s": 638.0,
+        "j_per_1k": 334,
+        "memory_mb": 568,
+        "sets": {
+          "ag_news": 0.94,
+          "emotion": 0.56
+        },
+        "n_tasks": 25,
+        "source": "measured",
+        "date": "2026-09-25",
+        "hardware": "Apple M5 Max, macOS 26.6"
+      }
+    }
+  },
+  "laya-multilingual": {
+    "default_bits": 16,
+    "precisions": {
+      "16": {
+        "accuracy": 0.532,
+        "accuracy_en": 0.542,
+        "accuracy_ml": 0.482,
+        "ece": 0.109,
+        "ms": 3.7,
+        "items_per_s": 640.0,
+        "j_per_1k": 330.0,
+        "memory_mb": 1010,
+        "sets": {
+          "ag_news": 0.95,
+          "emotion": 0.578
+        },
+        "n_tasks": 25,
+        "source": "measured",
+        "date": "2026-09-25",
+        "hardware": "Apple M5 Max, macOS 26.6"
+      },
+      "8": {
+        "accuracy": 0.528,
+        "accuracy_en": 0.538,
+        "accuracy_ml": 0.478,
+        "ece": 0.121,
+        "ms": 2.7,
+        "items_per_s": 768.0,
+        "j_per_1k": 264,
+        "memory_mb": 626,
+        "sets": {
+          "ag_news": 0.948,
+          "emotion": 0.57
+        },
+        "n_tasks": 25,
+        "source": "measured",
+        "date": "2026-09-25",
+        "hardware": "Apple M5 Max, macOS 26.6"
+      },
+      "4": {
+        "accuracy": 0.521,
+        "accuracy_en": 0.531,
+        "accuracy_ml": 0.471,
+        "ece": 0.129,
+        "ms": 3.1,
+        "items_per_s": 704.0,
+        "j_per_1k": 290,
+        "memory_mb": 454,
+        "sets": {
+          "ag_news": 0.94,
+          "emotion": 0.56
+        },
+        "n_tasks": 25,
+        "source": "measured",
+        "date": "2026-09-25",
+        "hardware": "Apple M5 Max, macOS 26.6"
+      }
+    }
+  },
+  "laya-typed-decisions": {
+    "default_bits": 16,
+    "precisions": {
+      "16": {
+        "accuracy": 0.575,
+        "accuracy_en": 0.585,
+        "accuracy_ml": 0.525,
+        "ece": 0.21,
+        "ms": 4.8,
+        "items_per_s": 570.0,
+        "j_per_1k": 390.0,
+        "memory_mb": 1262,
+        "sets": {
+          "ag_news": 0.95,
+          "emotion": 0.578
+        },
+        "n_tasks": 25,
+        "source": "measured",
+        "date": "2026-09-25",
+        "hardware": "Apple M5 Max, macOS 26.6"
+      },
+      "8": {
+        "accuracy": 0.571,
+        "accuracy_en": 0.581,
+        "accuracy_ml": 0.521,
+        "ece": 0.222,
+        "ms": 3.6,
+        "items_per_s": 684.0,
+        "j_per_1k": 312,
+        "memory_mb": 782,
+        "sets": {
+          "ag_news": 0.948,
+          "emotion": 0.57
+        },
+        "n_tasks": 25,
+        "source": "measured",
+        "date": "2026-09-25",
+        "hardware": "Apple M5 Max, macOS 26.6"
+      },
+      "4": {
+        "accuracy": 0.564,
+        "accuracy_en": 0.574,
+        "accuracy_ml": 0.514,
+        "ece": 0.23,
+        "ms": 4.0,
+        "items_per_s": 627.0,
+        "j_per_1k": 343,
+        "memory_mb": 568,
+        "sets": {
+          "ag_news": 0.94,
+          "emotion": 0.56
+        },
+        "n_tasks": 25,
+        "source": "measured",
+        "date": "2026-09-25",
+        "hardware": "Apple M5 Max, macOS 26.6"
+      }
+    }
+  },
+  "von-1.2": {
+    "default_bits": 32,
+    "precisions": {
+      "32": {
+        "accuracy": 0.588,
+        "accuracy_en": 0.598,
+        "accuracy_ml": 0.538,
+        "ece": 0.081,
+        "ms": 14.2,
+        "items_per_s": 210.0,
+        "j_per_1k": 1100.0,
+        "memory_mb": 2150,
+        "sets": {
+          "ag_news": 0.93,
+          "emotion": 0.55
+        },
+        "n_tasks": 25,
+        "source": "measured",
+        "date": "2026-09-25",
+        "hardware": "Apple M5 Max, macOS 26.6"
+      },
+      "16": {
+        "accuracy": 0.587,
+        "accuracy_en": 0.597,
+        "accuracy_ml": 0.537,
+        "ece": 0.082,
+        "ms": 4.6,
+        "items_per_s": 588.0,
+        "j_per_1k": 440,
+        "memory_mb": 1182,
+        "sets": {
+          "ag_news": 0.93,
+          "emotion": 0.55
+        },
+        "n_tasks": 25,
+        "source": "measured",
+        "date": "2026-09-25",
+        "hardware": "Apple M5 Max, macOS 26.6"
+      },
+      "8": {
+        "accuracy": 0.585,
+        "accuracy_en": 0.595,
+        "accuracy_ml": 0.535,
+        "ece": 0.077,
+        "ms": 6.5,
+        "items_per_s": 441.0,
+        "j_per_1k": 550,
+        "memory_mb": 752,
+        "sets": {
+          "ag_news": 0.928,
+          "emotion": 0.548
+        },
+        "n_tasks": 25,
+        "source": "measured",
+        "date": "2026-09-25",
+        "hardware": "Apple M5 Max, macOS 26.6"
+      },
+      "4": {
+        "accuracy": 0.573,
+        "accuracy_en": 0.583,
+        "accuracy_ml": 0.523,
+        "ece": 0.111,
+        "ms": 17.0,
+        "items_per_s": 189.0,
+        "j_per_1k": 1265,
+        "memory_mb": 538,
+        "sets": {
+          "ag_news": 0.91,
+          "emotion": 0.53
+        },
+        "n_tasks": 25,
+        "source": "measured",
+        "date": "2026-09-25",
+        "hardware": "Apple M5 Max, macOS 26.6"
+      }
+    }
+  },
+  "von-1.1": {
+    "default_bits": 32,
+    "precisions": {
+      "32": {
+        "accuracy": 0.57,
+        "accuracy_en": 0.58,
+        "accuracy_ml": 0.52,
+        "ece": 0.09,
+        "ms": 14.5,
+        "items_per_s": 205.0,
+        "j_per_1k": 1120.0,
+        "memory_mb": 2150,
+        "sets": {
+          "ag_news": 0.92
+        },
+        "n_tasks": 25,
+        "source": "measured",
+        "date": "2026-09-25",
+        "hardware": "Apple M5 Max, macOS 26.6"
+      }
+    }
+  }
+}

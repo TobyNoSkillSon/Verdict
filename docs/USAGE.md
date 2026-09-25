@@ -9,7 +9,7 @@
 - **Set Up Runtime…** — appears only when the Python runtime is missing; installs it (about a minute) and starts the worker. Progress in `setup.log`.
 - **Open Verdict Files** — `~/Library/Application Support/Verdict`.
 - **Keep Hot** — Always, or unload after 15 min / 1 h / 4 h idle; the next judgement reloads.
-- **Bits** (in the Models table) — 16 (default), 8 or 4 per Laya model; changing it reloads that model in place.
+- **Bits** (in the Models table) — Laya 16 (native), 8 or 4; Von 32 (native), 16, 8 or 4. The row shows accuracy, calibration error, ms/item, energy (J per 1,000 judgements) and memory for the selected precision, with differences from the native precision in green (better) or red (worse). On a loaded model at another precision, **Unload** becomes **Reload**, which loads the selection.
 - **Restart Worker** / **Launch at Login** / **Quit**.
 
 Quitting Verdict stops the worker; nothing else keeps the models loaded.
@@ -20,8 +20,9 @@ Quitting Verdict stops the worker; nothing else keeps the models loaded.
 
 ```
 verdict status
-verdict models [--json]            # catalog: inputs, context, measured numbers, state, weights link
-verdict info MODEL [--json]        # one model: benchmark breakdown, use, upstream/weights/runtime links
+verdict models [--json]            # catalog at each model's selected precision: accuracy, ece, ms, J/1k, memory, state, weights link
+verdict models --all               # every precision per model, with deltas vs the native precision
+verdict info MODEL [--json]        # one model: all precisions, task breakdown, measurement source, links
 verdict load laya-multilingual | verdict unload ID | verdict quit
 verdict judge --questions q.json [--model ID] [--field KEY] [--sort NAME] [--min X] [--top N] < items.jsonl
 ```
