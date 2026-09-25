@@ -48,13 +48,26 @@ public struct Answer: Sendable, Hashable, Codable {
         return .object(m)
     }
 
-    /// From the API's JSON (`{"choice", "probabilities", "confidence", "noul", "score", "calibrated"}`).
+    /// From the API's JSON (`{"choice", "probabilities", "confidence", "noul", "score", "calibrated"}`). A field that is
+    /// present with the wrong type (`"noul": "0.9"`, a null probability) throws rather than reading as absent.
     public init(json: JSON) throws {
         guard json.members != nil else { throw VerdictError.unavailable("Unexpected answer from Verdict: an answer is not an object") }
-        choice = json["choice"]?.string
-        probabilities = json["probabilities"]?.members.map { members in ExactKeyed(members.compactMap { m in m.value.double.map { (m.key, $0) } }) }
-        noul = json["noul"]?.double; score = json["score"]?.double; confidence = json["confidence"]?.double
-        calibrated = json["calibrated"]?.bool
+        func bad(_ field: String, _ type: String) -> VerdictError { .unavailable("Unexpected answer from Verdict: \(field) is not \(type)") }
+        func number(_ key: String) throws -> Double? {
+            guard let value = json[key] else { return nil }
+            guard let n = value.double else { throw bad(key, "a number") }
+            return n
+        }
+        if let value = json["choice"] { guard let c = value.string else { throw bad("choice", "a string") }; choice = c }
+        if let value = json["probabilities"] {
+            guard let members = value.members else { throw bad("probabilities", "an object") }
+            probabilities = ExactKeyed(try members.map { m in
+                guard let p = m.value.double else { throw bad("probabilities.\(m.key)", "a number") }
+                return (m.key, p)
+            })
+        }
+        noul = try number("noul"); score = try number("score"); confidence = try number("confidence")
+        if let value = json["calibrated"] { guard let b = value.bool else { throw bad("calibrated", "true or false") }; calibrated = b }
     }
 }
 
@@ -75,10 +88,19 @@ public struct Judgement: Sendable, Hashable, Codable {
     /// From the API's JSON, keeping every id exactly as sent (what `Verdict.judge` uses).
     public init(json: JSON) throws {
         guard json.members != nil else { throw VerdictError.unavailable("Unexpected answer from Verdict: a result is not an object") }
-        answers = ExactKeyed(try (json["answers"]?.members ?? []).map { ($0.key, try Answer(json: $0.value)) })
-        error = json["error"]?.string
-        model = json["model"]?.string
-        ms = json["ms"]?.double ?? 0
+        func bad(_ field: String, _ type: String) -> VerdictError { .unavailable("Unexpected answer from Verdict: \(field) is not \(type)") }
+        func optionalString(_ key: String) throws -> String? {
+            guard let value = json[key], !value.isNull else { return nil }
+            guard let s = value.string else { throw bad(key, "a string") }
+            return s
+        }
+        if let value = json["answers"], !value.isNull {
+            guard let members = value.members else { throw bad("answers", "an object") }
+            answers = ExactKeyed(try members.map { ($0.key, try Answer(json: $0.value)) })
+        } else { answers = [:] }
+        error = try optionalString("error")
+        model = try optionalString("model")
+        if let value = json["ms"], !value.isNull { guard let n = value.double else { throw bad("ms", "a number") }; ms = n } else { ms = 0 }
     }
     /// The API's JSON, ids exactly as they are (JSONEncoder would merge normalization-distinct ones).
     public var json: JSON {
@@ -185,7 +207,8 @@ extension Status.LoadedModel {
 
 // MARK: Models
 
-/// A catalog model as GET /v1/models reports it.
+/// A catalog model as GET /v1/models reports it (Verdict's fields of a model entry; `name` is the human name, the API's
+/// `display_name` — the API's own `name` is the id, TypeSafe's model name).
 public struct Model: Sendable, Codable, Equatable {
     public var id: String
     public var name: String
@@ -206,6 +229,34 @@ public struct Model: Sendable, Codable, Equatable {
     public var benchmarks: [String: Benchmark]
     public var links: [String: String]
     public var recommendation: String?
+    /// YYYY-MM-DD.
+    public var release_date: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, name = "display_name", family, inputs, params, context, languages, license, state, loadable, precision, benchmark,
+             benchmarks, links, recommendation, release_date
+    }
+    private enum LegacyKeys: String, CodingKey { case name }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        // Helpers before the System One API sent the human name as `name`.
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? decoder.container(keyedBy: LegacyKeys.self).decode(String.self, forKey: .name)
+        family = try c.decodeIfPresent(String.self, forKey: .family)
+        inputs = try c.decode([String].self, forKey: .inputs)
+        params = try c.decodeIfPresent(String.self, forKey: .params)
+        context = try c.decodeIfPresent(Int.self, forKey: .context)
+        languages = try c.decodeIfPresent(String.self, forKey: .languages)
+        license = try c.decodeIfPresent(String.self, forKey: .license)
+        state = try c.decode(String.self, forKey: .state)
+        loadable = try c.decode(Bool.self, forKey: .loadable)
+        precision = try c.decodeIfPresent(Precision.self, forKey: .precision)
+        benchmark = try c.decodeIfPresent(Benchmark.self, forKey: .benchmark)
+        benchmarks = try c.decode([String: Benchmark].self, forKey: .benchmarks)
+        links = try c.decode([String: String].self, forKey: .links)
+        recommendation = try c.decodeIfPresent(String.self, forKey: .recommendation)
+        release_date = try c.decodeIfPresent(String.self, forKey: .release_date)
+    }
 
     public struct Precision: Sendable, Codable, Equatable {
         public var selected: Int

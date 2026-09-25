@@ -13,12 +13,14 @@ verdict: judge many items with the same typed questions, locally, in millisecond
     verdict info MODEL [--json]            one model: every precision, task breakdown, source, links
     verdict load ID [--bits N] [--manual]  load on demand; --manual loads like the menu (launch set); --bits N reloads at N bits
     verdict unload ID
+    verdict url                            the local base URL for TypeSafe SDKs (base_url / baseURL / TYPESAFE_BASE_URL)
     verdict skill [--install DIR]          print the agent skill (named triage), or write DIR/triage/SKILL.md
     verdict licenses                       Verdict's NOTICE and the licences of the code it bundles
     verdict --version                      this command's version (the app's)
 
 q.json: {"name": {"type": "noul"|"choice"|"score", "instructions": "…", "criteria": …}, …}
-Talks to the Verdict app over its local HTTP API (docs/API.md); starts the app if it is not running.
+Talks to the Verdict app over its local HTTP API (docs/API.md; System One API = TypeSafe's, plus /v1/judge for
+batches); starts the app if it is not running.
 """
 
 struct CLIError: Error { let message: String; init(_ message: String) { self.message = message } }
@@ -26,6 +28,8 @@ struct CLIError: Error { let message: String; init(_ message: String) { self.mes
 /// The `verdict` command. `write`/`warn` are stdout/stderr; tests capture them.
 struct CLI {
     var verdict = Verdict(unchecked: true)
+    /// The System One client over `verdict` (judge is its batch extension).
+    var client: SystemOneClient { SystemOneClient(verdict: verdict) }
     var write: (String) -> Void = { print($0) }
     var warn: (String) -> Void = { FileHandle.standardError.write(Data(($0 + "\n").utf8)) }
     var readInput: () -> String = { String(decoding: FileHandle.standardInput.readDataToEndOfFile(), as: UTF8.self) }
@@ -107,6 +111,9 @@ struct CLI {
                 : try await verdict.unload(id)
             write(Format.list(loaded))
         case "judge": try await judge(rest)
+        case "url":
+            _ = try Arguments(rest, values: [], flags: [])
+            write(try await client.resolvedBaseURL().absoluteString)
         case "skill":
             let args = try Arguments(rest, values: ["--install"], flags: [])
             guard let text = skillText() else { throw CLIError("SKILL.md not found; is Verdict installed?") }
@@ -131,9 +138,9 @@ struct CLI {
 
     private func unknownModel(_ id: String) -> CLIError { CLIError("unknown model '\(id)'; see verdict models") }
 
-    /// /v1/models as the API ordered it, for --json output.
+    /// The catalog entries of /v1/models (local models, then hosted references) as the API ordered them, for --json.
     private func modelsJSON() async throws -> JSON {
-        try JSON.parse(try await verdict.request("GET", "/v1/models"))["models"] ?? .array([])
+        .array(Verdict.catalog(try JSON.parse(try await verdict.request("GET", "/v1/models"))))
     }
 
     func judge(_ rest: [String]) async throws {
@@ -155,7 +162,7 @@ struct CLI {
         }
         guard !items.isEmpty else { return }
         let states = items.map { item in field.map { item.members != nil ? (item[$0] ?? .null) : item } ?? item }
-        let results = try await verdict.judgeJSON(states, questions: questionsJSON, model: args.values["--model"] ?? "auto", bits: bits)
+        let results = try await client.judgeJSON(states, questions: questionsJSON, model: args.values["--model"] ?? "auto", bits: bits)
         var rows = Array(zip(items.indices, zip(items, results)))
         if let sort {
             rows = rows.enumerated().sorted { a, b in

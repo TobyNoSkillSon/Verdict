@@ -26,9 +26,13 @@ public struct Question: Sendable, Hashable, Codable {
         public func hash(into hasher: inout Hasher) { hashExactly(label, into: &hasher); hashExactly(description ?? "", into: &hasher); hasher.combine(description == nil) }
     }
 
-    public var kind: Kind
-    public var instructions: String
-    public var criteria: Criteria
+    public var kind: Kind { didSet { verbatim = nil } }
+    public var instructions: String { didSet { verbatim = nil } }
+    public var criteria: Criteria { didSet { verbatim = nil } }
+    /// The question exactly as read by `init(json:)` when the typed fields cannot hold it (structured instructions or
+    /// descriptions: objects and arrays, as TypeSafe allows; extra fields). `json` sends it unchanged; changing a
+    /// field drops it.
+    public private(set) var verbatim: JSON?
 
     public init(kind: Kind, instructions: String, criteria: Criteria = .none) {
         self.kind = kind; self.instructions = instructions; self.criteria = criteria
@@ -36,6 +40,11 @@ public struct Question: Sendable, Hashable, Codable {
 
     /// One of several named options, in order. Include an escape option (`other`, `unclear`).
     public static func choice(_ instructions: String, _ options: KeyValuePairs<String, String>) -> Question {
+        Question(kind: .choice, instructions: instructions, criteria: .described(options.map { Criterion($0.key, $0.value) }))
+    }
+    /// Named options with optional descriptions; `nil` sends JSON null (the model reads the bare label), as the
+    /// TypeSafe SDKs' `criteria={"calm": None}` does.
+    public static func choice(_ instructions: String, options: KeyValuePairs<String, String?>) -> Question {
         Question(kind: .choice, instructions: instructions, criteria: .described(options.map { Criterion($0.key, $0.value) }))
     }
     /// Options that are their own descriptions.
@@ -64,6 +73,7 @@ public struct Question: Sendable, Hashable, Codable {
 
     /// The wire format.
     public var json: JSON {
+        if let verbatim { return verbatim }
         var members: [JSON.Member] = [.init("type", .string(kind.rawValue)), .init("instructions", .string(instructions))]
         switch criteria {
         case .none: break
@@ -85,6 +95,17 @@ public struct Question: Sendable, Hashable, Codable {
         case .object(let members)?: criteria = .described(members.map { Criterion($0.key, $0.value.isNull ? nil : ($0.value.string ?? $0.value.compact)) })
         default: criteria = .none
         }
+        // Keep what the typed fields would lose (structured instructions/descriptions, extra fields, null instructions).
+        let members = json.members ?? []
+        let extra = members.contains { !["type", "instructions", "criteria"].contains($0.key) }
+        let structuredInstructions = json["instructions"].map { $0.string == nil && !$0.isNull } ?? false
+        let structuredCriteria: Bool
+        switch json["criteria"] {
+        case .array(let values)?: structuredCriteria = values.contains { $0.string == nil }
+        case .object(let entries)?: structuredCriteria = entries.contains { $0.value.string == nil && !$0.value.isNull }
+        default: structuredCriteria = false
+        }
+        if extra || structuredInstructions || structuredCriteria { verbatim = json }
     }
 
     public init(from decoder: Decoder) throws { try self.init(json: try JSON(from: decoder)) }

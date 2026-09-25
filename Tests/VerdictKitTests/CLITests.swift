@@ -183,6 +183,11 @@ final class CLIBinaryTests: XCTestCase {
         r = try run(["info", "nope"])
         XCTAssertEqual(r.err, "error: unknown model 'nope'; see verdict models\n")
 
+        r = try run(["models", "--json"])
+        XCTAssertEqual(try JSON.parse(r.out).array?.compactMap { $0["id"]?.string }.last, "jev", "the hosted reference is still listed")
+        r = try run(["url"])
+        XCTAssertEqual(r.out, "http://127.0.0.1:\(helper.port)\n")
+
         r = try run(["skill"])
         XCTAssertTrue(r.out.hasPrefix("---\nname: triage"), r.out)
         r = try run(["skill", "--install", helper.support.appendingPathComponent("skills").path])

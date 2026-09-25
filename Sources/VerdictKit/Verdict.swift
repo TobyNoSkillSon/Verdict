@@ -125,7 +125,7 @@ public struct Verdict: Sendable {
         catch { throw VerdictError.unavailable("Verdict did not answer: \(error.localizedDescription)") }
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard code == 200 else {
-            let message = ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["error"] as? String
+            let message = SystemOneClient.message(data)
             // Helpers before the versioned API answer every /v1 path with a bare "not found".
             if code == 404, message == "not found", path.hasPrefix("/v1/") {
                 throw VerdictError.unavailable("The running Verdict predates the v1 API; update it (git pull && scripts/install.sh)")
@@ -175,6 +175,8 @@ public struct Verdict: Sendable {
             let reply: JSON
             do { reply = try JSON.parse(data) } catch { throw VerdictError.unavailable("Unexpected answer from Verdict: \(error.localizedDescription)") }
             guard let results = reply["results"]?.array else { throw VerdictError.unavailable("Unexpected answer from Verdict: no results") }
+            let sent = body["items"]?.array?.count ?? 0
+            guard results.count == sent else { throw VerdictError.unavailable("Unexpected answer from Verdict: \(results.count) results for \(sent) items") }
             out += results
         }
         return out
@@ -196,10 +198,14 @@ public struct Verdict: Sendable {
 
     public func status() async throws -> Status { try decode(Status.self, try await request("GET", "/v1/status")) }
 
-    /// The catalog with each model's state, precision and measured figures.
+    /// The catalog with each model's state, precision and measured figures: the local models of GET /v1/models, then
+    /// its `references` (hosted models shown for comparison). The `auto` alias is not a model and is left out.
     public func models() async throws -> [Model] {
-        struct Reply: Decodable { let models: [Model] }
-        return try decode(Reply.self, try await request("GET", "/v1/models")).models
+        try Self.catalog(try JSON.parse(try await request("GET", "/v1/models"))).map { try decode(Model.self, Data($0.compact.utf8)) }
+    }
+    /// The catalog entries of a GET /v1/models body, as JSON (entries with an `id`: models, then references).
+    public static func catalog(_ reply: JSON) -> [JSON] {
+        ((reply["models"]?.array ?? []) + (reply["references"]?.array ?? [])).filter { $0["id"]?.string != nil }
     }
 
     /// Loads a model (downloading it the first time). `bits` reloads it at that precision (0 = native). `manual`

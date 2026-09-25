@@ -289,6 +289,12 @@ extension JSON: Codable {
     public func encode(to encoder: Encoder) throws {
         switch self {
         case .object(let members):
+            // Foundation's encoders key containers by Swift String equality, which folds canonically equivalent keys
+            // ("é" / "e\u{301}") into one: refuse instead of silently dropping a member (`compact` keeps both).
+            if Set(members.map(\.key)).count < members.count {
+                throw EncodingError.invalidValue(self, .init(codingPath: encoder.codingPath, debugDescription:
+                    "object keys that differ only by Unicode normalization (or repeat) would be merged by this encoder; use JSON.compact"))
+            }
             var c = encoder.container(keyedBy: CodingName.self)
             for m in members { try c.encode(m.value, forKey: CodingName(stringValue: m.key)) }
         case .array(let values):
