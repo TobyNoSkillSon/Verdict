@@ -19,7 +19,7 @@ Quitting Verdict stops the worker; nothing else keeps the models loaded.
 
 ## Client
 
-`verdict` (installed by `scripts/build.sh` into `~/.local/bin`) is both a CLI and an importable module.
+`verdict` (installed by `scripts/install.sh` into `~/.local/bin`) is both a CLI and an importable module.
 
 ```
 verdict status
@@ -61,7 +61,7 @@ POST /quit
 
 ## Adding models
 
-`Resources/models.json` is the catalog. A candidate needs: open weights with a licence that allows local use, a typed-question interface over choice / score / yes-no with per-answer probabilities, and an architecture that can be implemented on mlx-swift. Add the entry, implement a `DecisionModel` + `ModelLoader` in `native/Sources/VerdictEngine`, register it in `native/Sources/VerdictHelper/Registry.swift`, prove parity against the model's reference implementation on fixed fixtures, then run `scripts/benchmark.py`.
+`Resources/models.json` is the catalog. A candidate needs: open weights with a licence that allows local use, a typed-question interface over choice / score / yes-no with per-answer probabilities, and an architecture that can be implemented on mlx-swift. Add the entry, implement a `DecisionModel` + `ModelLoader` in `Sources/VerdictEngine`, register it in `Sources/VerdictHelper/Registry.swift`, prove parity against the model's reference implementation on fixed fixtures, then measure accuracy, calibration and speed before adding its numbers to `Resources/benchmarks.json`.
 
 ## Troubleshooting
 

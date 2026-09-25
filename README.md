@@ -233,7 +233,7 @@ The recorded benchmark runs a 25-task suite (topic, intent, emotion, review star
 
 **Limits.** Each judgement sees one item, not the whole collection. Sort scores in code; do not expect cross-item reasoning. Use ordinary code for counting, arithmetic and date comparisons. Keep choice labels distinct, include an escape option, and write rubric levels as checkable situations. Test domain-specific rules on labelled examples before relying on them.
 
-**Catalog.** Models and recorded text measurements live in [`Resources/models.json`](Resources/models.json) and [`Resources/benchmarks.json`](Resources/benchmarks.json). See [adding models](docs/USAGE.md#adding-models) for the runtime and interface requirements. `scripts/watch.py` reports what is new in this class since its last run — Hugging Face tags and Laya derivatives, GitHub topics, Hacker News, and updates to the pinned runtime packages — with Verdict itself filtering out the unrelated.
+**Catalog.** Models and recorded text measurements live in [`Resources/models.json`](Resources/models.json) and [`Resources/benchmarks.json`](Resources/benchmarks.json). See [adding models](docs/USAGE.md#adding-models) for the runtime and interface requirements.
 
 </details>
 
