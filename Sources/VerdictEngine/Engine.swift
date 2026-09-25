@@ -108,6 +108,21 @@ public enum ItemResult: Sendable {
     case error(String)                  // per-item failure; the batch continues
 }
 
+/// One request's share of a merged pass: its items and the questions every one of them is asked.
+public struct RequestGroup: Sendable {
+    public let items: [Item]
+    public let questions: [Question]
+    public init(items: [Item], questions: [Question]) { self.items = items; self.questions = questions }
+}
+
+/// A group's results in item order, and the tokens each item's rows fed the model (0 for an item refused before
+/// inference).
+public struct GroupResult: Sendable {
+    public var results: [ItemResult]
+    public var inputTokens: [Int]
+    public init(results: [ItemResult], inputTokens: [Int]) { self.results = results; self.inputTokens = inputTokens }
+}
+
 public protocol DecisionModel: AnyObject {
     /// Catalog id, e.g. "laya-english".
     var id: String { get }
@@ -116,8 +131,27 @@ public protocol DecisionModel: AnyObject {
     var contextLimit: Int { get }
     /// Answer every question for every item. Batch across items internally (up to 64 rows per pass).
     func predict(_ items: [Item], _ questions: [Question]) throws -> [ItemResult]
+    /// Several requests in one pass (the helper's micro-batching): rows of every group are sorted and chunked
+    /// together under the same rules as one `predict` call, then scattered back per group. A single group gives
+    /// exactly `predict(items, questions)`. Throws when any group's questions are invalid (the caller then runs
+    /// the groups one by one so only the offending request fails).
+    func predict(groups: [RequestGroup]) throws -> [GroupResult]
     /// Bytes of weights resident, for status.json memory reporting.
     var residentBytes: Int { get }
+}
+
+extension DecisionModel {
+    /// Groups one after another (no merging); input tokens from `tokenCount`. Models that batch override it.
+    public func predict(groups: [RequestGroup]) throws -> [GroupResult] {
+        try groups.map { group in
+            let results = try predict(group.items, group.questions)
+            let tokens = try zip(group.items, results).map { item, result -> Int in
+                if case .answers = result { return try tokenCount(item, group.questions) * group.questions.count }
+                return 0
+            }
+            return GroupResult(results: results, inputTokens: tokens)
+        }
+    }
 }
 
 /// Loads a model family from a local snapshot directory (Hugging Face cache layout).

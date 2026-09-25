@@ -141,26 +141,38 @@ public final class LayaModel: DecisionModel, KernelPathReporting, InferencePathS
     }
 
     public func predict(_ items: [Item], _ questions: [Question]) throws -> [ItemResult] {
-        guard !questions.isEmpty else { throw LayaError.invalid("questions must be a nonempty object") }
+        try predict(groups: [RequestGroup(items: items, questions: questions)])[0].results
+    }
+
+    /// Every group's rows in one sorted, chunked pass. Rows are laid out group by group, item by item, question by
+    /// question, so one group is exactly the single-request pass.
+    public func predict(groups: [RequestGroup]) throws -> [GroupResult] {
+        guard groups.allSatisfy({ !$0.questions.isEmpty }) else { throw LayaError.invalid("questions must be a nonempty object") }
         try OptimizedPathFault.check(optimized: optimizedPathActive)
         let clock = ContinuousClock(), t0 = clock.now
-        let prepared = try questions.map(cachedQuestion)
-        let questionCount = prepared.map(\.count).max() ?? 0
-        let templates = prepared.map(\.template)
-        var results = Array(repeating: ItemResult.answers([:]), count: items.count)
-        var answers = Array(repeating: Answers(), count: items.count)
-        var rows: [LayaPreparedRow] = [], metadata: [(Int, Question)] = []
-        let states = encodeStates(items.map(\.text))
-        for (i, _) in items.enumerated() {
-            let state = states[i]
-            let count = state.count + questionCount + 8
-            if count > contextLimit {
-                results[i] = .error("Item needs about \(count) tokens; \(id) accepts \(contextLimit). Shorten it or split it.")
-                continue
-            }
-            for (question, template) in zip(questions, templates) {
-                rows.append(prompt.row(stateIDs: state.ids, template: template))
-                metadata.append((i, question))
+        let prepared = try groups.map { try $0.questions.map(cachedQuestion) }
+        var results = groups.map { Array(repeating: ItemResult.answers([:]), count: $0.items.count) }
+        var answers = groups.map { Array(repeating: Answers(), count: $0.items.count) }
+        var tokens = groups.map { Array(repeating: 0, count: $0.items.count) }
+        var rows: [LayaPreparedRow] = [], metadata: [(group: Int, item: Int, question: Question)] = []
+        let states = encodeStates(groups.flatMap { $0.items.map(\.text) })
+        var next = 0
+        for (g, group) in groups.enumerated() {
+            let questionCount = prepared[g].map(\.count).max() ?? 0
+            let templates = prepared[g].map(\.template)
+            for i in group.items.indices {
+                let state = states[next]; next += 1
+                let count = state.count + questionCount + 8
+                if count > contextLimit {
+                    results[g][i] = .error("Item needs about \(count) tokens; \(id) accepts \(contextLimit). Shorten it or split it.")
+                    continue
+                }
+                for (question, template) in zip(group.questions, templates) {
+                    let row = prompt.row(stateIDs: state.ids, template: template)
+                    tokens[g][i] += row.ids.count
+                    rows.append(row)
+                    metadata.append((g, i, question))
+                }
             }
         }
         let t1 = clock.now
@@ -179,11 +191,11 @@ public final class LayaModel: DecisionModel, KernelPathReporting, InferencePathS
             let chunk = slots.map { rows[$0] }
             let values = try collect(output, rows: chunk)
             for (r, row) in chunk.enumerated() {
-                let (index, question) = metadata[slots[r]]
-                answers[index][question.id] = answer(values[r], optionCount: row.markers.count, question: question)
+                let (g, index, question) = metadata[slots[r]]
+                answers[g][index][question.id] = answer(values[r], optionCount: row.markers.count, question: question)
             }
         }
-        let g = clock.now
+        let gpuStart = clock.now
         var inflight: ([Int], MLXArray)? = nil
         for slots in chunks(order, rows: rows) {
             let chunk = slots.map { rows[$0] }
@@ -193,14 +205,16 @@ public final class LayaModel: DecisionModel, KernelPathReporting, InferencePathS
             inflight = (slots, output)
         }
         if let (previous, previousOutput) = inflight { try finish(previous, previousOutput) }
-        gpu = clock.now - g
-        for i in items.indices { if case .answers = results[i] { results[i] = .answers(answers[i]) } }
+        gpu = clock.now - gpuStart
+        for g in groups.indices {
+            for i in groups[g].items.indices { if case .answers = results[g][i] { results[g][i] = .answers(answers[g][i]) } }
+        }
         if Self.profile {
             let total = clock.now - t0, real = rows.reduce(0) { $0 + $1.ids.count }
             func ms(_ d: Duration) -> String { String(format: "%.1f", Double(d.components.attoseconds) / 1e15 + Double(d.components.seconds) * 1000) }
-            FileHandle.standardError.write(Data("profile \(id) items=\(items.count) rows=\(rows.count) tokens=\(real) padded=\(padded) prepare=\(ms(t1 - t0))ms forward=\(ms(gpu))ms post=\(ms(total - (t1 - t0) - gpu))ms total=\(ms(total))ms\n".utf8))
+            FileHandle.standardError.write(Data("profile \(id) items=\(states.count) rows=\(rows.count) tokens=\(real) padded=\(padded) prepare=\(ms(t1 - t0))ms forward=\(ms(gpu))ms post=\(ms(total - (t1 - t0) - gpu))ms total=\(ms(total))ms groups=\(groups.count)\n".utf8))
         }
-        return results
+        return groups.indices.map { GroupResult(results: results[$0], inputTokens: tokens[$0]) }
     }
 
     /// Tokenize item texts across CPU cores. Same tokenizer function, same tokens; the

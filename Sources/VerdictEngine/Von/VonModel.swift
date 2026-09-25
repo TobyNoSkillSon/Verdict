@@ -287,29 +287,39 @@ public final class VonModel: DecisionModel, KernelPathReporting, InferencePathSw
     private func needsNull(_ q: Question) -> Bool { q.kind == .noul && q.criteria.allSatisfy { $0.1.isEmpty } }
 
     public func predict(_ items: [Item], _ questions: [Question]) throws -> [ItemResult] {
-        guard !questions.isEmpty else { throw VonError.invalid("Questions must be nonempty") }
+        try predict(groups: [RequestGroup(items: items, questions: questions)])[0].results
+    }
+
+    /// Every group's rows in one sorted, chunked pass; one group is exactly the single-request pass.
+    public func predict(groups: [RequestGroup]) throws -> [GroupResult] {
+        guard groups.allSatisfy({ !$0.questions.isEmpty }) else { throw VonError.invalid("Questions must be nonempty") }
         try OptimizedPathFault.check(optimized: optimizedPathActive)
         let clock = ContinuousClock(), t0 = clock.now
-        var results = [Answers](repeating: Answers(), count: items.count)
-        var errors: [Int:String] = [:]
-        var rows: [VonPreparedRow] = [], meta: [(item: Int, question: Int)] = []
+        var results = groups.map { [Answers](repeating: Answers(), count: $0.items.count) }
+        var errors = groups.map { _ in [Int: String]() }
+        var tokens = groups.map { [Int](repeating: 0, count: $0.items.count) }
+        var rows: [VonPreparedRow] = [], meta: [(group: Int, item: Int, question: Int)] = []
         // Validation and tokenization first: no forward pass (not even the cached null pass) runs before every
         // row is known to fit the context and carry exactly its options' markers.
-        var infos = try questions.map(cachedQuestion)
-        let states = items.map(state)
-        var stateTokens = [Int](repeating: 1, count: items.count)
-        for (i,s) in states.enumerated() {
-            let prepared = zip(questions, infos).map { row(pack(s, $0.instructions, $1.texts)) }
-            let count = prepared.map { $0.ids.count }.max() ?? 0
-            if count > contextLimit { errors[i] = "Item needs about \(count) tokens; Von accepts \(contextLimit)."; continue }
-            if zip(prepared, infos).contains(where: { $0.markers.count != $1.texts.count }) { errors[i] = markerMessage; continue }
-            // Calibration input: the state's own token count, once per item (was once per row).
-            stateTokens[i] = max(1, encode(s, addSpecialTokens: false).count)
-            for (q,r) in prepared.enumerated() { rows.append(r); meta.append((i,q)) }
+        var infos = try groups.map { try $0.questions.map(cachedQuestion) }
+        var stateTokens = groups.map { [Int](repeating: 1, count: $0.items.count) }
+        var groupHasRows = [Bool](repeating: false, count: groups.count)
+        for (g, group) in groups.enumerated() {
+            for (i, item) in group.items.enumerated() {
+                let s = state(item)
+                let prepared = zip(group.questions, infos[g]).map { row(pack(s, $0.instructions, $1.texts)) }
+                let count = prepared.map { $0.ids.count }.max() ?? 0
+                if count > contextLimit { errors[g][i] = "Item needs about \(count) tokens; Von accepts \(contextLimit)."; continue }
+                if zip(prepared, infos[g]).contains(where: { $0.markers.count != $1.texts.count }) { errors[g][i] = markerMessage; continue }
+                // Calibration input: the state's own token count, once per item (was once per row).
+                stateTokens[g][i] = max(1, encode(s, addSpecialTokens: false).count)
+                for (q, r) in prepared.enumerated() { rows.append(r); meta.append((g, i, q)); tokens[g][i] += r.ids.count }
+                groupHasRows[g] = true
+            }
         }
         let tn = clock.now
-        if !rows.isEmpty {
-            for q in infos.indices { infos[q].null = try nullBias(questions[q], infos[q]) }
+        for g in groups.indices where groupHasRows[g] {
+            for q in infos[g].indices { infos[g][q].null = try nullBias(groups[g].questions[q], infos[g][q]) }
         }
         let t1 = clock.now
         // Rows in length order, chunks of <= 64 rows under the token budget (as Laya fp16): less padding and bounded
@@ -334,10 +344,11 @@ public final class VonModel: DecisionModel, KernelPathReporting, InferencePathSw
             if !values.allSatisfy({ $0.allSatisfy(\.isFinite) }) { nonFinite = true; return }
             if Self.trace { log(chunk, values) }
             for (r,lg) in values.enumerated() {
-                let (i,q) = meta[slots[r]]
+                let (g,i,q) = meta[slots[r]]
+                let info = infos[g][q], question = groups[g].questions[q]
                 // Validated above; never map a different number of logits onto the labels.
-                guard lg.count == infos[q].keys.count else { errors[i] = markerMessage; continue }
-                results[i][questions[q].id] = answer(lg, stateTokens: stateTokens[i], question: questions[q], keys: infos[q].keys, null: infos[q].null)
+                guard lg.count == info.keys.count else { errors[g][i] = markerMessage; continue }
+                results[g][i][question.id] = answer(lg, stateTokens: stateTokens[g][i], question: question, keys: info.keys, null: info.null)
             }
         }
         // Double-buffered: queue chunk k+1 before reading chunk k (at most two chunks in flight).
@@ -356,9 +367,13 @@ public final class VonModel: DecisionModel, KernelPathReporting, InferencePathSw
         if Self.profile {
             let t2 = clock.now, real = rows.reduce(0) { $0 + $1.ids.count }
             func ms(_ d: Duration) -> String { String(format: "%.1f", Double(d.components.attoseconds) / 1e15 + Double(d.components.seconds) * 1000) }
-            FileHandle.standardError.write(Data("profile \(id) items=\(items.count) rows=\(rows.count) chunks=\(chunks.count) tokens=\(real) padded=\(padded) prepare=\(ms(tn - t0))ms null=\(ms(t1 - tn))ms forward+post=\(ms(t2 - t1))ms\n".utf8))
+            let itemCount = groups.reduce(0) { $0 + $1.items.count }
+            FileHandle.standardError.write(Data("profile \(id) items=\(itemCount) rows=\(rows.count) chunks=\(chunks.count) tokens=\(real) padded=\(padded) prepare=\(ms(tn - t0))ms null=\(ms(t1 - tn))ms forward+post=\(ms(t2 - t1))ms groups=\(groups.count)\n".utf8))
         }
-        return items.indices.map { errors[$0].map(ItemResult.error) ?? .answers(results[$0]) }
+        return groups.indices.map { g in
+            GroupResult(results: groups[g].items.indices.map { i in errors[g][i].map(ItemResult.error) ?? .answers(results[g][i]) },
+                        inputTokens: groups[g].items.indices.map { errors[g][$0] == nil ? tokens[g][$0] : 0 })
+        }
     }
 }
 
