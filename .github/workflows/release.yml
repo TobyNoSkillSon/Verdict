@@ -80,7 +80,8 @@ jobs:
 
       - name: No attestation in a private repository
         if: ${{ github.event.repository.private }}
-        run: echo "::warning::Private repository: build provenance is not attested (GitHub stores attestations for public repositories only)"
+        run: |
+          echo "::warning::Private repository: build provenance is not attested (GitHub stores attestations for public repositories only)"
 
       - name: Draft release
         env:
