@@ -1,6 +1,6 @@
 import XCTest
 
-/// Review 3 R3.1: the app must carry Verdict's LICENSE and NOTICE and the licences of every linked package
+/// The app must carry Verdict's LICENSE and NOTICE and the licences of every linked package
 /// (Resources/THIRD_PARTY_NOTICES.txt, written by scripts/third-party-notices.py), and build.sh must ship them.
 final class NoticesTests: XCTestCase {
     static let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -37,7 +37,7 @@ final class NoticesTests: XCTestCase {
         for line in ["Copyright (c) 2023 ml-explore", "Copyright © 2023 Apple Inc.", "Niels Lohmann", "Victor Zverovich",
                      "Max-Planck-Society", "Jakob Progsch", "NVIDIA Corporation", "YaoYuan", "Copyright 2025 Mattt",
                      "Runtime Library Exception", "The SwiftCrypto Project",
-                     // Review 3 re-check N1: vendored MLX code with its own notice (MLX's ACKNOWLEDGMENTS.md omits them).
+                     // Vendored MLX code with its own notice (MLX's ACKNOWLEDGMENTS.md omits them).
                      "Copyright © 2018 the V8 project authors.", "Copyright (c) 2015-2023 Norbert Juffa",
                      "SPDX-FileCopyrightText: 2009 Florian Loitsch", "Copyright (c) 2009 Florian Loitsch",
                      "SPDX-FileCopyrightText: 2008-2009 Björn Hoehrmann", "SPDX-FileCopyrightText: 2016-2021 Evan Nemerson",
@@ -64,7 +64,7 @@ final class NoticesTests: XCTestCase {
         }
     }
 
-    /// Review 3 re-check N1: every copyright holder named in a vendored C, C++ or Metal source of the pinned checkouts
+    /// Every copyright holder named in a vendored C, C++ or Metal source of the pinned checkouts
     /// (MLX, mlx-c, fmt, nlohmann/json, metal-cpp, the generated JIT kernels, yyjson) is named in the notices. Apple's
     /// own headers are covered by the package licences. Tests, fuzzers and docs are not compiled and are skipped.
     func testEveryVendoredCopyrightHolderIsInTheNotices() throws {
@@ -101,7 +101,7 @@ final class NoticesTests: XCTestCase {
         XCTAssertEqual(missing, [:], "copyright holders absent from THIRD_PARTY_NOTICES.txt (add them to scripts/third-party-notices.py)")
     }
 
-    /// Review 3 re-check N5: the release zip has no AppleDouble (._*) or __MACOSX entries, and an app extracted
+    /// The release zip has no AppleDouble (._*) or __MACOSX entries, and an app extracted
     /// with /usr/bin/unzip still verifies. scripts/release-zip.sh makes and checks the archive for package-release.sh;
     /// here it runs on a small ad-hoc signed app carrying an extended attribute (a stand-in for com.apple.provenance).
     func testReleaseZipHasNoAppleDoubleAndVerifiesAfterUnzip() throws {

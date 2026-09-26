@@ -75,7 +75,7 @@ final class SystemOneWireTests: XCTestCase {
         XCTAssertEqual(m(#"{"detail":"Method Not Allowed"}"#), "Method Not Allowed")
     }
 
-    /// Review 3 N2: Foundation's encoders fold normalization-distinct keys; JSON and Questions refuse instead.
+    /// Foundation's encoders fold normalization-distinct keys; JSON and Questions refuse instead.
     func testCodableEncodingRefusesNormalizationCollisions() throws {
         let json = JSON.object([.init("\u{E9}", 1), .init("e\u{301}", 2)])
         XCTAssertThrowsError(try JSONEncoder().encode(json)) { XCTAssertTrue($0 is EncodingError) }
@@ -88,7 +88,7 @@ final class SystemOneWireTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode(Questions.self, from: JSONEncoder().encode(ordinary)), ordinary)
     }
 
-    /// Review 3 N4: a present but wrong-typed field throws instead of reading as absent.
+    /// A present but wrong-typed field throws instead of reading as absent.
     func testAnswerAndJudgementRefuseWrongTypes() throws {
         for body in [#"{"noul":"0.9"}"#, #"{"score":true}"#, #"{"confidence":null}"#, #"{"choice":1}"#,
                      #"{"probabilities":{"a":null}}"#, #"{"probabilities":[0.5]}"#, #"{"calibrated":"no"}"#] {

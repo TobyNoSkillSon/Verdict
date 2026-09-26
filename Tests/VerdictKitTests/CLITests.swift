@@ -59,7 +59,7 @@ final class CLIFormatTests: XCTestCase {
         XCTAssertEqual(Format.line(index: 0, item: .string(long), result: result, field: nil, order: ["a"]).hasSuffix("| " + String(repeating: "é", count: 60)), true)
     }
 
-    /// Review 3 R3.2: --sort and the answer order find ids by their exact bytes ("é" and "e\u{301}" are two ids).
+    /// --sort and the answer order find ids by their exact bytes ("é" and "e\u{301}" are two ids).
     func testJudgeLineAndSortKeepNormalizationDistinctIds() throws {
         let result = try JSON.parse(#"{"answers":{"e\u0301":{"noul":0.9},"\#u{E9}":{"noul":0.1}},"model":"m","ms":1}"#)
         XCTAssertEqual(Format.sortKey(result, "e\u{301}"), 0.9)

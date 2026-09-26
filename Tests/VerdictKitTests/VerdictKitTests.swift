@@ -63,7 +63,7 @@ final class WireTests: XCTestCase {
         XCTAssertEqual(results[1].error, "too long"); XCTAssertNil(results[1].model); XCTAssertFalse(results[1].ok)
     }
 
-    /// Review 3 R3.2: ids and labels that differ only by Unicode normalization are distinct, as the API sends them.
+    /// Ids and labels that differ only by Unicode normalization are distinct, as the API sends them.
     /// Swift's String == and Dictionary fold "é" (U+00E9) and "e\u{301}"; VerdictKit compares exact UTF-8 bytes.
     func testNormalizationDistinctIdsAndLabelsStayDistinct() throws {
         let composed = "\u{E9}", decomposed = "e\u{301}"
@@ -98,7 +98,7 @@ final class WireTests: XCTestCase {
         XCTAssertNotEqual(built, Judgement(answers: [composed: Answer(noul: 0.1), composed: Answer(noul: 0.9)]))
     }
 
-    /// Review 3 re-check: exact keys are unique (first wins, like lookup), so == is symmetric and agrees with hash;
+    /// Exact keys are unique (first wins, like lookup), so == is symmetric and agrees with hash;
     /// JSONEncoder would fold normalization-distinct keys, so encoding refuses them instead of losing one, and
     /// `json` is the exact serialization.
     func testExactKeyedIsASetOfExactKeysAndNeverEncodesLossily() throws {
@@ -200,7 +200,7 @@ final class HelperTests: XCTestCase {
     }
 
     func testJudgeBitsRequireThePrecision() async throws {
-        // bits never switch the model every client shares (final review F1): 409 unless it runs at them.
+        // bits never switch the model every client shares: 409 unless it runs at them.
         _ = try await verdict.judge(["x"], ["x": .noul("Is it?")], model: "laya-english", bits: 16)
         var status = try await verdict.status()
         XCTAssertEqual(status.models["laya-english"]?.bits, 0)
@@ -270,7 +270,7 @@ final class HelperTests: XCTestCase {
         XCTAssertEqual(models["laya-english"]?.precision?.selected, 8)
     }
 
-    /// Review 3 R3.3: /v1/models precision.selected is exactly what a load without bits uses, including a selection
+    /// /v1/models precision.selected is exactly what a load without bits uses, including a selection
     /// the app's table saves while the helper runs; explicit bits last while that model stays loaded.
     func testSelectedPrecisionIsWhatALoadWithoutBitsUses() async throws {
         let config = helper.support.appendingPathComponent("config.json")
@@ -333,7 +333,7 @@ final class HelperTests: XCTestCase {
         XCTAssertEqual(got9, 8)
     }
 
-    /// Review 3 R3.6: precisions and minutes are whole numbers; 4.9 is refused (400), never truncated to 4, and the
+    /// Precisions and minutes are whole numbers; 4.9 is refused (400), never truncated to 4, and the
     /// loaded model is unchanged.
     func testFractionalAndNonNumericIntegersAreRefused() async throws {
         try await verdict.load("laya-english", bits: 8)

@@ -223,7 +223,7 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(status.models["von-1.2"]?.engine_reason, "tokenizer format not recognised")
     }
 
-    /// Review 2 R2.4: a model on the MLX label with the fast tokenizer still active is partly optimized, not stock.
+    /// A model on the MLX label with the fast tokenizer still active is partly optimized, not stock.
     func testEngineTooltipForAPartlyOptimizedModel() {
         let partial = LoadedModel(device: "mlx", load_s: 1, bits: 16,
                                   optimizations: Optimizations(tokenizer: "fast", attention: "stock", matmul: "neural accelerators", optimized: false),

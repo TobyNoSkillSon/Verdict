@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import VerdictCore
 
-/// Transparent host so NSMenu supplies its own material and shadow (same as Vella).
+/// Transparent host so NSMenu supplies its own material and shadow.
 final class MenuTableHostingView: NSHostingView<ModelTable> {
     override var allowsVibrancy: Bool { true }
 }

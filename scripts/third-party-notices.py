@@ -30,7 +30,7 @@ INVENTORY = [
     ('mlx-swift', 'ThreadPool (adapted in MLX)', 'thread pool inside MLX', 'zlib', [('Source/Cmlx/mlx/mlx/threadpool.h', (1, 20))]),
     ('mlx-swift', 'NVIDIA CCCL complex math (adapted in MLX Metal kernels)', 'complex exponential kernel', 'Apache-2.0',
      [('Source/Cmlx/mlx/mlx/backend/metal/kernels/cexpf.h', (1, 18))]),
-    # Review 3 re-check N1: vendored code with its own notice that MLX's ACKNOWLEDGMENTS.md omits.
+    # Vendored code with its own notice that MLX's ACKNOWLEDGMENTS.md omits.
     # Tests/VerdictCoreTests/NoticesTests checks every copyright holder in the vendored C/C++/Metal sources is named here.
     ('mlx-swift', 'SmallVector from V8 (adapted in MLX)', 'small-vector container behind MLX array shapes and strides',
      'BSD-3-Clause', [('Source/Cmlx/mlx/mlx/small_vector.h', (1, 28))]),

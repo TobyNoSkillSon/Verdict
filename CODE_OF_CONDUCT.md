@@ -36,7 +36,7 @@ This Code of Conduct applies within all community spaces, and also applies when 
 
 ## Enforcement
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the community leaders responsible for enforcement at the maintainer privately through GitHub: open a private report at https://github.com/TobyNoSkillSon/Verdict/security/advisories/new and start its title with "Conduct:" (the form is GitHub's private vulnerability reporting; only the maintainer can read it). All complaints will be reviewed and investigated promptly and fairly.
+Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the maintainer privately through GitHub: open a private report at https://github.com/TobyNoSkillSon/Verdict/security/advisories/new and start its title with "Conduct:" (the form is GitHub's private vulnerability reporting; only the maintainer can read it). All complaints will be reviewed and investigated promptly and fairly.
 
 All community leaders are obligated to respect the privacy and security of the reporter of any incident.
 
