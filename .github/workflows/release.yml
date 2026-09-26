@@ -70,10 +70,17 @@ jobs:
           cd "dist/$VERSION"
           shasum -a 256 -c SHA256SUMS
 
+      # GitHub stores attestations for public repositories only (user-owned private ones get "Feature not available").
+      # A private copy of this repository (a CI scratch run) still builds and drafts the release, without the attestation.
       - name: Attest build provenance
+        if: ${{ !github.event.repository.private }}
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: dist/${{ steps.version.outputs.version }}/Verdict-${{ steps.version.outputs.version }}-arm64.zip
+
+      - name: No attestation in a private repository
+        if: ${{ github.event.repository.private }}
+        run: echo "::warning::Private repository: build provenance is not attested (GitHub stores attestations for public repositories only)"
 
       - name: Draft release
         env:
