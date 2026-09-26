@@ -18,7 +18,7 @@ Quitting Verdict stops the worker; nothing else keeps the models loaded.
 
 ## Command line and libraries
 
-Everything below is a client of Verdict's local HTTP API: TypeSafe's System One API (so the official TypeSafe SDKs work too; `verdict url` gives their base URL) plus Verdict's batch and management endpoints. [API.md](API.md) documents it (discovery, every endpoint, errors, security, differences from Jev, examples in curl, Python, Swift and JavaScript).
+Everything below is a client of Verdict's local HTTP API: an endpoint compatible with the System One API (TypeSafe Jev), which works with the TypeSafe SDK (`verdict url` gives its base URL), plus Verdict's batch and management endpoints. [API.md](API.md) documents it (discovery, every endpoint, errors, security, differences from Jev, examples in curl, Python, Swift and JavaScript).
 
 `verdict` (a link in `~/.local/bin` to the app's `Contents/Helpers/verdict`, made by `scripts/install.sh`):
 
@@ -43,9 +43,9 @@ from verdict import judge, gate, calibrate, Noul, Choice, Score, status, models,
 results = judge(items, questions, model="auto")   # a list in, a list of Results out; one item in, one Result out
 ```
 
-For one state at a time, use the official TypeSafe SDK (`pip install typesafe-sdk`) with `base_url=verdict.base_url()`, any API key and `model="auto"`; the library above adds batches, `gate`, `calibrate`, model management and starting the app.
+For one state at a time, use the TypeSafe SDK (`pip install typesafe-sdk`) with `base_url=verdict.base_url()`, any API key and `model="auto"`; the library above adds batches, `gate`, `calibrate`, model management and starting the app.
 
-Swift code uses VerdictKit, a library product of this package: `let client = SystemOneClient()`, then `client.systemOne(state:questions:)` (the TypeSafe SDK's shape) or `client.judge(items:questions:)` for batches.
+Swift code uses VerdictKit, a library product of this package: `let client = SystemOneClient()`, then `client.systemOne(state:questions:)` (the TypeSafe SDK's call shape) or `client.judge(items:questions:)` for batches.
 
 `items` can be strings or dicts (Laya sees a dict as JSON, Von as `key: value` lines, so name the fields; a string stays a string even when it looks like JSON). Choice labels must be unique. Von reserves `[MASK]` for its option markers: an item containing it gets a per-item error, and a question containing it is refused. Items with image, audio or video paths return a per-item error; Verdict judges text. An item longer than its model's context returns a per-item error in its position — nothing is truncated.
 

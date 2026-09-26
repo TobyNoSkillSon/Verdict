@@ -118,17 +118,19 @@ final class SystemOneHelperTests: XCTestCase {
     func testSystemOneAllTypesAndDiscovery() async throws {
         let base = try await client.resolvedBaseURL()
         XCTAssertEqual(base.absoluteString, "http://127.0.0.1:\(helper.port)")
-        let r = try await client.systemOne(state: "I was charged twice. Please help ASAP.", questions: [
-            "billing": .noul("Is this about billing?"),
-            "tone": .choice("What is the tone?", options: ["calm": nil, "angry": nil]),
-            "urgency": .score("How urgent is this?", levels: ["low", "medium", "high"]),
+        // The SystemOneClient docstring's example, verbatim.
+        let pr = try await client.systemOne(state: ["title": "Bump lodash to 4.17.21", "files": "package.json, yarn.lock"], questions: [
+            "deps": .noul("Does this pull request only change dependencies?"),
+            "area": .choice("Which part of the codebase does it touch?", labels: ["frontend", "backend", "build"]),
+            "risk": .score("How risky is merging it without review?", levels: ["harmless", "worth a glance", "needs a reviewer"]),
         ])
+        let r = pr
         XCTAssertEqual(r.model, "laya-english", "auto routes English text to laya-english")
-        XCTAssertEqual(r.nouls["billing"]?.noul, 0.75)
-        XCTAssertEqual(r.choices["tone"]?.choice, "calm")
-        XCTAssertEqual(r.scores["urgency"]?.score, 1)
-        XCTAssertEqual(r.scores["urgency"]?.legend, [0: "low", 1: "medium", 2: "high"])
-        XCTAssertEqual(r.raw["answers"]?["billing"], .object([.init("noul", 0.75), .init("type", "noul")]), "a noul answer is {type, noul} only")
+        XCTAssertEqual(pr.nouls["deps"]?.noul, 0.75)
+        XCTAssertEqual(pr.choices["area"]?.choice, "frontend")
+        XCTAssertEqual(pr.scores["risk"]?.score, 1)
+        XCTAssertEqual(r.scores["risk"]?.legend, [0: "harmless", 1: "worth a glance", 2: "needs a reviewer"])
+        XCTAssertEqual(r.raw["answers"]?["deps"], .object([.init("noul", 0.75), .init("type", "noul")]), "a noul answer is {type, noul} only")
         XCTAssertTrue(r.requestID?.hasPrefix("req_") == true)
         XCTAssertNotNil(r.inputTokens)
         let multi = try await client.systemOne(state: "Zażółć gęślą jaźń", questions: ["x": .noul("Is it?")])

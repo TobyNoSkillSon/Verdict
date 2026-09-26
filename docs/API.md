@@ -1,10 +1,10 @@
 # Verdict HTTP API (v1)
 
-Verdict is a local System One server. Its main API is TypeSafe's **System One API** — the one Jev serves at `api.typesafe.ai` and OpenRouter at `openrouter.ai/api` — so code written for Jev, with the official SDKs or plain HTTP, runs on Verdict by changing the base URL and the model name. Verdict adds a **batch extension** (`/v1/judge`: many items, one request) and **management endpoints** (status, loading, precision, memory settings). Everything else is a client of this API: the menu-bar app, the `verdict` command, the Swift library VerdictKit and the Python library `verdict.py`.
+Verdict is a local System One server. Its main endpoint is compatible with the **System One API (TypeSafe Jev)** and works with the TypeSafe SDK, so code written for Jev, with the SDK or plain HTTP, runs on Verdict by changing the base URL and the model name. Verdict is independent of TypeSafe. Verdict adds a **batch extension** (`/v1/judge`: many items, one request) and **management endpoints** (status, loading, precision, memory settings). Everything else is a client of this API: the menu-bar app, the `verdict` command, the Swift library VerdictKit and the Python library `verdict.py`.
 
 | Method | Path | Does |
 |---|---|---|
-| POST | `/v1/systemone` | **System One API**: answer typed questions about one state (TypeSafe's API) |
+| POST | `/v1/systemone` | **System One API**: answer typed questions about one state |
 | GET | `/v1/models` | **System One API**: the model names `model` accepts, with Verdict's catalog fields |
 | POST | `/v1/judge` | **Batch extension**: the same questions for many items in one request |
 | GET | `/v1/status` | Port, loaded models, memory, Keep Hot settings, recent unloads, the raw catalog |
@@ -15,7 +15,7 @@ Verdict is a local System One server. Its main API is TypeSafe's **System One AP
 
 `/shed`, `/trim` and `/quit` are internal: the app uses them for memory pressure and shutdown. They are not versioned and may change.
 
-Contents: [Base URL](#base-url) · [System One API](#system-one-api) ([request](#post-v1systemone), [answers](#answers), [models](#get-v1models), [errors](#system-one-errors), [differences from Jev](#differences-from-jev), [concurrency](#concurrent-requests), [SDKs](#using-the-typesafe-sdks)) · [Batch extension](#batch-extension-post-v1judge) · [Management](#management) · [Conventions](#conventions) · [Errors (batch and management)](#errors-batch-and-management) · [Clients](#batch-and-management-clients)
+Contents: [Base URL](#base-url) · [System One API](#system-one-api) ([request](#post-v1systemone), [answers](#answers), [models](#get-v1models), [errors](#system-one-errors), [differences from Jev](#differences-from-jev), [concurrency](#concurrent-requests), [SDKs](#using-the-typesafe-sdk)) · [Batch extension](#batch-extension-post-v1judge) · [Management](#management) · [Conventions](#conventions) · [Errors (batch and management)](#errors-batch-and-management) · [Clients](#batch-and-management-clients)
 
 ## Base URL
 
@@ -47,29 +47,30 @@ The port changes whenever the helper restarts (app relaunch, crash recovery, Res
 
 ### POST /v1/systemone
 
-One state and any number of named, typed questions about it; every question sees the same state and all are answered in one pass. The request and response are TypeSafe's ([OpenAPI](https://api.typesafe.ai/openapi.json), [API reference](https://docs.typesafe.ai/api)).
+One state and any number of named, typed questions about it; every question sees the same state and all are answered in one pass. Request and response follow the System One API; TypeSafe's [API reference](https://docs.typesafe.ai/api) is the reference for the full schema.
 
 ```sh
 curl -s "$(verdict url)/v1/systemone" \
-  -H "Authorization: Bearer anything" -H "Content-Type: application/json" -d '{
+  -H "Content-Type: application/json" -H "Authorization: Bearer local" -d '{
   "model": "auto",
-  "state": {"subject": "Duplicate charge", "message": "I was charged twice for March. Please refund the duplicate today."},
+  "state": {"title": "Checkout button does nothing on Safari 17",
+            "body": "Clicking Pay shows a spinner forever. Chrome works. It started after Tuesday'"'"'s deploy."},
   "questions": {
-    "refund":  {"type": "noul", "instructions": "Does the customer ask for money back?"},
-    "team":    {"type": "choice", "instructions": "Which team should handle this?",
-                "criteria": {"billing": "Charges, invoices, refunds", "technical": "Bugs, outages, integrations", "other": null}},
-    "urgency": {"type": "score", "instructions": "How urgent is this?",
-                "criteria": ["Can wait", "Needs attention this week", "Needs attention today"]}
+    "regression": {"type": "noul", "instructions": "Did this start after a recent change?"},
+    "component":  {"type": "choice", "instructions": "Which component is at fault?",
+                   "criteria": {"payments": "Checkout, cards, invoices", "frontend": "Pages, buttons, browser quirks", "infra": null}},
+    "severity":   {"type": "score", "instructions": "How badly are users blocked?",
+                   "criteria": ["Cosmetic", "A workaround exists", "Users cannot finish"]}
   }}'
 ```
 
 ```json
-{"answers": {"refund":  {"noul": 0.8591, "type": "noul"},
-             "team":    {"choice": "billing", "confidence": 0.7168, "probabilities": {"billing": 0.9262, "other": 0.0478, "technical": 0.026}, "type": "choice"},
-             "urgency": {"confidence": 0.5969, "legend": {"0": "Can wait", "1": "Needs attention this week", "2": "Needs attention today"},
-                         "probabilities": {"0": 0.0137, "1": 0.1226, "2": 0.8636}, "score": 1.8499, "type": "score"}},
+{"answers": {"component":  {"choice": "frontend", "confidence": 0.1628, "probabilities": {"frontend": 0.623, "infra": 0.1607, "payments": 0.2163}, "type": "choice"},
+             "regression": {"noul": 0.7696, "type": "noul"},
+             "severity":   {"confidence": 0.5691, "legend": {"0": "Cosmetic", "1": "A workaround exists", "2": "Users cannot finish"},
+                            "probabilities": {"0": 0.0346, "1": 0.8646, "2": 0.1008}, "score": 1.0663, "type": "score"}},
  "model": "laya-english",
- "usage": {"input_tokens": 184, "output_tokens": 0}}
+ "usage": {"input_tokens": 218, "output_tokens": 0}}
 ```
 
 | Field | Type | |
@@ -77,9 +78,12 @@ curl -s "$(verdict url)/v1/systemone" \
 | `model` | string, required | `"auto"` or a model id from [`/v1/models`](#get-v1models): `laya-english`, `laya-multilingual`, `laya-typed-decisions`, `von-1.2`, `von-1.1`. `auto` picks `laya-english` when the state's letters are ≥ 99.5% ASCII and `laya-multilingual` otherwise; the response's `model` says which. |
 | `state` | string, object or array, required | The content every question is about: one shared state (not a list of items; for many items use the [batch extension](#batch-extension-post-v1judge)). An object or array reaches Laya as its JSON text and Von as `key: value` lines, in the key order you send, so name the fields. An object with an `image`, `images`, `audio`, `video` or `videos` key is refused: Verdict judges text. |
 | `questions` | object, required, nonempty | Question name → question. The names come back as the answers' keys; they are not shown to the model. Names and labels are compared as exact strings. |
-| `bits` | integer, optional | **Verdict extension**: run the model at this precision (Laya 16, 8 or 4; Von 32, 16, 8 or 4; `0` = native). A model loaded at another precision is reloaded and stays at the new one while it stays loaded. With the TypeSafe SDKs, pass it as `extra_body={"bits": 8}` (Python) or `extraBody` in VerdictKit. |
+| `bits` | integer, optional | **Verdict extension**: the precision this request requires (Laya 16, 8 or 4; Von 32, 16, 8 or 4; `0` = native). A model runs at one precision for every client — the one it is loaded at, else `precision.selected` in `/v1/models` — so a request never changes it: other bits get `409` (`conflict_error`) and nothing reloads. To change it for everyone, `POST /v1/load` with `bits` (the menu's Reload). With the TypeSafe SDK, pass it as `extra_body={"bits": 8}` (Python) or `extraBody` in VerdictKit. |
+| `merge` | boolean, optional | **Verdict extension**: `false` runs this request in a GPU pass of its own, so its answers are exactly what it gets sent alone ([Concurrent requests](#concurrent-requests)). Default `true`. |
 
-A question is `{"type", "instructions", "criteria"}`. `instructions` (optional) and every description may be a string, an object or an array; structured values reach the model as their JSON text. Unknown fields in a question are ignored.
+Every reply that ran on a model carries an `x-verdict-bits` header with the precision that answered (effective bits: `16`, not `0`).
+
+A question is `{"type", "instructions", "criteria"}`. `instructions` (optional) and each description can be text or structured JSON (an object or array), which the model reads as its JSON text. Unknown fields in a question are ignored.
 
 | `type` | `criteria` | Answer |
 |---|---|---|
@@ -97,7 +101,7 @@ A question is `{"type", "instructions", "criteria"}`. `instructions` (optional) 
 
 ### GET /v1/models
 
-TypeSafe's listing: every name the `model` field accepts, the `auto` alias first.
+The System One API's model listing: every name the `model` field accepts, the `auto` alias first.
 
 ```json
 {"models": [
@@ -110,11 +114,11 @@ TypeSafe's listing: every name the `model` field accepts, the `auto` alias first
  "references": [{"name": "jev", "display_name": "Jev · TypeSafe", "state": "hosted", "loadable": false, …}]}
 ```
 
-`name`, `description` and `release_date` are TypeSafe's fields. Each local model also carries Verdict's catalog fields ([below](#verdicts-fields-in-get-v1models)); `references` holds hosted models Verdict shows for comparison but does not serve.
+`name`, `description` and `release_date` are the System One API's fields. Each local model also carries Verdict's catalog fields ([below](#verdicts-fields-in-get-v1models)); `references` holds hosted models Verdict shows for comparison but does not serve. The `auto` entry carries the same catalog fields with neutral values (`"state": "alias"`, `"loadable": false`, empty `benchmarks`), so clients that read those fields from every entry keep working; skip the entry with `"alias": true` when you list models.
 
 ### System One errors
 
-Request validation failures are `422` with FastAPI's `HTTPValidationError`, as TypeSafe's API returns them: a `detail` list whose entries name the offending field (`loc`), say what is wrong (`msg`) and classify it (`type`: `missing`, `json_invalid`, `too_short`, `union_tag_invalid`, `value_error`, …).
+Request validation failures are `422` with FastAPI's `HTTPValidationError`, the System One API's validation error: a `detail` list whose entries name the offending field (`loc`), say what is wrong (`msg`) and classify it (`type`: `missing`, `json_invalid`, `too_short`, `union_tag_invalid`, `value_error`, …).
 
 ```json
 {"detail": [{"loc": ["body", "questions", "team", "choice", "criteria"], "msg": "Field required", "type": "missing",
@@ -126,9 +130,11 @@ Request validation failures are `422` with FastAPI's `HTTPValidationError`, as T
 | 422 | Invalid JSON; a missing or wrong-typed field; an empty `questions`; an unknown question type; a choice without options; a score without levels; an unknown model | `model: Value error, unknown model 'gpt-5'; Verdict serves: auto, laya-english, …` |
 | 422 | TypeSafe's hosted model names (`jev`, `jev-latest`, `jev-1.13`, …) | `model: Value error, 'jev-latest' is TypeSafe's hosted model and does not run in Verdict; use one of: auto, …` |
 | 422 | A state over the model's context (nothing is truncated), media in the state, a reserved token (Von's `[MASK]`) | `state: Value error, State needs about 9066 tokens; laya-english accepts 8192. Shorten it or split it.` |
-| 422 | An invalid `bits` | `bits: Value error, laya-english: Laya precision must be 16, 8 or 4 bits` |
+| 422 | An invalid `bits` or `merge` | `bits: Value error, laya-english: Laya precision must be 16, 8 or 4 bits` |
+| 409 | `bits` other than the precision the model runs at | `{"detail": {"error_type": "conflict_error", "message": "laya-english is loaded at 16-bit for every client; this request asked for 8-bit. …"}}` |
 | 403, 415 | The loopback protections ([Conventions](#conventions)) | `{"detail": {"error_type": "permission_error", "message": "cross-origin requests are not accepted"}}` |
-| 405 | `GET /v1/systemone` | `{"detail": "Method Not Allowed"}` |
+| 405 | `GET /v1/systemone`, `POST /v1/models` | `{"detail": "Method Not Allowed"}` |
+| 404 | A `/v1` path Verdict does not serve, including a trailing slash (`/v1/systemone/`) | `{"detail": "Not Found"}` |
 | 507 | The model does not fit in free memory ("Fit in free memory" mode) | `{"detail": {"error_type": "insufficient_memory_error", "message": "laya-typed-decisions at 16-bit needs ~1.9 GB; ~1.0 GB free without swapping. …"}}` |
 | 500 | The model failed to load (a download failure) or produced invalid output | `{"detail": {"error_type": "api_error", "message": "…"}}` |
 
@@ -139,63 +145,69 @@ The messages shown are how the SDKs print them (`field: msg`). The Python SDK re
 - **Models.** Verdict runs open models on your Mac: `auto` and the ids in `/v1/models`, not `jev-latest`. They are smaller than Jev and less accurate on Verdict's benchmark ([README](../README.md#models)); try your questions on both before switching a decision that matters.
 - **No key.** Any `Authorization` header is accepted and ignored (the SDKs insist on a key; pass any, such as `"local"`). There is no 401, 429 or 529.
 - **Limits.** Context is the model's: 8,192 tokens for the Laya models and Von 1.2, 2,048 for Von 1.1 (Jev: 32,000); the state plus each question must fit. Verdict does not apply Jev's 255-option and 10-level caps, but Laya fits each question into a 192-token budget and shortens long instructions and option descriptions to fit; keep choices to about 20 options. One request carries one state; bodies up to 64 MB.
-- **`bits`** is a Verdict extension (above). Unknown top-level fields are ignored.
+- **`bits` and `merge`** are Verdict extensions (above). Unknown top-level fields are ignored.
+- **Empty choices.** A `choice` with `criteria: {}` is a 422 (`a choice needs at least one option`). The OpenAPI schema does not forbid an empty object, but there is nothing to choose from.
 - **Usage.** `input_tokens` counts what Verdict's model read; `output_tokens` is 0. There is no `cost`.
-- **First use** of a model downloads it (0.6–1.6 GB) inside the request and loading takes a few seconds; the SDKs' default 10 s timeout can expire on that first call. `verdict load <id>` beforehand, or raise the timeout.
-- **Structured instructions and descriptions** (objects, arrays) reach the model as JSON text. TypeSafe documents that form for Jev; the local models' authors do not, so compare with plain sentences on your task.
+- **First use** of a model downloads it (0.6–1.6 GB) inside the request and loading takes a few seconds; the SDK's default 10 s timeout can expire on that first call. `verdict load <id>` beforehand, or raise the timeout.
+- **Merging** of concurrent requests can move an answer slightly ([below](#concurrent-requests)); `"merge": false` opts out per request.
+- **Structured instructions and descriptions** (objects, arrays) reach the model as JSON text. The System One API allows that form; the local models' authors do not document it, so compare with plain sentences on your task.
 
 ### Concurrent requests
 
-Send as many at once as you like. Requests for the same model and precision that arrive while the GPU is busy are merged into its next pass and each gets its own answers back; a request that finds the GPU idle runs at once, so one request at a time costs no extra latency. Answers do not depend on what else was merged: rows are processed in length-sorted chunks exactly as in a [batch](#batch-extension-post-v1judge), and a merged answer can differ from the same request sent alone only as batched answers do, because the GPU's arithmetic depends on the chunk shape (measured: at most 0.0018 in any probability, no answer changed, over 500 requests). Measured on an M5 Max with Laya English, 500 job ads × 2 questions: 500 concurrent calls through the Python SDK's async client ran at ~490 items/s, about 80% of one 500-item batch request (~600/s) and 3× the rate without merging; one request alone takes ~7 ms. For many items you already have together, the batch extension is still the fastest path.
+Requests for the same model that arrive while the GPU is busy are merged into its next pass, and each gets its own answers back; a request that finds the GPU idle runs at once, so one request at a time costs no extra latency. Every request in a pass runs at the model's one precision (a request asking for another gets `409`, above), so merging never reloads a model and one client's `bits` never changes another client's answers. Measured on an M5 Max with Laya English, 500 job ads × 2 questions: 500 concurrent calls through the Python SDK's async client ran at ~490 items/s, about 80% of one 500-item batch request (~600/s) and 3× the rate without merging; one request alone takes ~7 ms.
 
-### Using the TypeSafe SDKs
+**Merged answers are close to, not identical with, the answer alone.** Rows are processed in length-sorted chunks exactly as in a [batch](#batch-extension-post-v1judge), and the model's arithmetic depends on what shares its chunk. Measured on an M5 Max, the same state judged alone and in one pass with 20–200 states of other lengths moved by up to **0.0296** in a probability with Laya English at 16-bit (0.015 at 8-bit; at most 0.0007 at 4-bit, with Laya Multilingual and with Von 1.2). In a realistic mixed concurrent run the largest move was 0.003, and one yes/no answer near the threshold flipped: **0.5007 alone, 0.4998 merged**. This is the models' own batch dependence, not a Verdict bug: the Python reference implementation moves by the identical 0.0296, and Verdict's answers equal the reference's both alone and batched. `/v1/judge` behaves the same way, since an item there shares its pass with the other items of its request. So a merged answer can differ from the same request sent alone by up to about 0.03; do not treat a value within that of a threshold as settled. When you need the single-request result exactly, send `"merge": false` (`extra_body={"merge": False}` with the SDK): that request gets a pass of its own and the answer it gets alone, at the cost of the merging speed-up.
 
-The official SDKs work unchanged: set the base URL, any key, and a Verdict model name.
+**Many requests at once with the SDK.** The server keeps up, but the client's own queue can outlast its timeout. With the Python SDK's async client at its defaults (10 s timeout, two retries), 500 and 2,000 simultaneous calls all succeeded; 5,000 at once left about 600 with `TypeSafeAPITimeoutError`, because calls waited in the client for longer than the timeout and retry budget (the server's call count matched the successful calls, so nothing was answered twice). For thousands of calls, raise the timeout (`AsyncTypeSafeClient(..., timeout=120)`) or bound the calls in flight (an `asyncio.Semaphore` of a few hundred). For thousands of items you already have together, the batch extension is faster still: one `/v1/judge` request per few hundred items.
+
+### Using the TypeSafe SDK
+
+Verdict works with the TypeSafe SDK: set the base URL, any key, and a Verdict model name.
 
 ```python
 # pip install typesafe-sdk
 from typesafe_sdk import TypeSafeClient, Noul, Choice, Score
 
 client = TypeSafeClient(api_key="local", base_url="http://127.0.0.1:58245", model="auto")   # base_url: `verdict url`
-result = client.system_one("I was charged twice. Please help ASAP.", {
-    "billing": Noul(instructions="Is this about billing?"),
-    "tone": Choice(instructions="What is the tone?", criteria={"calm": None, "angry": None}),
-    "urgency": Score(instructions="How urgent is this?", criteria=["low", "medium", "high"]),
+review = client.system_one("Update 3.2 logs me out every time I switch apps.", {
+    "bug": Noul(instructions="Does the writer report something broken?"),
+    "kind": Choice(instructions="What kind of message is this?", criteria={"bug": None, "feature": None, "question": None}),
+    "priority": Score(instructions="How soon does it need a fix?", criteria=["whenever", "this sprint", "today"]),
 })
-print(result.nouls["billing"].noul, result.choices["tone"].choice, result.scores["urgency"].score)
+print(review.nouls["bug"].noul, review.choices["kind"].choice, review.scores["priority"].score)   # 0.7707 bug 1.7577
 ```
 
-`AsyncTypeSafeClient` takes the same arguments. `TYPESAFE_BASE_URL=$(verdict url) TYPESAFE_API_KEY=local TYPESAFE_DEFAULT_MODEL=auto` does the same through the environment for both SDKs.
+`AsyncTypeSafeClient` takes the same arguments. `TYPESAFE_BASE_URL=$(verdict url) TYPESAFE_API_KEY=local TYPESAFE_DEFAULT_MODEL=auto` does the same through the environment, in Python and in JavaScript.
 
 ```js
 // npm install @typesafe-ai/sdk   (Node 20+)
 import { TypeSafeClient, noul, choice, score } from "@typesafe-ai/sdk";
 
-const client = new TypeSafeClient({ apiKey: "local", baseURL: "http://127.0.0.1:58245", defaultModel: "auto" });
-const result = await client.systemOne({
-  state: "I was charged twice. Please help ASAP.",
+const local = new TypeSafeClient({ apiKey: "local", baseURL: "http://127.0.0.1:58245", defaultModel: "auto" });
+const review = await local.systemOne({
+  state: "Update 3.2 logs me out every time I switch apps.",
   questions: {
-    billing: noul("Is this about billing?"),
-    tone: choice("What is the tone?", { calm: null, angry: null }),
-    urgency: score("How urgent is this?", ["low", "medium", "high"]),
+    bug: noul("Does the writer report something broken?"),
+    kind: choice("What kind of message is this?", { bug: null, feature: null, question: null }),
+    priority: score("How soon does it need a fix?", ["whenever", "this sprint", "today"]),
   },
 });
-console.log(result.answers.billing.noul, result.answers.tone.choice, result.answers.urgency.score);
+console.log(review.answers.bug.noul, review.answers.kind.choice, review.answers.priority.score);
 ```
 
 Use `127.0.0.1`, not `localhost`: the helper listens on IPv4 only. Node's `fetch` sends no `Origin` header, so the helper accepts it; a browser page cannot call the API.
 
 ```swift
-// VerdictKit: finds or launches the local Verdict; SystemOneClient(baseURL:apiKey:model:) talks to any System One server
+// VerdictKit: finds or launches the local Verdict; SystemOneClient(baseURL:apiKey:model:) talks to any compatible server
 import VerdictKit
 
 let client = SystemOneClient()
-let result = try await client.systemOne(state: "I was charged twice. Please help ASAP.", questions: [
-    "billing": .noul("Is this about billing?"),
-    "tone": .choice("What is the tone?", options: ["calm": nil, "angry": nil]),
-    "urgency": .score("How urgent is this?", levels: ["low", "medium", "high"]),
+let review = try await client.systemOne(state: "Update 3.2 logs me out every time I switch apps.", questions: [
+    "bug": .noul("Does the writer report something broken?"),
+    "kind": .choice("What kind of message is this?", labels: ["bug", "feature", "question"]),
+    "priority": .score("How soon does it need a fix?", levels: ["whenever", "this sprint", "today"]),
 ])
-print(result.nouls["billing"]?.noul, result.choices["tone"]?.choice, result.scores["urgency"]?.score)
+print(review.nouls["bug"]?.noul, review.choices["kind"]?.choice, review.scores["priority"]?.score)
 ```
 
 ## Batch extension: POST /v1/judge
@@ -205,15 +217,14 @@ Verdict's own endpoint for many items with the same questions: each item is its 
 
 ```json
 {
-  "items": ["I was charged twice for March, please refund the duplicate.",
-            {"subject": "App crash", "body": "The app crashes when I open settings."},
-            {"image": "/tmp/receipt.png"}],
+  "items": ["The Pay button spins forever since Tuesday's deploy; nobody can check out.",
+            {"title": "Dark mode", "body": "Would love a dark theme for the dashboard."},
+            {"image": "/tmp/screenshot.png"}],
   "questions": {
-    "refund":  {"type": "noul", "instructions": "Does the writer ask for money back?"},
-    "dept":    {"type": "choice", "instructions": "Which team should handle this?",
-                "criteria": {"billing": "charges, invoices, refunds", "tech": "bugs, crashes, outages", "other": "none of these"}},
-    "urgency": {"type": "score", "instructions": "How urgent is this?",
-                "criteria": ["routine question", "needs an answer this week", "blocking work today"]}
+    "bug":      {"type": "noul", "instructions": "Does the writer report something broken?"},
+    "kind":     {"type": "choice", "instructions": "What kind of message is this?",
+                 "criteria": {"bug": "something is broken", "feature": "a request for something new", "question": "asks for information"}},
+    "priority": {"type": "score", "instructions": "How soon does it need a fix?", "criteria": ["whenever", "this sprint", "today"]}
   }
 }
 ```
@@ -223,7 +234,7 @@ Verdict's own endpoint for many items with the same questions: each item is its 
 | `items` | nonempty list | Strings, or any JSON value. An object is judged as its JSON text (Laya) or `key: value` lines (Von), in the key order you send, so name the fields. A string stays a string even when it looks like JSON. An object with an `image`, `images`, `audio`, `video` or `videos` key gets a per-item error: Verdict judges text. |
 | `questions` | nonempty object | Question id → question. Every question is answered for every item in the same pass. Ids and labels are compared as exact strings. |
 | `model` | string, optional | `"auto"` (default) or a model id from `/v1/models`. `auto` sends an item whose letters are ≥ 99.5% ASCII to `laya-english` and anything else to `laya-multilingual`; one request can use both. |
-| `bits` | integer, optional | A whole number (`4.9` is refused, not truncated; `null` is the same as leaving it out). Run the model(s) at this precision: Laya 16, 8 or 4; Von 32, 16, 8 or 4; `0` means the model's native precision (Laya 16, Von 32). A model loaded at another precision is reloaded and stays at the new precision while it stays loaded; after an unload, a load without `bits` uses `precision.selected` again. Checked for every model the request uses before anything loads. |
+| `bits` | integer, optional | A whole number (`4.9` is refused, not truncated; `null` is the same as leaving it out): the precision the request requires, Laya 16, 8 or 4; Von 32, 16, 8 or 4; `0` means the model's native precision (Laya 16, Von 32). Every model the request uses must already run at it (as loaded, else `precision.selected`), checked before anything loads; otherwise `409` and nothing runs. A request never changes a model's precision; [`/v1/load`](#post-v1load) with `bits` does, for every client. |
 
 A question is `{"type", "instructions", "criteria"}`:
 
@@ -240,14 +251,14 @@ Response: one result per item, in item order. `model` is the model that judged i
 ```json
 {
   "results": [
-    {"answers": {"dept": {"choice": "billing", "confidence": 0.8828, "probabilities": {"billing": 0.9762, "other": 0.0096, "tech": 0.0142}},
-                 "refund": {"confidence": 0.8801, "noul": 0.8801},
-                 "urgency": {"confidence": 0.2337, "probabilities": {"0": 0.1035, "1": 0.2289, "2": 0.6677}, "score": 1.5642}},
-     "model": "laya-english", "ms": 14.0},
-    {"answers": {"dept": {"choice": "tech", "confidence": 0.9153, "probabilities": {"billing": 0.0062, "other": 0.0099, "tech": 0.9839}},
-                 "refund": {"confidence": 0.907, "noul": 0.093},
-                 "urgency": {"confidence": 0.5136, "probabilities": {"0": 0.0138, "1": 0.1753, "2": 0.8109}, "score": 1.7971}},
-     "model": "laya-english", "ms": 14.0},
+    {"answers": {"bug": {"confidence": 0.9377, "noul": 0.9377},
+                 "kind": {"choice": "bug", "confidence": 0.8938, "probabilities": {"bug": 0.9789, "feature": 0.0102, "question": 0.0109}},
+                 "priority": {"confidence": 0.0013, "probabilities": {"0": 0.3285, "1": 0.3568, "2": 0.3147}, "score": 0.9862}},
+     "model": "laya-english", "ms": 5.8},
+    {"answers": {"bug": {"confidence": 0.9998, "noul": 0.0002},
+                 "kind": {"choice": "feature", "confidence": 0.621, "probabilities": {"bug": 0.0456, "feature": 0.8918, "question": 0.0626}},
+                 "priority": {"confidence": 0.0283, "probabilities": {"0": 0.2354, "1": 0.3266, "2": 0.438}, "score": 1.2026}},
+     "model": "laya-english", "ms": 5.8},
     {"error": "Verdict judges text; image, audio and video items are not supported.", "model": null, "ms": 0}
   ]
 }
@@ -259,7 +270,7 @@ Per-item errors (the request still returns 200):
 {"error": "Item needs about 9026 tokens; laya-english accepts 8192. Shorten it or split it.", "model": "laya-english", "ms": 0}
 ```
 
-Request-level errors (nothing is judged): `400` for a malformed body, an empty `items` or `questions`, an unknown question type (`Unknown question type 'maybe'`), an unknown or hosted-only model (`Unknown or hosted-only model 'laya-englsh'; loadable: laya-english, laya-multilingual, …`) or an invalid `bits`; `507` when a model the request needs does not fit in free memory (see [Errors](#errors-batch-and-management)).
+Request-level errors (nothing is judged): `400` for a malformed body, an empty `items` or `questions`, an unknown question type (`Unknown question type 'maybe'`), an unknown or hosted-only model (`Unknown or hosted-only model 'laya-englsh'; loadable: laya-english, laya-multilingual, …`) or an invalid `bits`; `409` when `bits` differs from the precision a model it uses runs at; `507` when a model the request needs does not fit in free memory (see [Errors](#errors-batch-and-management)).
 
 ## Management
 
@@ -315,7 +326,7 @@ Each local model's entry in [`/v1/models`](#get-v1models) also carries what you 
 ```
 
 - `state`: `hot` (loaded), `downloaded`, `available` (downloads on first use) or `hosted` (a reference model that cannot be loaded; `loadable: false`, `precision: null`).
-- `precision` (bits): `selected` is what a load without `bits` uses: the app's Models table choice (read from `config.json` at each load, so a choice made while Verdict runs applies to the next load), else `default`. A loaded model is not reloaded when the choice changes; `loaded` shows what it runs at, or `null`. `default` is the recommended precision.
+- `precision` (bits): `selected` is what a load without `bits` uses: the app's Models table choice (read from `config.json` at each load, so a choice made while Verdict runs applies to the next load), else `default`. A loaded model is not reloaded when the choice changes; `loaded` shows what it runs at, or `null`. `default` is the recommended precision. A request's `bits` never changes either: every request runs at `loaded` (or, when the model is not loaded, `selected`).
 - `benchmark` fields: `accuracy` (0–1; `accuracy_en`/`accuracy_ml` for the English and multilingual tasks, `sets` per task), `ece` (calibration error, lower is better), `ms` (single-item p50), `items_per_s` (batched), `j_per_1k` (energy per 1,000 judgements, batched), `memory_mb` (loaded footprint). A field that was not measured is absent.
 
 ### POST /v1/load
@@ -324,7 +335,7 @@ Each local model's entry in [`/v1/models`](#get-v1models) also carries what you 
 {"model": "von-1.2", "bits": 8, "manual": true}      →      {"loaded": ["laya-multilingual", "von-1.2"]}
 ```
 
-Loads a model (downloading it the first time) and returns the loaded ids. `bits` (optional, a whole number; `null` = omitted) reloads it at that precision even if it is loaded; without it, a model that is not loaded loads at `precision.selected` from `/v1/models`. `manual` (optional, default false) loads it like the menu's Load: it joins the launch set and follows the "Manually loaded" Keep Hot window; a reload keeps a manual model manual. Without `manual` it is an on-demand load, unloaded after the on-demand idle window. Errors: `400` (unknown model, invalid bits), `507` (does not fit in free memory). A refused precision change leaves the loaded model as it was.
+Loads a model (downloading it the first time) and returns the loaded ids. `bits` (optional, a whole number; `null` = omitted) reloads it at that precision even if it is loaded, and every client's requests then run at it (this and the menu's Reload are the only ways a loaded model's precision changes); without it, a model that is not loaded loads at `precision.selected` from `/v1/models`. `manual` (optional, default false) loads it like the menu's Load: it joins the launch set and follows the "Manually loaded" Keep Hot window; a reload keeps a manual model manual. Without `manual` it is an on-demand load, unloaded after the on-demand idle window. Errors: `400` (unknown model, invalid bits), `507` (does not fit in free memory). A refused precision change leaves the loaded model as it was.
 
 ### POST /v1/unload
 
@@ -345,12 +356,12 @@ Any subset of the fields (`null` = omitted). Idle windows are whole minutes with
 
 ## Conventions
 
-- **JSON.** Every response is JSON with sorted keys. `/v1/systemone` and `/v1/models` fail in TypeSafe's format ([above](#system-one-errors)); the other endpoints fail with `{"error": "<message>"}` and a non-200 status. Messages are written for people and are safe to show verbatim.
+- **JSON.** Every response is JSON with sorted keys. `/v1/systemone`, `/v1/models` and `/v1` paths Verdict does not serve fail in the System One API's (FastAPI's) format ([above](#system-one-errors)): `{"detail": [...]}` for validation, `{"detail": {"error_type", "message"}}` otherwise, `{"detail": "Not Found"}` / `{"detail": "Method Not Allowed"}` for an unknown path or `POST /v1/models`. The other endpoints fail with `{"error": "<message>"}` and a non-200 status. Messages are written for people and are safe to show verbatim.
 - **Security.** The helper binds IPv4 loopback only and has no authentication: any process on this Mac can call it, nothing off the Mac can. An `Authorization` header is accepted and ignored. It refuses what a web page could send: any request with an `Origin` header (403), a `Host` other than `127.0.0.1:<port>` or `localhost:<port>` (403, blocks DNS rebinding), and a POST whose `Content-Type` is not `application/json` (415, blocks form posts that skip CORS preflight). All three are checked before the body is read. Do not forward the port to other machines.
-- **Concurrency.** Requests are safe to send concurrently; each is atomic (an unload never lands in the middle of a judgement). Concurrent `/v1/systemone` requests share GPU passes ([above](#concurrent-requests)); other requests run one at a time. A request that needs a model waits while it loads. Each connection carries one request (`Connection: close`).
+- **Concurrency.** Requests are safe to send concurrently; each is atomic (an unload never lands in the middle of a judgement). Concurrent `/v1/systemone` requests for the same model share GPU passes ([above](#concurrent-requests)); other requests run one at a time. A request that needs a model waits while it loads. Each connection carries one request (`Connection: close`).
 - **Limits.** A request body may be up to 64 MB; chunked request bodies are refused (send `Content-Length`). Each model has a context limit in tokens (`context` in `/v1/models`: 8,192 for the Laya models and Von 1.2, 2,048 for Von 1.1). Nothing is truncated: an over-long state is a 422 in `/v1/systemone` and a per-item `error` in `/v1/judge`, where the rest of the request still runs.
 - **Time.** A model's first use downloads its weights (0.6–1.6 GB) inside the request and loading takes a few seconds; allow minutes for a first request (the Verdict clients wait up to 600 s). A loaded model answers in milliseconds.
-- **Versioning.** Paths under `/v1/` keep their meaning; additions (new optional fields, new endpoints) do not bump the version. `"api"` in `/v1/status` changes only with an incompatible change. The original unversioned paths (`/judge`, `/status`, `/load`, `/unload`, `/delete`, `/settings`) remain as aliases for older clients. With the System One API, `/v1/models` became TypeSafe's listing: an entry's `name` is now the model id (the human name moved to `display_name`), the `auto` alias leads the list, and hosted models moved to `references`.
+- **Versioning.** Paths under `/v1/` keep their meaning; additions (new optional fields, new endpoints) do not bump the version. `"api"` in `/v1/status` changes only with an incompatible change. The original unversioned paths (`/judge`, `/status`, `/load`, `/unload`, `/delete`, `/settings`) remain as aliases for older clients. `/v1/models` became the System One API's listing within `"api": 1`: an entry's `name` is now the model id (the human name moved to `display_name`), the `auto` alias leads the list, and hosted models moved to `references`. Every field an earlier client read is still on every entry, the alias included, so those clients keep working; code that displayed `name` now shows the id (use `display_name`), and code that looked for hosted models in `models` finds them in `references`.
 
 ## Errors (batch and management)
 
@@ -358,7 +369,8 @@ Any subset of the fields (`null` = omitted). Idle windows are whole minutes with
 |---|---|---|
 | 400 | Malformed JSON, missing or invalid field (`/v1/judge` and the management endpoints; `/v1/systemone` answers 422, see [its errors](#system-one-errors)), unknown model or question type, invalid precision, a fraction where a whole number is required | `laya-english: Laya precision must be 16, 8 or 4 bits`, `bits must be a whole number, not 4.9` |
 | 403 | An `Origin` header, or a `Host` other than `127.0.0.1:<port>` / `localhost:<port>` | `cross-origin requests are not accepted` |
-| 404 | Unknown path or wrong method | `not found: GET /v1/nothing`, `/v1/judge takes POST` |
+| 404 | Unknown path or wrong method (an unknown `/v1` path answers `{"detail": "Not Found"}`, above) | `not found: GET /nothing`, `/v1/judge takes POST` |
+| 409 | `/v1/judge` with `bits` other than the precision a model runs at | `laya-english is loaded at 16-bit for every client; this request asked for 8-bit. …` |
 | 415 | POST without `Content-Type: application/json` | `Content-Type must be application/json` |
 | 507 | A model does not fit in free memory ("Fit in free memory" mode) | `laya-typed-decisions at 16-bit needs ~1.9 GB; ~1.0 GB free without swapping. Pick 8-bit or allow swap in Verdict → Memory.` |
 
@@ -374,8 +386,8 @@ STATUS="$HOME/Library/Application Support/Verdict/status.json"
 PORT=$(plutil -extract port raw -o - "$STATUS")
 
 curl -s "http://127.0.0.1:$PORT/v1/judge" -H 'Content-Type: application/json' -d '{
-  "items": ["I was charged twice, please refund the duplicate.", "Do you ship to Canada?"],
-  "questions": {"refund": {"type": "noul", "instructions": "Does the writer ask for money back?"}}}'
+  "items": ["The Pay button spins forever since Tuesday'"'"'s deploy.", "Is there an annual plan with a discount?"],
+  "questions": {"bug": {"type": "noul", "instructions": "Does the writer report something broken?"}}}'
 ```
 
 ### The `verdict` command
@@ -383,13 +395,13 @@ curl -s "http://127.0.0.1:$PORT/v1/judge" -H 'Content-Type: application/json' -d
 Installed at `~/.local/bin/verdict` (a link to `Verdict.app/Contents/Helpers/verdict`). JSONL in, one short line per item out:
 
 ```sh
-$ verdict judge --questions q.json --field text --sort refund < tickets.jsonl
-#0  refund=0.88  dept=billing(0.88)  | I was charged twice for March, please refund the duplicate.
-#1  refund=0.09  dept=tech(0.86)  | The app crashes when I open settings.
-#2  refund=0.00  dept=other(0.17)  | Do you ship to Canada?
+$ verdict judge --questions q.json --field text --sort bug < feedback.jsonl
+#0  bug=0.94  kind=bug(0.89)  | The Pay button spins forever since Tuesday's deploy; nobody…
+#1  bug=0.00  kind=feature(0.69)  | Would love a dark theme for the dashboard.
+#2  bug=0.00  kind=question(0.31)  | Is there an annual plan with a discount?
 ```
 
-`--json` prints each row with every probability; `--top N`, `--min X` (with `--sort`), `--model ID` and `--bits N` do what they say. Also `verdict status`, `verdict models [--all] [--json]`, `verdict info MODEL [--json]`, `verdict load ID [--bits N] [--manual]`, `verdict unload ID`, `verdict url` (the base URL for SDKs), `verdict skill [--install DIR]`; `verdict --help` lists them.
+`--json` prints each row with every probability; `--top N`, `--min X` (with `--sort`) and `--model ID` do what they say, and `--bits N` refuses to run unless the model runs at N bits. Also `verdict status`, `verdict models [--all] [--json]`, `verdict info MODEL [--json]`, `verdict load ID [--bits N] [--manual]`, `verdict unload ID`, `verdict url` (the base URL for SDKs), `verdict skill [--install DIR]`; `verdict --help` lists them.
 
 ### Python (standard library)
 
@@ -399,9 +411,9 @@ The installed library wraps discovery, launching and batching:
 import sys, os; sys.path.insert(0, os.path.expanduser("~/.local/share/verdict"))
 from verdict import judge, Noul, Choice
 
-r = judge("please refund me", {"refund": Noul("Does the writer ask for money back?"),
-                               "dept": Choice("Which team?", billing="charges, refunds", other="anything else")})
-r.refund > 0.7, r.dept == "billing", r.dept.probabilities
+r = judge("The export button does nothing", {"bug": Noul("Does the writer report something broken?"),
+                                            "kind": Choice("What kind of message is this?", bug="something is broken", other="anything else")})
+r.bug > 0.7, r.kind == "bug", r.kind.probabilities
 ```
 
 Or the API with nothing but `urllib`:
@@ -410,12 +422,12 @@ Or the API with nothing but `urllib`:
 import json, os, urllib.error, urllib.request
 
 status = json.load(open(os.path.expanduser("~/Library/Application Support/Verdict/status.json")))
-body = {"items": ["please refund me"], "questions": {"refund": {"type": "noul", "instructions": "Does the writer ask for money back?"}}}
+body = {"items": ["The export button does nothing"], "questions": {"bug": {"type": "noul", "instructions": "Does the writer report something broken?"}}}
 request = urllib.request.Request(f"http://127.0.0.1:{status['port']}/v1/judge", data=json.dumps(body).encode(),
                                  headers={"Content-Type": "application/json"})
 try:
     with urllib.request.urlopen(request, timeout=600) as response:
-        print(json.load(response)["results"][0]["answers"]["refund"]["noul"])
+        print(json.load(response)["results"][0]["answers"]["bug"]["noul"])
 except urllib.error.HTTPError as error:
     print(error.code, json.load(error)["error"])
 ```
@@ -430,14 +442,14 @@ VerdictKit is a library product of this package (Foundation only; resolving the 
 import VerdictKit
 
 let client = SystemOneClient()                // the local Verdict, found or launched on the first request
-let results = try await client.judge(items: tickets, questions: [
-    "refund": .noul("Does the writer ask for money back?"),
-    "dept": .choice("Which team should handle this?", ["billing": "charges, refunds", "tech": "bugs, crashes", "other": "none of these"]),
-    "urgency": .score("How urgent is this?", levels: ["routine", "this week", "blocking today"]),
+let results = try await client.judge(items: reviews, questions: [
+    "bug": .noul("Does the writer report something broken?"),
+    "kind": .choice("What kind of message is this?", ["bug": "something is broken", "feature": "a request for something new", "question": "asks for information"]),
+    "priority": .score("How soon does it need a fix?", levels: ["whenever", "this sprint", "today"]),
 ])
-for (ticket, r) in zip(tickets, results) {
+for (review, r) in zip(reviews, results) {
     guard r.ok else { print("skipped:", r.error!); continue }
-    if (r["refund"]?.noul ?? 0) > 0.7, r["dept"]?.choice == "billing" { route(ticket) }
+    if (r["bug"]?.noul ?? 0) > 0.7, r["kind"]?.choice == "bug" { file(review) }
 }
 
 let verdict = client.verdict                   // management: Verdict(launch:timeout:app:supportDirectory:)
@@ -459,13 +471,13 @@ const response = await fetch(`http://127.0.0.1:${port}/v1/judge`, {
   method: "POST",
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({
-    items: ["please refund me", "Do you ship to Canada?"],
-    questions: { refund: { type: "noul", instructions: "Does the writer ask for money back?" } },
+    items: ["The export button does nothing", "Is there an annual plan with a discount?"],
+    questions: { bug: { type: "noul", instructions: "Does the writer report something broken?" } },
   }),
 });
 const reply = await response.json();
 if (!response.ok) throw new Error(`${response.status}: ${reply.error}`);
-for (const r of reply.results) console.log(r.error ?? r.answers.refund.noul);
+for (const r of reply.results) console.log(r.error ?? r.answers.bug.noul);
 ```
 
 Node's `fetch` sends no `Origin` header, so the helper accepts it. A browser page cannot call the API: browsers always send `Origin`.

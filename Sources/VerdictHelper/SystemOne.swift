@@ -1,11 +1,11 @@
 import Foundation
 import VerdictEngine
 
-// POST /v1/systemone: TypeSafe's System One API (https://api.typesafe.ai/openapi.json) on local models. One request
-// is one state and its named questions; the response is `{"model", "answers", "usage"}`. Request validation
-// failures are 422 with FastAPI's `{"detail": [{"loc", "msg", "type", …}]}`; other failures use TypeSafe's
-// `{"detail": {"error_type", "message"}}`. Concurrent requests for the same model and precision are merged into one
-// GPU pass (SystemOneBatcher).
+// POST /v1/systemone: compatible with the System One API (TypeSafe Jev; https://api.typesafe.ai/openapi.json), on
+// local models. One request is one state and its named questions; the response is `{"model", "answers", "usage"}`.
+// Request validation failures are 422 with FastAPI's `{"detail": [{"loc", "msg", "type", …}]}`; other failures use
+// TypeSafe's `{"detail": {"error_type", "message"}}`. Concurrent requests for the same model are merged into one GPU
+// pass (SystemOneBatcher); they all run at the model's one precision.
 
 /// One pydantic-style validation error.
 struct ValidationIssue {

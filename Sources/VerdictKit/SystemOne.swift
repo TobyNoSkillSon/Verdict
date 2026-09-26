@@ -1,18 +1,18 @@
 import Foundation
 
-/// A System One client with the TypeSafe SDK's shape: one state, named typed questions, typed answers. It talks to the
-/// local Verdict by default (found or launched like `Verdict`), and to any server with TypeSafe's API —
-/// `https://api.typesafe.ai`, `https://openrouter.ai/api` — when given its base URL and key.
+/// A client for the System One API (TypeSafe Jev): one state, named typed questions, typed answers, with the same
+/// call shape as the TypeSafe SDK. It talks to the local Verdict by default (found or launched like `Verdict`), and
+/// to any other compatible server when given its base URL and key.
 ///
 ///     let client = SystemOneClient()                                  // local Verdict, model "auto"
-///     let result = try await client.systemOne(state: "I was charged twice. Please help ASAP.", questions: [
-///         "billing": .noul("Is this about billing?"),
-///         "tone": .choice("What is the tone?", labels: ["calm", "angry"]),
-///         "urgency": .score("How urgent is this?", levels: ["low", "medium", "high"]),
+///     let pr = try await client.systemOne(state: ["title": "Bump lodash to 4.17.21", "files": "package.json, yarn.lock"], questions: [
+///         "deps": .noul("Does this pull request only change dependencies?"),
+///         "area": .choice("Which part of the codebase does it touch?", labels: ["frontend", "backend", "build"]),
+///         "risk": .score("How risky is merging it without review?", levels: ["harmless", "worth a glance", "needs a reviewer"]),
 ///     ])
-///     result.nouls["billing"]?.noul; result.choices["tone"]?.choice; result.scores["urgency"]?.score
+///     pr.nouls["deps"]?.noul; pr.choices["area"]?.choice; pr.scores["risk"]?.score
 ///
-///     let jev = SystemOneClient(baseURL: URL(string: "https://openrouter.ai/api")!, apiKey: key, model: "jev-1.13")
+///     let hosted = SystemOneClient(baseURL: URL(string: "https://openrouter.ai/api")!, apiKey: key, model: "jev-1.13")
 public struct SystemOneClient: Sendable {
     /// nil: the local Verdict (its port is read before every request, so a restarted helper is found again).
     public let baseURL: URL?
@@ -50,7 +50,7 @@ public struct SystemOneClient: Sendable {
     public static func body(state: JSON, questions: Questions, model: String, extraBody: [JSON.Member] = []) throws -> JSON {
         guard !questions.isEmpty else { throw VerdictError.invalidRequest("At least one question is required.") }
         for entry in questions.entries where entry.question.kind == .score && entry.question.labels.isEmpty {
-            throw VerdictError.invalidRequest("Score question \"\(entry.id)\" has no criteria; at least one score is required.")
+            throw VerdictError.invalidRequest("Score question \"\(entry.id)\" needs one or more levels.")
         }
         var members: [JSON.Member] = [.init("state", state), .init("model", .string(model)), .init("questions", questions.json)]
         for extra in extraBody {
@@ -88,7 +88,7 @@ public struct SystemOneClient: Sendable {
     private func send(_ method: String, _ path: String, body: JSON?) async throws -> (Data, [String: String]) {
         if baseURL != nil, apiKey.isEmpty { throw VerdictError.invalidRequest("No API key was provided. Pass apiKey or set TYPESAFE_API_KEY.") }
         guard apiKey.unicodeScalars.allSatisfy({ $0.isASCII && $0.value > 32 && $0.value < 127 }) else {
-            throw VerdictError.invalidRequest("API key must contain only printable ASCII characters without whitespace.")
+            throw VerdictError.invalidRequest("The API key may use printable ASCII only, with no spaces.")
         }
         var attempt = 0
         while true {

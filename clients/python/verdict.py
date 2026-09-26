@@ -17,8 +17,8 @@
 Question shapes follow the TypeSafe/Laya convention (same names, same fields), so questions written for Jev work
 here unchanged. Plain dicts are still accepted.
 
-For one state at a time, Verdict serves TypeSafe's System One API: use the official SDK (`pip install typesafe-sdk`)
-with `base_url=verdict.base_url()` and any API key. This module is the local convenience layer: batches (`judge`,
+For one state at a time, Verdict is compatible with the System One API (TypeSafe Jev) and works with the TypeSafe SDK
+(`pip install typesafe-sdk`, `base_url=verdict.base_url()`, any API key). This module is the local convenience layer: batches (`judge`,
 Verdict's /v1/judge extension), `gate`, `calibrate`, model management, and starting the app.
 
 A thin client of the Verdict app's local HTTP API (docs/API.md); starts the app if it is not running. Standard
@@ -295,8 +295,8 @@ def models():
     reply = _call('GET', '/v1/models')
     if not isinstance(reply, dict) or not isinstance(reply.get('models'), list):
         raise VerdictError('Unexpected answer from Verdict: no models list')
-    # /v1/models is TypeSafe's listing: the `auto` alias, then local models whose `name` is the id (the human name is
-    # `display_name`), plus hosted `references`. Here: the catalog models as before, `name` the human name.
+    # /v1/models is the System One API's listing: the `auto` alias, then local models whose `name` is the id (the human
+    # name is `display_name`), plus hosted `references`. Here: the catalog models as before, `name` the human name.
     out = [m for m in reply['models'] + reply.get('references', []) if isinstance(m, dict) and 'id' in m and not m.get('alias')]
     for m in out:   # highest precision first, as the table shows them
         m['name'] = m.get('display_name', m.get('name'))

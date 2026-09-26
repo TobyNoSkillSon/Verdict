@@ -56,7 +56,7 @@ curl -s "$(verdict url)/v1/judge" -H 'Content-Type: application/json' \
 
 It returns `{"results": [{"answers": {"relevant": {"noul": 0.93, "confidence": 0.93}}, "model": "laya-english", "ms": 4.1}, …]}` in item order; an item it could not judge has `"error"` instead of `"answers"`.
 
-Verdict also serves TypeSafe's System One API (`POST /v1/systemone`: one state, its questions, `{"model", "answers", "usage"}`), so code written for Jev runs locally: with the official `typesafe-sdk`, `TypeSafeClient(api_key="local", base_url=<verdict url>, model="auto")` — any key works, and the model is `auto` or a local id, not `jev-latest`. For a pile of items, `judge()` or `/v1/judge` is still the fast path. The repository's `docs/API.md` documents every endpoint.
+Verdict is also compatible with the System One API (TypeSafe Jev) (`POST /v1/systemone`: one state, its questions, `{"model", "answers", "usage"}`) and works with the TypeSafe SDK, so code written for Jev runs locally: with `typesafe-sdk`, `TypeSafeClient(api_key="local", base_url=<verdict url>, model="auto")` — any key works, and the model is `auto` or a local id, not `jev-latest`. For a pile of items, `judge()` or `/v1/judge` is still the fast path. The repository's `docs/API.md` documents every endpoint.
 
 Model choice: default routing (plain English → Laya English, other scripts → Laya Multilingual) is right for most work. `verdict models` shows each model's measured accuracy, calibration, speed and links; `verdict info <model>` its model cards. Plain-ASCII Polish or German: pass `model="laya-multilingual"`. Von 1.2 (`model="von-1.2"`) is the best-calibrated local model on the benchmark, for English.
 
