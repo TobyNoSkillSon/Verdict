@@ -14,7 +14,7 @@ final class DiagnoseFormatTests: XCTestCase {
         let slow = try loaded(#"{"bits":16,"engine":"mlx","engine_reason":"kernel self-test did not pass on this chip","residency":"on_demand","kernel":"stock (windowed-attention self-test failed)","optimizations":{"tokenizer":"fast","attention":"stock","matmul":"standard GPU","optimized":false}}"#)
         let precision = try JSONDecoder().decode(Model.Precision.self, from: Data(#"{"selected":16,"default":16,"loaded":16,"options":[16,8,4]}"#.utf8))
         let a = Diagnose.report(id: "laya-english", state: fast, precision: precision, chip: "M4 Pro",
-                                timing: .init(singleMs: 9.44, longMs: 31.2, batchPerSecond: 412.6), answers: .init(valid: 20, agreed: 19, total: 20, errors: []), error: nil)
+                                timing: .init(singleMs: 9.44, longMs: 31.2, batchPerSecond: 412.6), answers: .init(valid: 20, agreed: 19, total: 20, errors: [], reference: "laya-english 16-bit"), error: nil)
         let b = Diagnose.report(id: "von-1.2", state: slow, precision: nil, chip: "M4 Pro", timing: nil, answers: nil, error: "von-1.2: HTTP 500")
         let d = Diagnosis(cliVersion: "0.3.0", appVersion: "0.3.0", api: 1, mlx: "0.32.0 (mlx-swift 9019419)", host: Self.host,
                           running: true, models: [a, b])
@@ -27,7 +27,7 @@ final class DiagnoseFormatTests: XCTestCase {
             "  self-test: passed (windowed-attention (L>=768, self-test max diff 1.2e-06))",
             "  fallbacks: matmul: standard GPU (no neural accelerators on this chip or macOS)",
             "  timing: 9.4 ms single (p50 of 18), 31 ms long item (>1k tokens), 413 items/s batched (20 per request)",
-            "  answers: 20/20 valid; refund as expected on 19/20",
+            "  answers: 20/20 valid; 19/20 match the reference answers (laya-english 16-bit)",
             "von-1.2: MLX · 16-bit · on demand",
             "  paths: tokenizer fast, attention stock, matmul standard GPU",
             "  self-test: failed (stock (windowed-attention self-test failed))",
@@ -66,6 +66,44 @@ final class DiagnoseFormatTests: XCTestCase {
         XCTAssertEqual(answers.valid, 18)
         XCTAssertEqual(answers.errors, ["too long"])
         XCTAssertEqual(answers.agreed, 1 + 1 + Diagnose.items[3...].filter(\.refund).count)
+        XCTAssertNil(answers.reference)
+        var labelled = Diagnose.text(Diagnosis(cliVersion: "0.3.0", host: Self.host, running: true, models: [
+            Diagnose.report(id: "von-1.2", state: try loaded(#"{"bits":16,"engine":"optimized"}"#), precision: nil, chip: nil,
+                            timing: nil, answers: answers, error: nil)]))
+        XCTAssertEqual(labelled.removeLast(), "  answers: 18/20 valid; refund on the labelled side on 10/20 (reference answers: laya-english 16-bit only); errors: too long")
+    }
+
+    /// The reference answers: one per item, on the labelled refund side, clear of 0.5 by more than the tolerance, and a
+    /// result equal to the reference (or within tolerance, or a near-tied runner-up) matches while a real miss does not.
+    func testReferenceAnswers() throws {
+        XCTAssertEqual(Diagnose.reference.count, Diagnose.items.count)
+        for (item, r) in zip(Diagnose.items, Diagnose.reference) {
+            XCTAssertEqual(r.refund > 0.5, item.refund, item.text.prefix(40) + "")
+            XCTAssertGreaterThan(abs(r.refund - 0.5), Diagnose.refundTolerance, "a side flip within tolerance would be accepted")
+            XCTAssertTrue(["billing", "bug", "feature", "other"].contains(r.kind))
+            XCTAssertTrue((0...2).contains(r.urgency))
+        }
+        XCTAssertTrue(Diagnose.usesReference(model: "laya-english", bits: 16))
+        XCTAssertFalse(Diagnose.usesReference(model: "laya-english", bits: 8))
+        XCTAssertFalse(Diagnose.usesReference(model: "von-1.2", bits: 16))
+
+        func result(_ r: Diagnose.Reference, refund: Double = 0, kind: String? = nil, urgency: Double = 0) throws -> JSON {
+            let choice = kind ?? r.kind
+            let probabilities = ["billing", "bug", "feature", "other"].map { #""\#($0)":\#($0 == choice ? 0.7 : 0.1)"# }.joined(separator: ",")
+            return try JSON.parse(#"{"answers":{"refund":{"noul":\#(r.refund + refund)},"kind":{"choice":"\#(choice)","probabilities":{\#(probabilities)}},"urgency":{"score":\#(r.urgency + urgency)}}}"#)
+        }
+        let exact = try Diagnose.reference.map { try result($0) }
+        let all = Diagnose.check(exact, reference: true)
+        XCTAssertEqual(all.agreed, 20); XCTAssertEqual(all.valid, 20); XCTAssertEqual(all.reference, "laya-english 16-bit")
+
+        let r = Diagnose.reference[6]           // "other", with "bug" a near tie
+        XCTAssertTrue(Diagnose.matches(try result(r, refund: -0.04, urgency: 0.09), r), "within tolerance")
+        XCTAssertTrue(Diagnose.matches(try result(r, kind: "bug"), r), "near-tied runner-up")
+        XCTAssertFalse(Diagnose.matches(try result(r, kind: "billing"), r))
+        XCTAssertFalse(Diagnose.matches(try result(r, refund: -0.06), r))
+        XCTAssertFalse(Diagnose.matches(try result(r, urgency: 0.11), r))
+        var missed = exact; missed[0] = try result(Diagnose.reference[0], kind: "feature"); missed[19] = try JSON.parse(#"{"error":"x"}"#)
+        XCTAssertEqual(Diagnose.check(missed, reference: true).agreed, 18)
     }
 }
 

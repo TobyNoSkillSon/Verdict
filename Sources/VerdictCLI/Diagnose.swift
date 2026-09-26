@@ -25,11 +25,14 @@ struct Diagnosis: Equatable {
     struct Answers: Equatable {
         /// Items answered with every probability finite and in [0, 1] (scores within their rubric).
         var valid: Int
-        /// Items whose yes/no answer (P > 0.5) matches the built-in item's obvious answer.
+        /// With `reference`: items whose answers match the reference answers within tolerance (Diagnose.reference).
+        /// Without: items whose yes/no answer (P > 0.5) is on the built-in item's labelled side.
         var agreed: Int
         var total: Int
         /// Item errors, verbatim (first three).
         var errors: [String]
+        /// What `agreed` was compared with, e.g. "laya-english 16-bit"; nil for the labelled yes/no side.
+        var reference: String? = nil
     }
     struct ModelReport: Equatable {
         var id: String
@@ -117,6 +120,63 @@ enum Diagnose {
     ]
     static var shortCount: Int { items.count - 2 }
 
+    // MARK: reference answers
+
+    /// One item's reference answers: `refund` probability, `kind` choice (and the runners-up within `kindMargin` of it,
+    /// which a near-tie may pick instead) and `urgency` score.
+    struct Reference: Equatable {
+        var refund: Double
+        var kind: String
+        var also: [String] = []
+        var urgency: Double
+    }
+    static let referenceModel = "laya-english"
+    static let referenceBits = 16
+    static var referenceLabel: String { "\(referenceModel) \(referenceBits)-bit" }
+    /// Tolerances. On the reference Mac one item alone and the same item in the 20-item batch differ by up to 0.003, and
+    /// the optimized paths match stock MLX within 0.0001; other chips' GPU arithmetic may differ a little more. A wrong
+    /// kernel, tokenizer or weight file misses by far more than this.
+    static let refundTolerance = 0.05
+    static let urgencyTolerance = 0.1
+    static let kindMargin = 0.05
+    /// Laya English at its recommended precision (16-bit) on `items` with `questions`, in the batched first request
+    /// `measure` makes: measured with Verdict 0.3.0 on the reference Mac (M5 Max, macOS 26), rounded to 4 places as the
+    /// API returns them.
+    static let reference: [Reference] = [
+        .init(refund: 0.8864, kind: "billing", urgency: 1.6818),
+        .init(refund: 0.0311, kind: "bug", urgency: 1.5695),
+        .init(refund: 0.9487, kind: "bug", urgency: 1.2241),
+        .init(refund: 0.0000, kind: "feature", urgency: 0.8214),
+        .init(refund: 0.8817, kind: "billing", urgency: 1.4975),
+        .init(refund: 0.0001, kind: "other", urgency: 0.5186),
+        .init(refund: 0.8529, kind: "other", also: ["bug"], urgency: 1.6200),
+        .init(refund: 0.0000, kind: "other", also: ["feature"], urgency: 1.7740),
+        .init(refund: 0.9397, kind: "billing", urgency: 1.7411),
+        .init(refund: 0.0000, kind: "other", urgency: 1.4008),
+        .init(refund: 0.7393, kind: "billing", also: ["other"], urgency: 1.7191),
+        .init(refund: 0.0000, kind: "other", urgency: 1.2330),
+        .init(refund: 0.7034, kind: "billing", urgency: 0.8909),
+        .init(refund: 0.0000, kind: "feature", urgency: 1.1860),
+        .init(refund: 0.8011, kind: "billing", urgency: 1.4381),
+        .init(refund: 0.0990, kind: "bug", urgency: 1.5028),
+        .init(refund: 0.8648, kind: "billing", urgency: 0.9518),
+        .init(refund: 0.0000, kind: "other", urgency: 0.9288),
+        .init(refund: 0.8538, kind: "billing", urgency: 1.0078),
+        .init(refund: 0.0674, kind: "billing", urgency: 1.0854),
+    ]
+
+    /// Whether the reference answers apply: Laya English loaded at 16-bit.
+    static func usesReference(model: String, bits: Int?) -> Bool { model == referenceModel && bits == referenceBits }
+
+    /// One result against its reference: refund and urgency within tolerance, the same kind (or a near-tied runner-up).
+    static func matches(_ result: JSON, _ r: Reference) -> Bool {
+        let answers = result["answers"]
+        guard let noul = answers?["refund"]?["noul"]?.double, let choice = answers?["kind"]?["choice"]?.string,
+              let score = answers?["urgency"]?["score"]?.double else { return false }
+        return abs(noul - r.refund) <= refundTolerance && abs(score - r.urgency) <= urgencyTolerance
+            && (choice == r.kind || r.also.contains(choice))
+    }
+
     // MARK: collection
 
     /// Runs the diagnosis against the app `verdict` points at. Never launches it.
@@ -133,10 +193,12 @@ enum Diagnose {
             status = try await quiet.status()
         }
         let client = SystemOneClient(verdict: quiet)
+        let loadedBits = Dictionary(((try? await quiet.models()) ?? []).map { ($0.id, $0.precision?.loaded) }) { a, _ in a }
         var timings: [String: (Timing?, Answers?, String?)] = [:]
         for id in status.models.keys.sorted() {
             do {
-                let (t, a) = try await measure(client, model: id)
+                let bits = loadedBits[id].flatMap { $0 } ?? status.models[id]?.bits.flatMap { $0 == 0 ? nil : $0 }
+                let (t, a) = try await measure(client, model: id, reference: usesReference(model: id, bits: bits))
                 timings[id] = (t, a, nil)
             } catch {
                 timings[id] = (nil, nil, (error as? LocalizedError)?.errorDescription ?? "\(error)")
@@ -164,7 +226,7 @@ enum Diagnose {
     }
 
     /// Warm-up and answers from one batch, then three timed batches and every item alone.
-    static func measure(_ client: SystemOneClient, model: String) async throws -> (Timing, Answers) {
+    static func measure(_ client: SystemOneClient, model: String, reference: Bool) async throws -> (Timing, Answers) {
         let states = items.map { JSON.string($0.text) }
         let clock = ContinuousClock()
         func seconds(_ d: Duration) -> Double { Double(d.components.seconds) + Double(d.components.attoseconds) / 1e18 }
@@ -183,13 +245,13 @@ enum Diagnose {
         }
         let timing = Timing(singleMs: median(Array(single.prefix(shortCount))), longMs: median(Array(single.suffix(2))),
                             batchPerSecond: Double(items.count) / median(batches))
-        return (timing, check(results))
+        return (timing, check(results, reference: reference))
     }
 
-    /// Validity and agreement with the built-in items' obvious `refund` answers.
-    static func check(_ results: [JSON]) -> Answers {
+    /// Validity, and agreement with the reference answers (`reference`) or else the built-in items' labelled `refund` side.
+    static func check(_ results: [JSON], reference useReference: Bool = false) -> Answers {
         var valid = 0, agreed = 0, errors: [String] = []
-        for (item, result) in zip(items, results) {
+        for (index, (item, result)) in zip(items, results).enumerated() {
             if let error = result["error"], !error.isNull { errors.append(error.string ?? error.compact); continue }
             let answers = result["answers"]
             let noul = answers?["refund"]?["noul"]?.double
@@ -199,9 +261,12 @@ enum Diagnose {
             let ok = unit(noul) && !probabilities.isEmpty && probabilities.allSatisfy { unit($0) }
                 && (score.map { $0.isFinite && $0 >= 0 && $0 <= 2 } ?? false)
             if ok { valid += 1 }
-            if let noul, noul.isFinite, (noul > 0.5) == item.refund { agreed += 1 }
+            if useReference {
+                if ok, matches(result, reference[index]) { agreed += 1 }
+            } else if let noul, noul.isFinite, (noul > 0.5) == item.refund { agreed += 1 }
         }
-        return Answers(valid: valid, agreed: agreed, total: items.count, errors: Array(errors.prefix(3)))
+        return Answers(valid: valid, agreed: agreed, total: items.count, errors: Array(errors.prefix(3)),
+                       reference: useReference ? referenceLabel : nil)
     }
 
     static func median(_ xs: [Double]) -> Double {
@@ -283,7 +348,8 @@ enum Diagnose {
                            + "\(Format.fixed(t.batchPerSecond, 0)) items/s batched (\(items.count) per request)")
             }
             if let a = m.answers {
-                var line = "  answers: \(a.valid)/\(a.total) valid; refund as expected on \(a.agreed)/\(a.total)"
+                var line = "  answers: \(a.valid)/\(a.total) valid; " + (a.reference.map { "\(a.agreed)/\(a.total) match the reference answers (\($0))" }
+                    ?? "refund on the labelled side on \(a.agreed)/\(a.total) (reference answers: \(referenceLabel) only)")
                 if !a.errors.isEmpty { line += "; errors: " + a.errors.joined(separator: " | ") }
                 out.append(line)
             }
@@ -328,7 +394,7 @@ enum Diagnose {
                          .init("items", JSON(items.count))]) } ?? .null))
             members.append(.init("answers", m.answers.map { a in
                 .object([.init("valid", JSON(a.valid)), .init("agreed", JSON(a.agreed)), .init("total", JSON(a.total)),
-                         .init("errors", .array(a.errors.map(JSON.string)))]) } ?? .null))
+                         .init("errors", .array(a.errors.map(JSON.string))), .init("reference", s(a.reference))]) } ?? .null))
             members.append(.init("error", s(m.error)))
             return .object(members)
         }

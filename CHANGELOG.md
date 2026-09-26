@@ -1,12 +1,12 @@
 # Changelog
 
-## 0.3.0 (unreleased)
+## 0.3.0 (2026-09-26)
 
 ### Added
 
 - Updates from the app: when a newer release is published, an orange **Update to X.Y.Z…** item appears under Support the developer…; its popup shows the release notes and **Update Now** downloads, verifies (SHA-256, code signature) and installs it, waits while a model is loading, keeps settings and models, restarts Verdict, and restores the previous version if the new one does not start. `verdict update [--check]` does the same from a terminal. Verdict checks at launch and every 24 hours with one request to the GitHub releases API.
 - `scripts/install-release.sh` replaces only the Verdict.app in its install directory (`VERDICT_INSTALL_DIR`, `VERDICT_SUPPORT_DIR` for tests), quits it by process rather than by name, and waits for the new version's worker.
-- `verdict diagnose [--load] [--json]`: a report for bug reports (chip, macOS, Verdict and MLX versions, each loaded model's engine, fallbacks, self-test, precision and timing on 20 built-in items) with a link that opens a prefilled GitHub bug report. `/v1/status` reports `mlx` (MLX core version and mlx-swift revision) and each model's `kernel` (attention path and self-test).
+- `verdict diagnose [--load] [--json]`: a report for bug reports (chip, macOS, Verdict and MLX versions, each loaded model's engine, fallbacks, self-test, precision, timing on 20 built-in items, and for Laya English at 16-bit how many answers match reference answers from the reference Mac) with a link that opens a prefilled GitHub bug report. `/v1/status` reports `mlx` (MLX core version and mlx-swift revision) and each model's `kernel` (attention path and self-test).
 - `POST /v1/systemone` and `GET /v1/models`, compatible with the System One API (TypeSafe Jev); Verdict works with the TypeSafe SDK. Concurrent requests for the same model share GPU passes. See [docs/API.md](docs/API.md#system-one-api).
 - `"merge": false` on `/v1/systemone` runs that request in a GPU pass of its own, so its answers are exactly the ones it gets sent alone. A merged answer can differ from that by up to about 0.03 in a probability (Laya English at 16-bit; see [Concurrent requests](docs/API.md#concurrent-requests)).
 - An `x-verdict-bits` header on `/v1/systemone` replies says which precision answered.
