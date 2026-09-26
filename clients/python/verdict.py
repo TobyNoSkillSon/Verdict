@@ -229,7 +229,8 @@ def _call(method, path, body=None, timeout=600):
         raise VerdictError(f'Unexpected answer from Verdict: {e}') from None
     except urllib.error.HTTPError as e:
         try:
-            msg = json.loads(e.read()).get('error')
+            reply = json.loads(e.read())
+            msg = reply.get('error') or (reply['detail'] if isinstance(reply.get('detail'), str) else None) or str(e)
         except Exception:
             msg = str(e)
         if e.code == 404 and msg == 'not found' and path.startswith('/v1/'):
@@ -296,7 +297,7 @@ def models():
         raise VerdictError('Unexpected answer from Verdict: no models list')
     # /v1/models is TypeSafe's listing: the `auto` alias, then local models whose `name` is the id (the human name is
     # `display_name`), plus hosted `references`. Here: the catalog models as before, `name` the human name.
-    out = [m for m in reply['models'] + reply.get('references', []) if isinstance(m, dict) and 'id' in m]
+    out = [m for m in reply['models'] + reply.get('references', []) if isinstance(m, dict) and 'id' in m and not m.get('alias')]
     for m in out:   # highest precision first, as the table shows them
         m['name'] = m.get('display_name', m.get('name'))
         m['benchmarks'] = dict(sorted(m['benchmarks'].items(), key=lambda kv: -int(kv[0]) if kv[0].isdigit() else 0))
@@ -327,8 +328,8 @@ def judge(items, questions, model='auto', batch=256, check=True, bits=None):
     Items are strings or dicts (Laya sees a dict as JSON, Von as key: value lines), so name the fields.
     Question ids and choice labels are distinct as exact strings, as in any Python dict.
     Verdict judges text; an item with image/audio/video paths, or over a model's context, comes back as a Result with .error set; the rest still run.
-    bits runs the model(s) at that precision, a whole number (a loaded model at another precision is reloaded and stays at it
-    while loaded; a later load without bits uses models()'s precision['selected']).
+    bits requires that precision, a whole number: a model running at another precision raises VerdictError (HTTP 409)
+    instead of switching, because the precision is shared by every client. load(model, bits) switches it for everyone.
     Raises VerdictError when the worker is unavailable or its reply is not one result object per item — never
     returns made-up or misaligned answers."""
     questions = {k: dict(v) for k, v in questions.items()}

@@ -7,7 +7,8 @@ verdict: judge many items with the same typed questions, locally, in millisecond
     verdict judge --questions q.json [--field KEY] [--sort NAME] [--min X] [--top N] [--model ID] [--bits N] [--json] < items.jsonl
         one line per item:  #index  name=value(conf) …  | first 60 characters of the item
         --field KEY judges that key of each JSONL object (default: the whole line); --sort orders by a question's
-        score / probability, highest first; --json prints every probability
+        score / probability, highest first; --json prints every probability; --bits N refuses to run unless the
+        model runs at N bits (verdict load ID --bits N switches it, for every client)
     verdict status                         port, loaded models, memory, Keep Hot, recent unloads
     verdict models [--all] [--json]        catalog at each model's selected precision (--all: every precision)
     verdict info MODEL [--json]            one model: every precision, task breakdown, source, links
@@ -19,8 +20,8 @@ verdict: judge many items with the same typed questions, locally, in millisecond
     verdict --version                      this command's version (the app's)
 
 q.json: {"name": {"type": "noul"|"choice"|"score", "instructions": "…", "criteria": …}, …}
-Talks to the Verdict app over its local HTTP API (docs/API.md; System One API = TypeSafe's, plus /v1/judge for
-batches); starts the app if it is not running.
+Talks to the Verdict app over its local HTTP API (docs/API.md: compatible with the System One API (TypeSafe Jev),
+plus /v1/judge for batches); starts the app if it is not running.
 """
 
 struct CLIError: Error { let message: String; init(_ message: String) { self.message = message } }

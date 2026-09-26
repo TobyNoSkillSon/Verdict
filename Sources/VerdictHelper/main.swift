@@ -105,10 +105,16 @@ final class HTTPServer {
                     guard method == "POST" else { respond(connection, 405, ["detail": "Method Not Allowed"], next: next); return }
                     switch SystemOne.validate(rawBody, catalog: service.catalog) {
                     case .failure(let issues): let (code, body) = SystemOne.unprocessable(issues); respond(connection, code, body, next: next)
-                    case .success(let call): batcher.submit(call) { [self] reply in respond(connection, reply.0, reply.1, next: next) }
+                    case .success(let call):
+                        batcher.submit(call) { [self] reply in
+                            respond(connection, reply.status, reply.body, next: next, headers: reply.bits.map { ["x-verdict-bits": String($0)] } ?? [:])
+                        }
                     }
                     return
                 }
+                // The System One API's other paths answer as FastAPI does: unknown /v1 paths (a trailing slash
+                // included) 404 {"detail": "Not Found"}, /v1/models with another method 405.
+                if let refusal = Self.fastAPIRefusal(method: method, path: path) { respond(connection, refusal.0, refusal.1, next: next); return }
                 do {
                     let body = length == 0 ? [:] : try JSONSerialization.jsonObject(with: rawBody) as? [String: Any] ?? [:]
                     let (code, response) = service.request(String(parts[0]), String(parts[1]), body, rawBody: rawBody)
@@ -126,15 +132,22 @@ final class HTTPServer {
         let bare = path.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? path
         return bare == "/v1/systemone" ? bare : nil
     }
-    static let reasons = [200: "OK", 400: "Bad Request", 403: "Forbidden", 404: "Not Found", 405: "Method Not Allowed", 415: "Unsupported Media Type",
+    /// 404/405 in FastAPI's shape for /v1 paths Verdict does not serve and methods /v1/models does not take; nil otherwise.
+    static func fastAPIRefusal(method: String, path: String) -> (Int, [String: Any])? {
+        let bare = path.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? path
+        guard bare.hasPrefix("/v1/") else { return nil }
+        if bare == "/v1/models" { return method == "GET" ? nil : (405, ["detail": "Method Not Allowed"]) }
+        return Service.route(bare) == nil ? (404, ["detail": "Not Found"]) : nil
+    }
+    static let reasons = [200: "OK", 400: "Bad Request", 403: "Forbidden", 404: "Not Found", 405: "Method Not Allowed", 409: "Conflict", 415: "Unsupported Media Type",
                           422: "Unprocessable Entity", 500: "Internal Server Error", 507: "Insufficient Storage"]
     /// `next`: keep the connection and read the client's next request (bytes already received first); nil closes it.
-    private func respond(_ connection: NWConnection, _ code: Int, _ body: [String: Any], next: Data? = nil) {
+    private func respond(_ connection: NWConnection, _ code: Int, _ body: [String: Any], next: Data? = nil, headers: [String: String] = [:]) {
         // Sorted keys (stable output for clients and docs), shortest round-trip numbers.
         let data = ResponseJSON.data(body)
         let reason = Self.reasons[code] ?? "Bad Request"
         // Every response carries a request id in TypeSafe's header (the SDKs expose it as result.request_id).
-        let header = "HTTP/1.1 \(code) \(reason)\r\nContent-Type: application/json\r\nContent-Length: \(data.count)\r\nx-typesafe-request-id: \(SystemOne.requestID())\r\nConnection: \(next == nil ? "close" : "keep-alive")\r\n\r\n"
+        let header = "HTTP/1.1 \(code) \(reason)\r\nContent-Type: application/json\r\nContent-Length: \(data.count)\r\nx-typesafe-request-id: \(SystemOne.requestID())\r\n\(headers.map { "\($0.key): \($0.value)\r\n" }.joined())Connection: \(next == nil ? "close" : "keep-alive")\r\n\r\n"
         connection.send(content: Data(header.utf8) + data, completion: .contentProcessed { [self] error in
             if service.quitting { connection.cancel(); listener.cancel(); service.finish(); exit(0) }
             if let next, error == nil { read(connection, next) } else { connection.cancel() }

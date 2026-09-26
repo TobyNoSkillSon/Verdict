@@ -199,14 +199,23 @@ final class HelperTests: XCTestCase {
         XCTAssertEqual(raw[0]["answers"]?.members?.count, 2)
     }
 
-    func testJudgeBitsLoadsAtThatPrecision() async throws {
-        _ = try await verdict.judge(["x"], ["x": .noul("Is it?")], model: "laya-english", bits: 8)
+    func testJudgeBitsRequireThePrecision() async throws {
+        // bits never switch the model every client shares (final review F1): 409 unless it runs at them.
+        _ = try await verdict.judge(["x"], ["x": .noul("Is it?")], model: "laya-english", bits: 16)
         var status = try await verdict.status()
-        XCTAssertEqual(status.models["laya-english"]?.bits, 8)
-        XCTAssertEqual(status.models["laya-english"]?.residency, "on_demand")
-        _ = try await verdict.judge(["x"], ["x": .noul("Is it?")], model: "laya-english", bits: 0)
-        status = try await verdict.status()
         XCTAssertEqual(status.models["laya-english"]?.bits, 0)
+        XCTAssertEqual(status.models["laya-english"]?.residency, "on_demand")
+        do {
+            _ = try await verdict.judge(["x"], ["x": .noul("Is it?")], model: "laya-english", bits: 8)
+            XCTFail("8 bits switched the model")
+        } catch VerdictError.api(let code, let message) {
+            XCTAssertEqual(code, 409)
+            XCTAssertTrue(message.hasPrefix("laya-english is loaded at 16-bit for every client; this request asked for 8-bit"), message)
+        }
+        _ = try await verdict.load("laya-english", bits: 8)
+        _ = try await verdict.judge(["x"], ["x": .noul("Is it?")], model: "laya-english", bits: 8)
+        status = try await verdict.status()
+        XCTAssertEqual(status.models["laya-english"]?.bits, 8)
         do {
             _ = try await verdict.judge(["x"], ["x": .noul("Is it?")], model: "laya-english", bits: 5)
             XCTFail("5 bits accepted")
@@ -215,7 +224,7 @@ final class HelperTests: XCTestCase {
             XCTAssertEqual(message, "laya-english: Laya precision must be 16, 8 or 4 bits")
         }
         status = try await verdict.status()
-        XCTAssertEqual(status.models["laya-english"]?.bits, 0, "a refused precision changes nothing")
+        XCTAssertEqual(status.models["laya-english"]?.bits, 8, "a refused precision changes nothing")
     }
 
     func testLoadUnloadManualAndDelete() async throws {
@@ -358,7 +367,7 @@ final class HelperTests: XCTestCase {
         (code, _) = try await helper.raw("GET", "/v1/status?x=1")
         XCTAssertEqual(code, 200)
         (code, body) = try await helper.raw("POST", "/v1/nope", body: "{}")
-        XCTAssertEqual(code, 404); XCTAssertEqual(body["error"] as? String, "not found: POST /v1/nope")
+        XCTAssertEqual(code, 404); XCTAssertEqual(body["detail"] as? String, "Not Found", "unknown /v1 paths answer as FastAPI does")
         (code, _) = try await helper.raw("POST", "/v1/quit", body: "{}")
         XCTAssertEqual(code, 404, "internal endpoints are not versioned")
         (code, _) = try await helper.raw("GET", "/models")

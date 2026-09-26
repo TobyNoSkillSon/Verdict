@@ -144,9 +144,9 @@ public struct Verdict: Sendable {
 
     /// Answers every question for every item, in order. Items over a model's context (nothing is truncated) or with
     /// media come back with `error` set; the rest still run. `model`: "auto" routes plain English to laya-english and
-    /// other scripts to laya-multilingual. `bits`: run the model(s) at this precision (reloads a model loaded at
-    /// another; it stays at the new precision while it stays loaded, and a later load without bits uses the selected
-    /// precision, `Model.precision.selected`). Requests go out in batches of `batch` items.
+    /// other scripts to laya-multilingual. `bits`: require this precision. A model runs at one precision for every
+    /// client, so a model running at another one throws `.api(status: 409, …)` instead of switching; `load(_:bits:)`
+    /// switches it for everyone. Requests go out in batches of `batch` items.
     public func judge(_ items: [Item], _ questions: Questions, model: String = "auto", bits: Int? = nil, batch: Int = 256) async throws -> [Judgement] {
         // Parsed with VerdictKit's JSON, not JSONDecoder: that would fold ids differing only by normalization.
         try await judgeJSON(items.map(\.json), questions: questions.json, model: model, bits: bits, batch: batch).map {
@@ -205,7 +205,7 @@ public struct Verdict: Sendable {
     }
     /// The catalog entries of a GET /v1/models body, as JSON (entries with an `id`: models, then references).
     public static func catalog(_ reply: JSON) -> [JSON] {
-        ((reply["models"]?.array ?? []) + (reply["references"]?.array ?? [])).filter { $0["id"]?.string != nil }
+        ((reply["models"]?.array ?? []) + (reply["references"]?.array ?? [])).filter { $0["id"]?.string != nil && $0["alias"]?.bool != true }
     }
 
     /// Loads a model (downloading it the first time). `bits` reloads it at that precision (0 = native). `manual`

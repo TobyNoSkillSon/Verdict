@@ -53,6 +53,32 @@ private final class StubModel: DecisionModel, TokenizerPathReporting, KernelPath
     }
 }
 
+extension StubModel {
+    /// VERDICT_TEST_BATCH_DEPENDENT=1 imitates the real models' batch arithmetic: a noul answered in a pass shared by
+    /// several requests is 0.74, alone 0.75 (tests of merging and the `merge: false` opt-out). VERDICT_TEST_PASS_MS
+    /// makes each pass take that long, so concurrent requests queue and merge as they do behind a real GPU pass.
+    func predict(groups: [RequestGroup]) throws -> [GroupResult] {
+        let env = ProcessInfo.processInfo.environment
+        if let ms = Double(env["VERDICT_TEST_PASS_MS"] ?? ""), ms > 0 { usleep(useconds_t(ms * 1000)) }
+        let shared = groups.count > 1 && env["VERDICT_TEST_BATCH_DEPENDENT"] == "1"
+        return try groups.map { group in
+            var results = try predict(group.items, group.questions)
+            if shared {
+                results = results.map { result in
+                    guard case .answers(var answers) = result else { return result }
+                    for (id, answer) in answers where answer.noul != nil { var a = answer; a.noul = 0.74; answers[id] = a }
+                    return .answers(answers)
+                }
+            }
+            let tokens = try zip(group.items, results).map { item, result -> Int in
+                if case .answers = result { return try tokenCount(item, group.questions) * group.questions.count }
+                return 0
+            }
+            return GroupResult(results: results, inputTokens: tokens)
+        }
+    }
+}
+
 /// Test stubs have no config of their own: they take the catalog's context (von-1.1 2048, the rest 8192).
 protocol CatalogContextAdopting: AnyObject { func adoptContext(_ tokens: Int) }
 

@@ -86,7 +86,7 @@ enum ModelsView {
     /// GET /v1/models: TypeSafe's `{"models": [{"name", "description", "release_date"}]}` listing every name the
     /// `model` field accepts — the `auto` alias first, then each local model (with all of the fields above; `name` is
     /// its id, `display_name` the human name) — plus `references`: hosted models shown for comparison that Verdict
-    /// does not serve (Jev).
+    /// does not serve (Jev). Catalog clients skip the entry with `"alias": true`.
     static func listing(_ view: [[String: Any]], catalog: [[String: Any]]) -> [String: Any] {
         func raw(_ id: String) -> [String: Any] { catalog.first { $0["id"] as? String == id } ?? [:] }
         func described(_ entry: [String: Any]) -> [String: Any] {
@@ -108,8 +108,14 @@ enum ModelsView {
         let hosted = view.filter { $0["loadable"] as? Bool != true }.map(described)
         let autoTargets = ["laya-english", "laya-multilingual"]
         let released = autoTargets.compactMap { raw($0)["release_date"] as? String }.max() ?? ""
-        let alias: [String: Any] = ["name": "auto", "alias": true, "release_date": released,
-                                    "description": "Alias: laya-english for English text (letters at least 99.5% ASCII), laya-multilingual for anything else."]
+        let about = "Alias: laya-english for English text (letters at least 99.5% ASCII), laya-multilingual for anything else."
+        // The alias also carries every field of a catalog entry (neutral values), so clients written before the System
+        // One listing, which read those fields from each entry, keep working (api stays 1).
+        let alias: [String: Any] = ["name": "auto", "alias": true, "release_date": released, "description": about,
+                                    "id": "auto", "display_name": "Auto", "family": NSNull(), "inputs": ["text"], "params": NSNull(),
+                                    "context": NSNull(), "languages": NSNull(), "license": NSNull(), "state": "alias", "loadable": false,
+                                    "precision": NSNull(), "benchmark": NSNull(), "benchmarks": [String: Any](), "links": [String: Any](),
+                                    "recommendation": about]
         return ["models": [alias] + local, "references": hosted]
     }
 }

@@ -26,13 +26,27 @@ struct ValidationIssue {
 struct SystemOneCall {
     /// Resolved model id ("auto" already resolved).
     let model: String
-    /// Explicit precision (the `bits` extension), validated for `model`; nil = the model's selected precision.
+    /// Required precision (the `bits` extension), validated for `model`; nil = whatever the model runs at. It never
+    /// changes the model's precision: a request asking for another one gets 409 (Service.precisionConflict).
     let bits: Int?
     let item: Item
     let questions: [Question]
     /// Score questions' criteria as sent, by question index (the answer's `legend`).
     let legends: [Int: [OrderedJSON]]
-    var key: String { "\(model)@\(bits.map(String.init) ?? "-")" }
+    /// The `merge` extension (default true): false runs this request in a GPU pass of its own, so its answers are
+    /// exactly the ones it gets sent alone, whatever other clients send meanwhile.
+    var merge: Bool = true
+    /// Requests with the same key share a GPU pass. A model runs at one precision for every client, so the model id is
+    /// the (model, effective precision) pair; requests whose bits differ from it are answered 409 inside the batch.
+    var key: String { model }
+}
+
+/// A /v1/systemone reply: status, body and the effective precision that answered (the `x-verdict-bits` header).
+struct SystemOneReply {
+    let status: Int
+    let body: [String: Any]
+    var bits: Int? = nil
+    init(_ reply: (Int, [String: Any]), bits: Int? = nil) { status = reply.0; body = reply.1; self.bits = bits }
 }
 
 /// A validated request, or why not.
@@ -153,6 +167,11 @@ enum SystemOne {
                 issues.append(ValidationIssue(loc: ["body", "bits"], msg: "Input should be a valid integer", type: "int_type", input: raw))
             }
         }
+        var merge = true
+        if let raw = body["merge"], !raw.isNull {
+            if case .scalar(let literal) = raw, literal == "true" || literal == "false" { merge = literal == "true" }
+            else { issues.append(ValidationIssue(loc: ["body", "merge"], msg: "Input should be a valid boolean", type: "bool_type", input: raw)) }
+        }
         guard issues.isEmpty, let resolved, let state else { return .failure(issues) }
         let item: Item
         switch state {
@@ -160,7 +179,7 @@ enum SystemOne {
         case .object: item = Item(text: state.render(), kind: .object)
         default: item = Item(text: state.render(), kind: .value)
         }
-        return .success(SystemOneCall(model: resolved, bits: bits, item: item, questions: questions, legends: legends))
+        return .success(SystemOneCall(model: resolved, bits: bits, item: item, questions: questions, legends: legends, merge: merge))
     }
 
     /// One question, OpenAPI `Question` (discriminated by `type`). Appends issues; returns the engine question.
@@ -267,21 +286,21 @@ enum SystemOne {
 }
 
 /// Merges concurrent /v1/systemone requests into GPU batches. Requests queue while a batch runs; when it finishes, the
-/// oldest waiting request's model and precision are served next, together with every other waiting request for the
-/// same model and precision (up to `maxRows` question rows). A request arriving at an idle batcher starts a batch at
+/// oldest waiting request's model is served next, together with every other waiting request for the same model (up to
+/// `maxRows` question rows; all run at the model's one precision). A request with `merge: false` runs alone. A request arriving at an idle batcher starts a batch at
 /// once, and so does the next batch after one finishes (`window` can make it wait for the clients' follow-ups).
 /// Replies go out on their own queue so response encoding overlaps the next batch.
 final class SystemOneBatcher {
     struct Pending {
         let call: SystemOneCall
-        let reply: ((Int, [String: Any])) -> Void
+        let reply: (SystemOneReply) -> Void
     }
     private let lock = NSLock()
     private var pending: [Pending] = []
     private var running = false
     private let queue = DispatchQueue(label: "verdict.systemone", qos: .userInitiated)
     private let replies = DispatchQueue(label: "verdict.systemone.replies", qos: .userInitiated, attributes: .concurrent)
-    private let execute: ([SystemOneCall]) -> [(Int, [String: Any])]
+    private let execute: ([SystemOneCall]) -> [SystemOneReply]
     /// VERDICT_BATCH_WINDOW_MS: after a merged batch, wait up to this long for its clients' next requests. Default 0:
     /// 1, 2 and 4 ms measured no gain with 100–500 concurrent typesafe-sdk calls (their next requests take longer).
     let window: Double
@@ -290,7 +309,7 @@ final class SystemOneBatcher {
     /// VERDICT_BATCH=0 runs every request alone (A/B and diagnosis).
     let merging: Bool
 
-    init(execute: @escaping ([SystemOneCall]) -> [(Int, [String: Any])]) {
+    init(execute: @escaping ([SystemOneCall]) -> [SystemOneReply]) {
         let env = ProcessInfo.processInfo.environment
         window = max(0, Double(env["VERDICT_BATCH_WINDOW_MS"] ?? "") ?? 0) / 1000
         maxRows = max(1, Int(env["VERDICT_BATCH_MAX_ROWS"] ?? "") ?? 4096)
@@ -298,7 +317,7 @@ final class SystemOneBatcher {
         self.execute = execute
     }
 
-    func submit(_ call: SystemOneCall, reply: @escaping ((Int, [String: Any])) -> Void) {
+    func submit(_ call: SystemOneCall, reply: @escaping (SystemOneReply) -> Void) {
         lock.lock()
         pending.append(Pending(call: call, reply: reply))
         let start = !running
@@ -324,10 +343,10 @@ final class SystemOneBatcher {
             }
             guard let first = pending.first else { running = false; lastBatch = 0; lock.unlock(); return }
             var take: [Pending] = [], rest: [Pending] = [], rows = 0
-            let key = first.call.key
+            let key = first.call.key, alone = !merging || !first.call.merge
             for p in pending {
                 let cost = p.call.questions.count
-                if merging ? (p.call.key == key && (take.isEmpty || rows + cost <= maxRows)) : take.isEmpty {
+                if alone ? take.isEmpty : take.isEmpty || (p.call.merge && p.call.key == key && rows + cost <= maxRows) {
                     take.append(p); rows += cost
                 } else { rest.append(p) }
             }

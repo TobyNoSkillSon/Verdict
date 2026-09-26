@@ -3,6 +3,12 @@ import Darwin
 import MLX
 import VerdictEngine
 
+/// A request's explicit bits differ from the precision the model runs at for every client (HTTP 409).
+struct PrecisionConflict: Error, LocalizedError {
+    let message: String
+    var errorDescription: String? { message }
+}
+
 final class Service {
     let catalog: Catalog
     let support: URL
@@ -424,24 +430,20 @@ final class Service {
             if groups[id] == nil { modelOrder.append(id) }
             groups[id, default: []].append(index)
         }
-        // bits: the precision every model this request uses runs at (like /load bits: a model stays at it while it
-        // stays loaded). Validated for all of them before anything loads; null is the same as omitted.
+        // bits: the precision this request requires. It never changes a model's precision (that would change every
+        // other client's answers): each model the request uses must run at it already (409 otherwise, before anything
+        // loads). null is the same as omitted.
         var requestedBits: [String: Int] = [:]
         if let raw = body["bits"], let bits = try wholeNumber(raw, "bits") {
             for id in modelOrder { requestedBits[id] = try validBits(bits, for: id) }
+            for id in modelOrder {
+                if let conflict = precisionConflict(try catalog.spec(id), requested: bits) { throw PrecisionConflict(message: conflict) }
+            }
         }
         // Every model this request needs is in flight until it returns: loading a later one never evicts an earlier one.
         pinned = Set(modelOrder); defer { pinned = [] }
         for id in modelOrder {
-            if let bits = requestedBits[id] {
-                let spec = try catalog.spec(id)
-                if models[id] == nil {
-                    _ = try load(id, as: .onDemand, bits: bits)
-                } else if spec.effectiveBits(loadedBits[id] ?? 0) != spec.effectiveBits(bits) {
-                    try reload(id, bits: bits, as: residency[id] == .manual ? .manual : .onDemand)
-                }
-            }
-            let agent = try load(id, as: .onDemand), indexes = groups[id]!
+            let agent = try load(id, as: .onDemand), indexes = groups[id]!   // at runningBits (checked above)
             func modelItem(_ index: Int) -> Item { item(items[index], ordered: orderedItems.indices.contains(index) ? orderedItems[index] : nil) }
             let start = Date()
             let answers = try predict(agent, id, [RequestGroup(items: indexes.map(modelItem), questions: qs)])[0].results
@@ -500,68 +502,95 @@ final class Service {
             throw error
         }
     }
-    /// Runs merged /v1/systemone requests (same model and precision, SystemOneBatcher) as one GPU pass and returns one
-    /// (status, body) per request. If the merged pass throws (a question the model refuses), each request runs alone
+    /// The precision (helper bits) `spec` runs at for every client: as loaded, else what a load without bits uses.
+    private func runningBits(_ spec: ModelSpec) -> Int { models[spec.id] != nil ? loadedBits[spec.id] ?? 0 : implicitBits(spec) }
+    /// A request's explicit bits are a requirement, never a switch: one client's bits must not change the precision
+    /// every other client's requests run at, and alternating precisions would reload the model between batches. nil
+    /// when the model runs (or, not loaded, would load) at `requested`; else the 409 message.
+    private func precisionConflict(_ spec: ModelSpec, requested: Int) -> String? {
+        let running = spec.effectiveBits(runningBits(spec)), wanted = spec.effectiveBits(requested)
+        guard running != wanted else { return nil }
+        return "\(spec.id) \(models[spec.id] != nil ? "is loaded at" : "loads at") \(running)-bit for every client; this request asked for \(wanted)-bit. "
+            + "A request's bits cannot change a model's precision: omit bits, or switch the model for every client with "
+            + "POST /v1/load {\"model\": \"\(spec.id)\", \"bits\": \(requested)} (verdict load \(spec.id) --bits \(requested))."
+    }
+    /// Runs merged /v1/systemone requests (same model, SystemOneBatcher) as one GPU pass and returns one reply per
+    /// request. They all run at the model's one precision (`runningBits`); a request whose explicit bits differ gets
+    /// 409 and the rest still run. If the merged pass throws (a question the model refuses), each request runs alone
     /// so only the offending one fails. Per-item refusals (over the context, a reserved token) are 422 on `state`.
-    func systemOne(_ calls: [SystemOneCall]) -> [(Int, [String: Any])] {
+    func systemOne(_ calls: [SystemOneCall]) -> [SystemOneReply] {
         guard let first = calls.first else { return [] }
         let id = first.model
         return locked {
+            var conflicts: [Int: SystemOneReply] = [:]
             do {
-                pinned = [id]; defer { pinned = [] }
-                if let bits = first.bits {
-                    let spec = try catalog.spec(id)
-                    if models[id] == nil { _ = try load(id, as: .onDemand, bits: bits) }
-                    else if spec.effectiveBits(loadedBits[id] ?? 0) != spec.effectiveBits(bits) {
-                        try reload(id, bits: bits, as: residency[id] == .manual ? .manual : .onDemand)
+                let spec = try catalog.spec(id)
+                for (index, call) in calls.enumerated() {
+                    if let bits = call.bits, let conflict = precisionConflict(spec, requested: bits) {
+                        conflicts[index] = SystemOneReply(SystemOne.failure(409, "conflict_error", conflict))
                     }
                 }
-                let agent = try load(id, as: .onDemand)
-                let groups = calls.map { RequestGroup(items: [$0.item], questions: $0.questions) }
-                let start = Date()
-                var outcomes: [Result<GroupResult, Error>]
-                do { outcomes = try predict(agent, id, groups).map { .success($0) } }
-                catch where groups.count > 1 {
-                    outcomes = groups.map { group in Result { try predict(agent, id, [group])[0] } }
-                }
-                catch { outcomes = [.failure(error)] }
-                var accepted = 0
-                let replies: [(Int, [String: Any])] = zip(calls, outcomes).map { call, outcome in
-                    switch outcome {
-                    case .failure(let error):
-                        let message = Self.message(error)
-                        if message.contains("Non-finite") || message.contains("wrong result count") {
-                            return SystemOne.failure(500, "api_error", message)
-                        }
-                        return SystemOne.unprocessable([ValidationIssue(loc: ["body", "questions"], msg: "Value error, " + message, type: "value_error")])
-                    case .success(let group):
-                        switch group.results[0] {
-                        case .error(let message):
-                            return SystemOne.unprocessable([ValidationIssue(loc: ["body", "state"], msg: "Value error, " + message.replacingOccurrences(of: "Item ", with: "State "), type: "value_error")])
-                        case .answers(let answers):
-                            accepted += 1
-                            let byID = NSMutableDictionary()
-                            for (index, question) in call.questions.enumerated() {
-                                guard let a = answers[question.id] else { continue }
-                                byID[NSString(string: question.id)] = SystemOne.answer(a, question, legend: call.legends[index])
-                            }
-                            return (200, ["model": id, "answers": byID, "usage": ["input_tokens": group.inputTokens[0], "output_tokens": 0]])
-                        }
-                    }
-                }
-                let per = (Date().timeIntervalSince(start) * 10000 / Double(max(1, accepted))).rounded() / 10
-                lastUsed[id] = Date().timeIntervalSince1970; updateEntry(id)
-                state["calls"] = (state["calls"] as? Int ?? 0) + calls.count
-                state["items"] = (state["items"] as? Int ?? 0) + accepted; state["last_ms"] = per
-                state["last_used"] = Date().timeIntervalSince1970; state["idle_unloaded"] = false
-                if Memory.cacheMemory > cacheLimit * 1_000_000 { Memory.clearCache() }
-                writeStatus(refreshInstalled: false, background: true)
-                return replies
-            } catch let refusal as MemoryRefusal {
-                return calls.map { _ in SystemOne.failure(507, "insufficient_memory_error", refusal.message) }
             } catch {
-                return calls.map { _ in SystemOne.failure(500, "api_error", "\(id): " + Self.message(error)) }
+                return calls.map { _ in SystemOneReply(SystemOne.failure(500, "api_error", "\(id): " + Self.message(error))) }
             }
+            let runnable = calls.indices.filter { conflicts[$0] == nil }
+            guard !runnable.isEmpty else { return calls.indices.map { conflicts[$0]! } }
+            let ran = run(runnable.map { calls[$0] }, id)
+            var out = calls.indices.map { conflicts[$0] }
+            for (index, reply) in zip(runnable, ran) { out[index] = reply }
+            return out.map { $0! }
+        }
+    }
+    /// One GPU pass for `calls` (none of them in conflict), at the model's running precision.
+    private func run(_ calls: [SystemOneCall], _ id: String) -> [SystemOneReply] {
+        do {
+            pinned = [id]; defer { pinned = [] }
+            let agent = try load(id, as: .onDemand)
+            let bits = (try? catalog.spec(id)).map { $0.effectiveBits(loadedBits[id] ?? 0) }
+            let groups = calls.map { RequestGroup(items: [$0.item], questions: $0.questions) }
+            let start = Date()
+            var outcomes: [Result<GroupResult, Error>]
+            do { outcomes = try predict(agent, id, groups).map { .success($0) } }
+            catch where groups.count > 1 {
+                outcomes = groups.map { group in Result { try predict(agent, id, [group])[0] } }
+            }
+            catch { outcomes = [.failure(error)] }
+            var accepted = 0
+            let replies: [(Int, [String: Any])] = zip(calls, outcomes).map { call, outcome in
+                switch outcome {
+                case .failure(let error):
+                    let message = Self.message(error)
+                    if message.contains("Non-finite") || message.contains("wrong result count") {
+                        return SystemOne.failure(500, "api_error", message)
+                    }
+                    return SystemOne.unprocessable([ValidationIssue(loc: ["body", "questions"], msg: "Value error, " + message, type: "value_error")])
+                case .success(let group):
+                    switch group.results[0] {
+                    case .error(let message):
+                        return SystemOne.unprocessable([ValidationIssue(loc: ["body", "state"], msg: "Value error, " + message.replacingOccurrences(of: "Item ", with: "State "), type: "value_error")])
+                    case .answers(let answers):
+                        accepted += 1
+                        let byID = NSMutableDictionary()
+                        for (index, question) in call.questions.enumerated() {
+                            guard let a = answers[question.id] else { continue }
+                            byID[NSString(string: question.id)] = SystemOne.answer(a, question, legend: call.legends[index])
+                        }
+                        return (200, ["model": id, "answers": byID, "usage": ["input_tokens": group.inputTokens[0], "output_tokens": 0]])
+                    }
+                }
+            }
+            let per = (Date().timeIntervalSince(start) * 10000 / Double(max(1, accepted))).rounded() / 10
+            lastUsed[id] = Date().timeIntervalSince1970; updateEntry(id)
+            state["calls"] = (state["calls"] as? Int ?? 0) + calls.count
+            state["items"] = (state["items"] as? Int ?? 0) + accepted; state["last_ms"] = per
+            state["last_used"] = Date().timeIntervalSince1970; state["idle_unloaded"] = false
+            if Memory.cacheMemory > cacheLimit * 1_000_000 { Memory.clearCache() }
+            writeStatus(refreshInstalled: false, background: true)
+            return replies.map { SystemOneReply($0, bits: bits) }
+        } catch let refusal as MemoryRefusal {
+            return calls.map { _ in SystemOneReply(SystemOne.failure(507, "insufficient_memory_error", refusal.message)) }
+        } catch {
+            return calls.map { _ in SystemOneReply(SystemOne.failure(500, "api_error", "\(id): " + Self.message(error))) }
         }
     }
     /// Every answer value must be finite: a NaN is a failed run, never a probability.
@@ -751,6 +780,7 @@ final class Service {
                 }
             }
         } catch let refusal as MemoryRefusal { return (507, ["error": refusal.message]) }
+        catch let conflict as PrecisionConflict { return (409, ["error": conflict.message]) }
         catch { return (400, ["error": Self.message(error).prefix(500).description]) }
     }
     /// Reloads a model at its previous precision after a failed reload, keeping the failed attempt's refusal/error
