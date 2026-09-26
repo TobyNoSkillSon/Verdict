@@ -191,3 +191,20 @@ final class StateMachineTests: XCTestCase {
         XCTAssertNil(UpdateResult.take(support: dir))                                    // read once
     }
 }
+
+/// Opt-in (VERDICT_LIVE_GITHUB=1): the real releases API and a real release download through GitHub's redirect to its
+/// asset storage, checked and unpacked like an update (nothing installed).
+final class LiveGitHubTests: XCTestCase {
+    func testLatestReleaseDownloadsAndVerifies() async throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["VERDICT_LIVE_GITHUB"] == "1", "set VERDICT_LIVE_GITHUB=1")
+        let client = UpdateClient(source: UpdateSource())
+        let latest = try await client.latest()
+        XCTAssertFalse(latest.draft); XCTAssertFalse(latest.prerelease)
+        XCTAssertNotNil(latest.offer(to: SemanticVersion("0.0.1")!))
+        let staged = try await Updater.prepare(latest, client: client)
+        defer { try? FileManager.default.removeItem(atPath: staged.directory) }
+        XCTAssertEqual(Updater.bundleVersion(URL(fileURLWithPath: staged.app)), latest.version.description)
+        XCTAssertFalse(Updater.isQuarantined(URL(fileURLWithPath: staged.app)))
+        print("live: \(latest.tag) sha256 \(staged.sha256); notes: \(latest.shortNotes().prefix(80))")
+    }
+}
