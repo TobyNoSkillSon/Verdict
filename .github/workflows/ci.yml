@@ -70,5 +70,7 @@ jobs:
       # 120 minutes. The stub-helper tests also bound their own waits.
       - name: swift test (stub helper)
         timeout-minutes: 20
+        env:
+          NSUnbufferedIO: "YES"     # test output as it happens: a stuck test is then named in the log
         run: swift test
 
