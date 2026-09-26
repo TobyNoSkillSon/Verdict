@@ -27,9 +27,11 @@ let package = Package(
     ],
     targets: [
         // Menu-bar app: UI and helper supervision. No MLX dependency.
-        .executableTarget(name: "Verdict", dependencies: ["VerdictCore"]),
+        .executableTarget(name: "Verdict", dependencies: ["VerdictCore", "VerdictUpdate"]),
         // App logic shared with tests: catalog, precision, memory, labels.
         .target(name: "VerdictCore"),
+        // Updates from GitHub Releases for the app and `verdict update`: check, download, verify, install, roll back.
+        .target(name: "VerdictUpdate", dependencies: ["VerdictCore"]),
         // Models (Laya, Von), tokenizers and attention on MLX.
         .target(name: "VerdictEngine", dependencies: [
             .product(name: "MLX", package: "mlx-swift"),
@@ -41,8 +43,9 @@ let package = Package(
                           path: "Sources/VerdictHelper"),
         // Client library: discovers or launches the app, typed questions and results. Foundation only.
         .target(name: "VerdictKit"),
-        .executableTarget(name: "VerdictCLI", dependencies: ["VerdictKit"]),
+        .executableTarget(name: "VerdictCLI", dependencies: ["VerdictKit", "VerdictUpdate"]),
         .testTarget(name: "VerdictCoreTests", dependencies: ["VerdictCore"]),
-        .testTarget(name: "VerdictKitTests", dependencies: ["VerdictKit", "VerdictCLI"])
+        .testTarget(name: "VerdictKitTests", dependencies: ["VerdictKit", "VerdictCLI"]),
+        .testTarget(name: "VerdictUpdateTests", dependencies: ["VerdictUpdate"])
     ]
 )

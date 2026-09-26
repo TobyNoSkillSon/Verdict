@@ -93,7 +93,8 @@ import VerdictCore
 
     func start() {
         guard !processRunning else { return }
-        sweepStrayWorkers()
+        // An instance with its own support directory (VERDICT_SUPPORT_DIR: tests, QA) leaves other instances' workers alone.
+        if ProcessInfo.processInfo.environment["VERDICT_SUPPORT_DIR"] == nil { sweepStrayWorkers() }
         stopping = false
         do {
             let config = try configuration()

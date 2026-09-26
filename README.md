@@ -242,7 +242,7 @@ gh attestation verify Verdict-0.3.0-arm64.zip --repo TobyNoSkillSon/Verdict
 
 </details>
 
-**Updating.** `git pull && scripts/install.sh`, or ask your agent. Downloaded models and settings are kept. The installer quits an idle Verdict itself and refuses while a model is loading.
+**Updating.** When a newer release is out, the menu shows an orange **Update to X.Y.Z…** item under Support the developer…; **Update Now** installs it and restarts Verdict. `verdict update` does the same from a terminal (`--check` only reports), and `git pull && scripts/install.sh` still works. Every path downloads the release zip and SHA256SUMS over HTTPS, checks the SHA-256 and code signature, waits or refuses while a model is loading, keeps downloaded models and settings, and puts the previous version back if the new one does not start. Verdict checks for a newer release at launch and once a day: one request to the GitHub releases API, nothing else sent.
 
 **Uninstalling.** Delete downloaded models from the table first if you want their disk space back (weights live in `~/.cache/huggingface`; do not delete the whole cache if other tools use it). Then quit Verdict and remove `/Applications/Verdict.app`, `~/Library/Application Support/Verdict`, `~/.local/bin/verdict` and `~/.local/share/verdict`.
 
@@ -290,7 +290,7 @@ let results = try await client.judge(items: reviews, questions: [
 
 ## Privacy
 
-Judgement inputs never leave your Mac. The API listens on `127.0.0.1` only and refuses requests that carry a browser `Origin` header or a foreign `Host`. It has no authentication (an SDK's API key is accepted and ignored), so any process on your Mac can call it; do not forward the port. The only network traffic is the app download at install and model weights from Hugging Face on first use. There is no telemetry and no hosted fallback.
+Judgement inputs never leave your Mac. The API listens on `127.0.0.1` only and refuses requests that carry a browser `Origin` header or a foreign `Host`. It has no authentication (an SDK's API key is accepted and ignored), so any process on your Mac can call it; do not forward the port. The only network traffic is the app download at install, the daily update check (one request to `api.github.com` for the latest release) and its download when you update, and model weights from Hugging Face on first use. There is no telemetry and no hosted fallback.
 
 Verdict judges text. An item with an `image`, `audio` or `video` field comes back as a per-item error.
 

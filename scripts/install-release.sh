@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Prebuilt release installer (the default path of scripts/install.sh).
 # Usage: install-release.sh VERSION [--dry-run]
+# Overrides (tests; defaults in brackets): VERDICT_RELEASE_BASE_URL [the GitHub release, HTTPS only],
+# VERDICT_INSTALL_DIR [/Applications, else ~/Applications], VERDICT_SUPPORT_DIR [~/Library/Application Support/Verdict].
+# Only the Verdict.app in the install directory is quit and replaced; another copy running elsewhere is left alone.
 set -euo pipefail
 VERSION="${1:-${VERDICT_VERSION:-}}"
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.]+)?$ ]] || { echo 'Pass a release version, e.g. 0.1.0' >&2; exit 2; }
@@ -10,8 +13,17 @@ DRY_RUN=0
 [[ "$(uname -m)" == arm64 ]] || { echo 'Verdict requires Apple Silicon' >&2; exit 1; }
 OS="$(sw_vers -productVersion)"
 [[ "${OS%%.*}" -ge 14 ]] || { echo "Verdict requires macOS 14 or newer ($OS)" >&2; exit 1; }
-STATUS_FILE="$HOME/Library/Application Support/Verdict/status.json"
-if pgrep -xq Verdict && [[ -f "$STATUS_FILE" ]] && ! python3 -c 'import json,sys; sys.exit(1 if json.load(open(sys.argv[1])).get("loading") else 0)' "$STATUS_FILE"; then
+SUPPORT="${VERDICT_SUPPORT_DIR:-$HOME/Library/Application Support/Verdict}"
+STATUS_FILE="$SUPPORT/status.json"
+if [[ -n "${VERDICT_INSTALL_DIR:-}" ]]; then DEST="$VERDICT_INSTALL_DIR"
+else DEST=/Applications; [[ -w "$DEST" ]] || DEST="$HOME/Applications"; fi
+# The Verdict processes running this install's app (by executable path; LaunchServices starts it with its full path).
+running_app() {
+  local exe; exe="$(cd "$DEST" 2>/dev/null && pwd -P)/Verdict.app/Contents/MacOS/Verdict" || return 0
+  ps -axww -o pid=,comm= | awk -v exe="$exe" '{ pid = $1; sub(/^ *[0-9]+ /, ""); if ($0 == exe) print pid }'
+}
+not_loading() { [[ ! -f "$STATUS_FILE" ]] || python3 -c 'import json,sys; sys.exit(1 if json.load(open(sys.argv[1])).get("loading") else 0)' "$STATUS_FILE"; }
+if [[ -n "$(running_app)" ]] && ! not_loading; then
   echo 'Verdict is loading a model. Try again in a moment; installation left unchanged.' >&2; exit 1
 fi
 BASE="${VERDICT_RELEASE_BASE_URL:-https://github.com/TobyNoSkillSon/Verdict/releases/download/v$VERSION}"
@@ -41,23 +53,21 @@ codesign --verify --deep --strict "$APP"
 # The hash detects corruption; a checksum fetched from the same release is not a signature.
 if [[ "$DRY_RUN" == 1 ]]; then echo 'Dry run complete; nothing installed'; exit 0; fi
 
-DEST=/Applications
-[[ -w "$DEST" ]] || DEST="$HOME/Applications"
 mkdir -p "$DEST"
-# Quit a running Verdict only when it is not loading a model (unattended updates, never mid-load).
-if pgrep -xq Verdict; then
-  STATUS="$HOME/Library/Application Support/Verdict/status.json"
-  if [[ -f "$STATUS" ]] && python3 -c 'import json,sys; sys.exit(1 if json.load(open(sys.argv[1])).get("loading") else 0)' "$STATUS"; then
-    osascript -e 'tell application "Verdict" to quit' >/dev/null 2>&1 || true
-    for _ in $(seq 1 50); do pgrep -xq Verdict || break; sleep 0.2; done
-    pgrep -xq Verdict && { echo 'Verdict did not quit; installation left unchanged.' >&2; exit 1; }
-  else
-    echo 'Verdict is loading a model. Try again in a moment; installation left unchanged.' >&2; exit 1
-  fi
+DEST="$(cd "$DEST" && pwd -P)"
+# Quit the running Verdict only when it is not loading a model (unattended updates, never mid-load). SIGTERM quits
+# Verdict like its Quit item; an earlier Verdict exits at once and its worker follows (its stdin closes).
+PIDS="$(running_app)"
+if [[ -n "$PIDS" ]]; then
+  not_loading || { echo 'Verdict is loading a model. Try again in a moment; installation left unchanged.' >&2; exit 1; }
+  kill -TERM $PIDS 2>/dev/null || true
+  for _ in $(seq 1 100); do [[ -z "$(running_app)" ]] && break; sleep 0.2; done
+  [[ -z "$(running_app)" ]] || { echo 'Verdict did not quit; installation left unchanged.' >&2; exit 1; }
 fi
 STAGED="$DEST/.Verdict.app.install.$$"
 [[ ! -e "$STAGED" ]] || { echo "Staging path exists: $STAGED" >&2; exit 1; }
 ditto "$APP" "$STAGED"
+xattr -dr com.apple.quarantine "$STAGED" 2>/dev/null || true   # never install it quarantined (curl sets none)
 codesign --verify --deep --strict "$STAGED"
 PREVIOUS=''
 if [[ -e "$DEST/Verdict.app" ]]; then
@@ -85,11 +95,15 @@ SH
   chmod 755 "$HOME/.local/bin/verdict"
 fi
 echo "installed $DEST/Verdict.app, CLI ~/.local/bin/verdict"
-open -g "$DEST/Verdict.app"
+# -n: a new instance even when another copy of Verdict runs; open does not pass the environment on, so VERDICT_*
+# settings (an isolated test instance) are passed explicitly.
+OPEN_ENV=()
+while IFS= read -r name; do OPEN_ENV+=(--env "$name=${!name}"); done < <(compgen -e | grep '^VERDICT_' || true)
+open -n -g ${OPEN_ENV[@]+"${OPEN_ENV[@]}"} "$DEST/Verdict.app"
 echo "starting…"
 export VERDICT_APP="$DEST/Verdict.app"
-ready_check() {  # helper answering and not loading; a model loaded, or none in the launch set (a fresh install has none)
-  python3 - "$HOME/Library/Application Support/Verdict" <<'PYEOF' 2>/dev/null
+ready_check() {  # this version's helper answering and not loading; a model loaded, or none in the launch set (a fresh install has none)
+  python3 - "$SUPPORT" "$VERSION" <<'PYEOF' 2>/dev/null
 import json, sys, urllib.request
 d = sys.argv[1]
 try:
@@ -97,6 +111,8 @@ try:
     with urllib.request.urlopen(f"http://127.0.0.1:{s['port']}/status", timeout=5) as r: s = json.load(r)
 except Exception:
     sys.exit(1)
+if len(sys.argv) > 2 and 'version' in s and s['version'] != sys.argv[2]:
+    sys.exit(1)                 # still the replaced version's worker
 try:
     hot = json.load(open(d + '/config.json')).get('hotModels', [])
 except FileNotFoundError:
@@ -111,6 +127,6 @@ for _ in $(seq 1 360); do
   if ready_check; then ready=1; echo "ready: $("$HOME/.local/bin/verdict" status 2>/dev/null)" | cut -c1-120; break; fi
   sleep 5
 done
-[[ "$ready" == 1 ]] || { echo "not ready after 30 min; see ~/Library/Application Support/Verdict/worker.log. Previous app kept at ${PREVIOUS:-none}" >&2; exit 1; }
+[[ "$ready" == 1 ]] || { echo "not ready after 30 min; see $SUPPORT/worker.log. Previous app kept at ${PREVIOUS:-none}" >&2; exit 1; }
 [[ -z "$PREVIOUS" ]] || rm -rf "$PREVIOUS"
 echo "next: 'verdict skill' prints the agent skill; install it into your harness"

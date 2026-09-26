@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import VerdictCore
+import VerdictUpdate
 
 /// `Verdict --render-table DIR`: draws the models table in fixed states to PNGs without starting the worker
 /// or touching config.json. Set VERDICT_BENCHMARKS to render against a fixture, VERDICT_RENDER_CHIP (e.g. 'Apple M3 Pro')
@@ -112,7 +113,7 @@ import VerdictCore
     }
 
     private func render(_ states: [(String, WorkerStatus, Configuration)], _ index: Int) {
-        guard index < states.count else { NSApp.terminate(nil); return }
+        guard index < states.count else { renderUpdate(status: states[0].1, config: states[0].2); return }
         let (prefix, status, config) = states[index]
         let backend = app.backend
         backend.status = status; backend.previewConfiguration = config
@@ -144,6 +145,61 @@ import VerdictCore
                     }
                     window.orderOut(nil)
                     render(states, index + 1)
+                }
+            }
+        }
+    }
+}
+
+extension MenuRenderDelegate {
+    /// update-menu.png (the orange item under Support), update-downloading-menu.png and update-popup.png (the
+    /// confirmation), for a sample release newer than this build.
+    static let sampleRelease = ReleaseInfo(tag: "v0.3.1", version: SemanticVersion("0.3.1")!, name: "Verdict 0.3.1", body: """
+        Verdict updates itself: a newer release shows **Update to …** in the menu, and `verdict update` does the same from the command line.
+
+        - Downloads are checked (SHA-256 and code signature) before anything is replaced.
+        - A failed update keeps the version you had.
+
+        ## Verify
+
+            gh attestation verify Verdict-0.3.1-arm64.zip --repo TobyNoSkillSon/Verdict
+        """)
+
+    func renderUpdate(status: WorkerStatus, config: Configuration) {
+        let backend = app.backend
+        backend.status = status; backend.previewConfiguration = config
+        backend.previewPhase(phase(for: status, processRunning: true))
+        let release = Self.sampleRelease
+        app.updates.preview(.available(release)); app.rebuildMenu()
+        MenuMock.render(app.menu.items, width: 322, to: directory.appendingPathComponent("update-menu.png")) { [self] in
+            app.updates.preview(.downloading(release)); app.rebuildMenu()
+            MenuMock.render(app.menu.items, width: 322, to: directory.appendingPathComponent("update-downloading-menu.png")) { [self] in
+                let alert = app.updates.confirmation(release)
+                alert.window.appearance = NSAppearance(named: .darkAqua)
+                alert.layout()
+                let window = alert.window
+                window.setFrameOrigin(NSPoint(x: -5000, y: -5000)); window.orderFrontRegardless()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [self] in
+                    // Layer-backed controls (the alert's text and buttons) draw only through their layers offscreen:
+                    // render the layer tree over the dark alert colour.
+                    if let view = window.contentView {
+                        window.displayIfNeeded()
+                        let scale = window.backingScaleFactor, size = view.bounds.size
+                        let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size.width * scale), pixelsHigh: Int(size.height * scale),
+                                                   bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+                                                   bytesPerRow: 0, bitsPerPixel: 0)!
+                        rep.size = size
+                        NSGraphicsContext.saveGraphicsState()
+                        let context = NSGraphicsContext(bitmapImageRep: rep)!
+                        NSGraphicsContext.current = context
+                        NSColor(calibratedRed: 0.17, green: 0.17, blue: 0.18, alpha: 1).setFill()
+                        NSBezierPath(roundedRect: NSRect(origin: .zero, size: size), xRadius: 16, yRadius: 16).fill()
+                        if let layer = view.layer { layer.render(in: context.cgContext) } else { view.displayIgnoringOpacity(view.bounds, in: context) }
+                        NSGraphicsContext.restoreGraphicsState()
+                        try? rep.representation(using: .png, properties: [:])?.write(to: directory.appendingPathComponent("update-popup.png"))
+                    }
+                    window.orderOut(nil)
+                    NSApp.terminate(nil)
                 }
             }
         }

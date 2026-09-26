@@ -1,5 +1,6 @@
 import Foundation
 import VerdictKit
+import VerdictUpdate
 
 let usage = """
 verdict: judge many items with the same typed questions, locally, in milliseconds.
@@ -20,6 +21,9 @@ verdict: judge many items with the same typed questions, locally, in millisecond
                                            built-in items, and a prefilled GitHub bug-report URL (no user data;
                                            --load loads laya-english first if needed; never starts the app)
     verdict licenses                       Verdict's NOTICE and the licences of the code it bundles
+    verdict update [--check]               install the latest release from GitHub: SHA-256 and signature checked,
+                                           settings and models kept, this version restored if the new one does not
+                                           start; refused while a model is loading. --check only reports
     verdict --version                      this command's version (the app's)
 
 q.json: {"name": {"type": "noul"|"choice"|"score", "instructions": "…", "criteria": …}, …}
@@ -146,6 +150,11 @@ struct CLI {
                 throw CLIError("NOTICE not found; is Verdict installed?")
             }
             write(notice); write(thirdParty)
+        case "update":
+            let args = try Arguments(rest, values: ["--finish"], flags: ["--check"])
+            if let extra = args.positional.first { throw CLIError("unexpected argument \(extra)") }
+            if let plan = args.values["--finish"] { try await finishUpdate(plan); return }
+            try await update(checkOnly: args.flags.contains("--check"))
         default: throw CLIError("unknown command \(command)")
         }
     }
@@ -193,6 +202,51 @@ struct CLI {
                 write(Format.line(index: index, item: item, result: result, field: field, order: questions.ids))
             }
         }
+    }
+
+    /// `verdict update`: the same check, download, verification and install as the app's Update menu item.
+    func update(checkOnly: Bool) async throws {
+        guard let text = versionInfo()?.version, let current = SemanticVersion(text) else { throw CLIError("cannot tell this Verdict's version") }
+        let client = UpdateClient(source: try UpdateSource.fromEnvironment())
+        guard let release = try await client.check(current: current) else { write("Verdict \(current) is up to date"); return }
+        write("Verdict \(release.version) is available (installed: \(current))")
+        for line in release.shortNotes().split(separator: "\n") { write("  \(line)") }
+        if checkOnly { write("install it with: verdict update"); return }
+        guard let app = updateTarget() else { throw CLIError("run the verdict command inside Verdict.app (or set VERDICT_APP) to update it") }
+        let support = Verdict.defaultSupportDirectory
+        if !Installer.appProcesses(at: app).isEmpty, let loading = Installer.loadingModel(support: support) {
+            throw CLIError("Verdict is loading \(loading). Try again in a moment; installation left unchanged")
+        }
+        let staged = try await Updater.prepare(release, client: client, log: write)
+        let plan = InstallPlan(staged: staged, destination: app.path, from: current.description, supportDirectory: support.path, writeResult: false)
+        try await Installer(plan: plan, log: write).run()
+        write("ready: Verdict \(release.version)")
+    }
+
+    /// `verdict update --finish PLAN`: the app's hand-off. It runs detached after the app quits; progress goes to
+    /// update.log and the outcome to update-result.json, which the relaunched app reports.
+    func finishUpdate(_ path: String) async throws {
+        let planData: Data
+        do { planData = try Data(contentsOf: URL(fileURLWithPath: path)) } catch { throw CLIError("cannot read \(path)") }
+        let plan = try JSONDecoder().decode(InstallPlan.self, from: planData)
+        try? FileManager.default.removeItem(atPath: path)
+        let logURL = URL(fileURLWithPath: plan.supportDirectory).appendingPathComponent("update.log")
+        let log: (String) -> Void = { line in
+            let stamped = "\(ISO8601DateFormatter().string(from: Date())) \(line)\n"
+            if let handle = try? FileHandle(forWritingTo: logURL) { handle.seekToEndOfFile(); handle.write(Data(stamped.utf8)); try? handle.close() }
+            else { try? Data(stamped.utf8).write(to: logURL) }
+        }
+        log("update \(plan.from) -> \(plan.staged.version) at \(plan.destination)")
+        do { try await Installer(plan: plan, log: log).run(); log("updated to \(plan.staged.version)") }
+        catch { log("failed: \(error.localizedDescription)"); throw error }
+    }
+
+    /// The Verdict.app to update: the one this command ships in, else VERDICT_APP.
+    func updateTarget() -> URL? {
+        if let app = Verdict.containingApp { return app }
+        if let path = ProcessInfo.processInfo.environment["VERDICT_APP"], !path.isEmpty,
+           FileManager.default.fileExists(atPath: path + "/Contents/Info.plist") { return URL(fileURLWithPath: path) }
+        return nil
     }
 
     /// This command's version: the app it ships in, else the source checkout it was built from.

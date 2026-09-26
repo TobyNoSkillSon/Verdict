@@ -12,7 +12,7 @@ Only the latest release receives security fixes.
 
 Verdict's helper serves an HTTP API on the IPv4 loopback address (`127.0.0.1`) at a port chosen at launch. It has no authentication, by design: any process running as any user on the Mac can call it, and nothing off the Mac can reach it. It refuses what a web page could send. A request with an `Origin` header, a `Host` other than `127.0.0.1:<port>` or `localhost:<port>`, or a POST whose `Content-Type` is not `application/json` is rejected before its body is read. [docs/API.md](docs/API.md) describes these checks.
 
-Its network traffic is the release download at install time and model weights from Hugging Face on first use. There is no telemetry.
+Its network traffic is the release download at install time, a daily update check (one request to the GitHub releases API) and the release download when you update, and model weights from Hugging Face on first use. There is no telemetry.
 
 ## In scope
 

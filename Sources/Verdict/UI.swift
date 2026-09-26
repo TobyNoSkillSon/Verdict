@@ -1,10 +1,13 @@
 import AppKit
 import ServiceManagement
 import VerdictCore
+import VerdictUpdate
 
 @MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let backend = Backend()
     private lazy var models = ModelsMenu(backend: backend)
+    lazy var updates = UpdateController(backend: backend)
+    private var terminateSignal: DispatchSourceSignal?
     var status: NSStatusItem!
     let menu = NSMenu()
     private var tracking = false
@@ -17,8 +20,15 @@ import VerdictCore
         menu.delegate = self; menu.autoenablesItems = false
         status.menu = menu
         backend.onChange = { [weak self] in self?.refresh() }
+        updates.onChange = { [weak self] in self?.refresh() }
+        // SIGTERM quits like the menu's Quit (the worker is stopped cleanly); installers use it to quit this copy.
+        signal(SIGTERM, SIG_IGN)
+        let term = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+        term.setEventHandler { NSApp.terminate(nil) }
+        term.resume(); terminateSignal = term
         rebuildMenu()
         backend.start()
+        updates.start()
         if let index = CommandLine.arguments.firstIndex(of: "--screenshot"), CommandLine.arguments.count > index + 1 {
             // Visual QA: wait for the worker, open the menu, capture, render the table, quit.
             let directory = URL(fileURLWithPath: CommandLine.arguments[index + 1], isDirectory: true)
@@ -70,6 +80,7 @@ import VerdictCore
         menu.addItem(login)
         menu.addItem(.separator())
         item("Support the developer…", "heart", #selector(support))
+        if let update = updates.menuItem() { menu.addItem(update) }
         item("Quit Verdict", "power", #selector(quit), key: "q", modifiers: [.command])
     }
     /// Keep Hot / Memory submenu from VerdictCore's entries (section headers, checkmarked choices, short captions).
@@ -293,8 +304,10 @@ final class MenuMock: NSView {
             if let image = item.image {
                 let tinted = image.copy() as! NSImage; tinted.isTemplate = false
                 let r = NSRect(x: x, y: y + 6, width: 14, height: 14)
+                // An item with a coloured title (the orange update item) has an icon of the same colour.
+                let tint = (item.attributedTitle?.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor) ?? color
                 NSGraphicsContext.saveGraphicsState()
-                color.set(); tinted.lockFocus(); color.set(); NSRect(origin: .zero, size: tinted.size).fill(using: .sourceAtop); tinted.unlockFocus()
+                tint.set(); tinted.lockFocus(); tint.set(); NSRect(origin: .zero, size: tinted.size).fill(using: .sourceAtop); tinted.unlockFocus()
                 tinted.draw(in: r, from: .zero, operation: .sourceOver, fraction: 1)
                 NSGraphicsContext.restoreGraphicsState()
                 x += 22
