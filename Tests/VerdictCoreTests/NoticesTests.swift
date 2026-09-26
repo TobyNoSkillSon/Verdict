@@ -105,6 +105,7 @@ final class NoticesTests: XCTestCase {
     /// with /usr/bin/unzip still verifies. scripts/release-zip.sh makes and checks the archive for package-release.sh;
     /// here it runs on a small ad-hoc signed app carrying an extended attribute (a stand-in for com.apple.provenance).
     func testReleaseZipHasNoAppleDoubleAndVerifiesAfterUnzip() throws {
+        try Integration.require()
         let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("verdict-zip-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: tmp) }
         let app = tmp.appendingPathComponent("Probe.app")

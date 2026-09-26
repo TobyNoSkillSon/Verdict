@@ -22,6 +22,7 @@ final class ProcessesTests: XCTestCase {
     /// Live: a sleeper installed as <tmp>/Verdict.app/Contents/MacOS/verdict-helper is found; a shell
     /// whose arguments contain that same path (and the sleep it runs) are not.
     func testSweepLeavesShellWithHelperPathInArgumentsAlone() throws {
+        try Integration.require()
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("verdict-sweep-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
         let macos = root.appendingPathComponent("Verdict.app/Contents/MacOS")

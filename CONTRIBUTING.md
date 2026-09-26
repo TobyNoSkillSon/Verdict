@@ -26,7 +26,11 @@ scripts/build-helper.sh      # once, and after changing Sources/VerdictHelper or
 xcrun swift test
 ```
 
-The tests never touch your installed app, its settings or the model cache. The ones that need a helper start `.build/release-helper/verdict-helper` with `VERDICT_STUB_MODELS=1` in a temporary support directory. Stub models need no weights and do no GPU work: they return fixed answers but report load state, engine labels, fallbacks, residency and memory accounting through the real service code. Without a built helper those tests are skipped, not failed. CI runs the same build and tests on every pull request.
+The tests never touch your installed app, its settings or the model cache. The ones that need a helper start `.build/release-helper/verdict-helper` with `VERDICT_STUB_MODELS=1` in a temporary support directory. Stub models need no weights and do no GPU work: they return fixed answers but report load state, engine labels, fallbacks, residency and memory accounting through the real service code. Without a built helper those tests are skipped, not failed.
+
+CI runs only the fast unit tests. The integration tests (everything that starts the stub helper or another process, the `verdict` binary tests, the release-zip check) skip when `CI=true` and run locally by default; `VERDICT_INTEGRATION=1` runs them even under `CI=true`. Run the full suite locally before a release, and before a pull request that touches the helper, the CLI or the scripts. `VERDICT_LIVE_GITHUB=1 xcrun swift test --filter LiveGitHubTests` additionally downloads and verifies the latest real release (optional; network).
+
+CI builds every product, runs `scripts/build.sh` (with its stub-model `/status` smoke) and the unit tests on every pull request.
 
 Real-model parity and benchmarks need downloaded weights and a quiet GPU. The maintainer runs them on the reference Mac (an M5 Max) before a change that affects numerics is merged.
 
@@ -47,7 +51,7 @@ Real-model parity and benchmarks need downloaded weights and a quiet GPU. The ma
 Open an issue first for anything larger than a fix, so we can agree on the approach before you spend time on it. Then:
 
 - Keep one change per pull request, matching the style of the surrounding code.
-- Run `swift test` and `scripts/build.sh`.
+- Run `scripts/build.sh` and `swift test` (integration tests included, as above).
 - Update the docs your change touches (README, `docs/USAGE.md`, `docs/API.md`, `Resources/SKILL.md`) and add a line to `CHANGELOG.md` for anything a user would notice.
 - Add no new dependencies without discussing them first. VerdictKit and the Python library have none, on purpose.
 - Measure performance claims and say on what hardware (chip, memory, macOS). An unmeasured speed-up will not be merged.

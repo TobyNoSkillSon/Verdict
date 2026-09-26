@@ -3,7 +3,7 @@ import XCTest
 
 /// A built verdict-helper with stub models (VERDICT_STUB_MODELS=1: no weights, fixed answers) in a private support
 /// directory: never the installed app, its config or the model cache. Build it with scripts/build-helper.sh; tests
-/// that need it skip when it is missing. VERDICT_TEST_HELPER points at another build.
+/// that need it skip when it is missing, and under CI (Integration.swift). VERDICT_TEST_HELPER points at another build.
 final class StubHelper {
     static let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
     static var binary: URL {
@@ -16,6 +16,7 @@ final class StubHelper {
     let port: Int
 
     init(environment extra: [String: String] = [:]) throws {
+        try Integration.require()
         guard FileManager.default.isExecutableFile(atPath: Self.binary.path) else {
             throw XCTSkip("no helper at \(Self.binary.path); run scripts/build-helper.sh")
         }

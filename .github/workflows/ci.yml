@@ -17,7 +17,9 @@ concurrency:
 # releases are made with, so scripts/build.sh runs here unchanged. macos-15 cannot build Verdict: the pinned mlx-swift
 # needs Swift tools 6.3, and macos-15 has neither CLT Swift 6.3 nor Xcode 26.4+ (which requires macOS 26.2).
 # Xcode 26.6 compiles the shaders here and runs `swift test`; the maintainer's Mac compiles shaders with its own
-# Xcode, so parity is checked there, not in CI. No job runs a real model: tests use stub models (no weights, no GPU work).
+# Xcode, so parity is checked there, not in CI. No job runs a real model. CI runs the unit tests only: the integration
+# tests (stub helper, CLI binary, other spawned processes, network) skip under CI=true and run on the maintainer's Mac
+# before a release (CONTRIBUTING.md), because spawning the helper on the runner's virtual GPU hung twice.
 env:
   XCODE_APP: /Applications/Xcode_26.6.app
   CLT_SWIFT: /Library/Developer/CommandLineTools/usr/bin/swift
@@ -66,11 +68,9 @@ jobs:
       - name: Build the helper and the app (scripts/build.sh; stub-model /status smoke included)
         run: scripts/build.sh
 
-      # Bounded: a stuck test (one run hung here for 18 minutes with no output) must not hold the runner for the job's
-      # 120 minutes. The stub-helper tests also bound their own waits.
-      - name: swift test (stub helper)
+      - name: swift test (unit tests; integration tests run locally)
         timeout-minutes: 20
         env:
+          CI: "true"                # explicit: Tests/*/Integration.swift skips the integration tests
           NSUnbufferedIO: "YES"     # test output as it happens: a stuck test is then named in the log
         run: swift test
-
