@@ -47,6 +47,7 @@ import VerdictUpdate
                 machine.handle(.checked(release))
             } catch {
                 machine.handle(.checkFailed((error as? UpdateError)?.message ?? error.localizedDescription))
+                lastCheck = Date().addingTimeInterval(-23 * 3600)      // offline at launch, say: try again in about an hour
             }
             checking = false
             onChange?()
