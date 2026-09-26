@@ -66,6 +66,9 @@ jobs:
       - name: Build the helper and the app (scripts/build.sh; stub-model /status smoke included)
         run: scripts/build.sh
 
+      # Bounded: a stuck test (one run hung here for 18 minutes with no output) must not hold the runner for the job's
+      # 120 minutes. The stub-helper tests also bound their own waits.
       - name: swift test (stub helper)
+        timeout-minutes: 20
         run: swift test
 

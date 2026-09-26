@@ -120,6 +120,7 @@ final class CLIBinaryTests: XCTestCase {
         let stdin = Pipe(), stdout = Pipe(), stderr = Pipe()
         process.standardInput = stdin; process.standardOutput = stdout; process.standardError = stderr
         try process.run()
+        let watchdog = StubHelper.watchdog(process); defer { watchdog.cancel() }
         stdin.fileHandleForWriting.write(Data(input.utf8)); try stdin.fileHandleForWriting.close()
         let out = stdout.fileHandleForReading.readDataToEndOfFile(), err = stderr.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()

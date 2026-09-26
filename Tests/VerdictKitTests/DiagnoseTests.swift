@@ -136,6 +136,7 @@ final class DiagnoseBinaryTests: XCTestCase {
         let stdout = Pipe(), stderr = Pipe()
         process.standardOutput = stdout; process.standardError = stderr
         try process.run()
+        let watchdog = StubHelper.watchdog(process); defer { watchdog.cancel() }
         let out = stdout.fileHandleForReading.readDataToEndOfFile(), err = stderr.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         return (process.terminationStatus, String(decoding: out, as: UTF8.self), String(decoding: err, as: UTF8.self))
