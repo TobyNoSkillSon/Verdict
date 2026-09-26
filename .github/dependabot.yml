@@ -1,0 +1,8 @@
+# GitHub Actions only. Swift dependencies are pinned on purpose and updated through a pull request with parity
+# evidence (CONTRIBUTING.md, "Dependencies"), never automatically.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

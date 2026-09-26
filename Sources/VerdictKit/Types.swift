@@ -130,6 +130,8 @@ public struct Status: Sendable, Codable, Equatable {
     public var api: Int?
     /// The app version (Info.plist CFBundleShortVersionString), e.g. "0.3.0".
     public var version: String?
+    /// The MLX runtime: core version and pinned mlx-swift revision, e.g. "0.32.0 (mlx-swift 9019419)".
+    public var mlx: String?
     public var port: Int?
     public var pid: Int?
     public var models: [String: LoadedModel]
@@ -158,6 +160,9 @@ public struct Status: Sendable, Codable, Equatable {
         public var last_used: Double?
         public var memory_estimate_mb: Double?
         public var optimizations: Optimizations?
+        /// The attention path and its load-time self-test, e.g. "windowed-attention (L>=768, self-test max diff 1.2e-06)"
+        /// or "stock (windowed-attention self-test failed)".
+        public var kernel: String?
     }
     public struct Optimizations: Sendable, Codable, Equatable {
         public var tokenizer: String?

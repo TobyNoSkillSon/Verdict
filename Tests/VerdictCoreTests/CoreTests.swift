@@ -407,4 +407,10 @@ final class CoreTests: XCTestCase {
         let shipped = try Data(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("../../Resources/benchmarks.json"))
         XCTAssertEqual(measurementChip(decodeBenchmarks(shipped)), "M5 Max")
     }
+
+    /// /v1/status "mlx" names the mlx-swift revision; it must be the one Package.swift pins.
+    func testBuildInfoMatchesThePinnedMLXRevision() throws {
+        let manifest = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("../../Package.swift"), encoding: .utf8)
+        XCTAssertTrue(manifest.contains("revision: \"\(BuildInfo.mlxSwiftRevision)\""))
+    }
 }

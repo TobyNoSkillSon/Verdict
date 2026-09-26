@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+# Toolchain. Verdict ships Swift compiled by the Command Line Tools' Swift 6.3.3 and MLX's Metal shaders compiled by
+# Xcode (CONTRIBUTING.md). The macos-26 image carries Command Line Tools 26.6.0 (Swift 6.3.3), the same build the
+# releases are made with, so scripts/build.sh runs here unchanged. macos-15 cannot build Verdict: the pinned mlx-swift
+# needs Swift tools 6.3, and macos-15 has neither CLT Swift 6.3 nor Xcode 26.4+ (which requires macOS 26.2).
+# Xcode 26.6 compiles the shaders here and runs `swift test`; the maintainer's Mac compiles shaders with its own
+# Xcode, so parity is checked there, not in CI. No job runs a real model: tests use stub models (no weights, no GPU work).
+env:
+  XCODE_APP: /Applications/Xcode_26.6.app
+  CLT_SWIFT: /Library/Developer/CommandLineTools/usr/bin/swift
+
+jobs:
+  build-and-test:
+    name: Build and test
+    runs-on: macos-26
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Select Xcode and check the Swift toolchains
+        run: |
+          sudo xcode-select -s "$XCODE_APP/Contents/Developer"
+          xcodebuild -version
+          swift --version
+          "$CLT_SWIFT" --version
+          if ! "$CLT_SWIFT" --version 2>&1 | grep -q 'Apple Swift version 6\.3\.3 '; then
+            echo "::warning::Command Line Tools Swift is not 6.3.3; releases are qualified with 6.3.3 only"
+          fi
+
+      - name: Metal Toolchain
+        run: |
+          if ! xcodebuild -showComponent MetalToolchain 2>/dev/null | grep -q 'Status: installed'; then
+            xcodebuild -downloadComponent MetalToolchain
+          fi
+          xcrun metal --version
+
+      - name: Cache SwiftPM dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .build/repositories
+            .build/checkouts
+            .build/xcode/SourcePackages
+            ~/Library/Caches/org.swift.swiftpm
+          key: swiftpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Package.resolved') }}
+          restore-keys: swiftpm-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: swift build -c release (Command Line Tools Swift, as shipped)
+        run: DEVELOPER_DIR=/Library/Developer/CommandLineTools "$CLT_SWIFT" build --build-system native -c release
+
+      - name: Build the helper and the app (scripts/build.sh; stub-model /status smoke included)
+        run: scripts/build.sh
+
+      - name: swift test (stub helper)
+        run: swift test
+

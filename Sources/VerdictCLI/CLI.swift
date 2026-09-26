@@ -16,6 +16,9 @@ verdict: judge many items with the same typed questions, locally, in millisecond
     verdict unload ID
     verdict url                            the local base URL for TypeSafe SDKs (base_url / baseURL / TYPESAFE_BASE_URL)
     verdict skill [--install DIR]          print the agent skill (named triage), or write DIR/triage/SKILL.md
+    verdict diagnose [--load] [--json]     chip, macOS, versions, each loaded model's engine, fallbacks and timing on 20
+                                           built-in items, and a prefilled GitHub bug-report URL (no user data;
+                                           --load loads laya-english first if needed; never starts the app)
     verdict licenses                       Verdict's NOTICE and the licences of the code it bundles
     verdict --version                      this command's version (the app's)
 
@@ -126,6 +129,16 @@ struct CLI {
             } else {
                 write(text)
             }
+        case "diagnose":
+            let args = try Arguments(rest, values: [], flags: ["--load", "--json"])
+            if let extra = args.positional.first { throw CLIError("unexpected argument \(extra)") }
+            let cli = versionInfo()?.version
+            let diagnosis = try await Diagnose.collect(verdict, cliVersion: cli, load: args.flags.contains("--load"))
+            let url = Diagnose.issueURL(diagnosis)
+            if args.flags.contains("--json") { write(Diagnose.json(diagnosis, issueURL: url).pretty); return }
+            Diagnose.text(diagnosis).forEach(write)
+            write("")
+            write("report it (opens a prefilled GitHub bug report; add what you saw): \(url)")
         case "licenses":
             _ = try Arguments(rest, values: [], flags: [])
             guard let notice = resourceText("NOTICE", source: "NOTICE"),

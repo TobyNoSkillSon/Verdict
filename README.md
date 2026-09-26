@@ -198,7 +198,7 @@ The menu shows how many models are hot, the judgement count, the last judgement'
 
 **Precision** is chosen per model in the table's Bits control, with the recommended precision in green. Selecting another precision shows its numbers against the recommended one and reloads nothing: in the screenshot at the top, 32-bit Von 1.2 is 0.1 points more accurate than 16-bit but 2.0× slower and uses 2.9× the energy; on a hot model the button becomes **Reload**, which applies it.
 
-**Engine.** Under a hot model's name, **Optimized · M5 Max** (your chip) means Verdict's fast tokenizer and windowed-attention kernel passed their self-test when the model loaded on this Mac. **MLX** means some or all of those optimizations are off: the same model, slower. Its tooltip says what is active and why. If the optimized path fails during a request, Verdict reruns that request on the stock MLX path and keeps the model there until it is reloaded.
+**Engine.** Under a hot model's name, **Optimized · M5 Max** (your chip) means Verdict's fast tokenizer and windowed-attention kernel passed their self-test when the model loaded on this Mac. **MLX** means some or all of those optimizations are off: the same model, slower. Its tooltip says what is active and why. If the optimized path fails during a request, Verdict reruns that request on the stock MLX path and keeps the model there until it is reloaded. If you see **MLX**, or answers look wrong, run `verdict diagnose` and file what it prints (below).
 
 **Keep Hot** sets an idle window for each kind of load, timed per model from its last request:
 
@@ -223,7 +223,7 @@ It clones the repository and runs `scripts/install.sh`, which downloads the preb
 
 **Requirements.** Apple Silicon, macOS 14 or newer, and `python3` for the installer and the Python library (macOS's own is fine; `xcode-select --install` provides it). The prebuilt app needs no Xcode, Python packages or developer account. Disk: about 40 MB for the app (a 10 MB download) plus 0.6–1.6 GB per model you use.
 
-**Tested hardware.** Verdict is developed, measured and tested on an M5 Max running macOS 26. Other Apple Silicon Macs are expected to work: the optimized kernels self-test at load and fall back to the stock MLX path if they fail, and the GPU neural accelerators are only used where MLX supports them (M5-class GPUs on macOS 26.2+). Other chips have not been verified yet, and speed and energy there will differ from the table.
+**Tested hardware.** Every number in this README was measured on an M5 Max running macOS 26. Other Apple Silicon Macs are expected to use the same optimized paths — the fast tokenizers, windowed attention and batching — but that has not been verified yet on any other chip. The exception is matrix multiplication on the GPU's neural accelerators, which MLX uses only on M5-class GPUs with macOS 26.2 or later; other Macs run those on the regular GPU path, so speed and energy will differ from the table. The optimized kernels self-test when a model loads and fall back to the stock MLX path if the test fails. If a model shows **MLX** on your Mac, run `verdict diagnose` and consider filing its report.
 
 <details>
 <summary>Installing by hand</summary>
@@ -234,7 +234,11 @@ scripts/install.sh
 verdict skill                     # prints the skill; `verdict skill --install DIR` writes DIR/triage/SKILL.md
 ```
 
-Download the release through the installer, not a browser. A browser adds the quarantine flag, and Gatekeeper blocks the ad-hoc-signed app. The SHA-256 detects a corrupted download; it comes from the same release, so it is not a signature.
+Download the release through the installer, not a browser. A browser adds the quarantine flag, and Gatekeeper blocks the ad-hoc-signed app. The SHA-256 detects a corrupted download; it comes from the same release, so it is not a signature. From 0.3.0, releases are built by GitHub Actions from the tagged source with a signed build-provenance attestation, which the [GitHub CLI](https://cli.github.com) can check for a zip you downloaded:
+
+```sh
+gh attestation verify Verdict-0.3.0-arm64.zip --repo TobyNoSkillSon/Verdict
+```
 
 </details>
 
@@ -259,6 +263,8 @@ $ verdict judge --questions q.json --sort relevant < hits.jsonl
 ```
 
 `verdict status` shows what is loaded and on which engine, `verdict models` the catalog with its figures, and `verdict info <model>` the task breakdown and links to the model card and weights.
+
+**Reporting a problem.** `verdict diagnose` prints a short report for bug reports: chip, macOS, the Verdict and MLX versions, and for each loaded model its engine, every fallback and its reason, the self-test result, precision and timings on 20 built-in items. It never sends your data anywhere and loads nothing unless you pass `--load`. It ends with a link that opens a prefilled GitHub bug report; `--json` prints the same as JSON.
 
 **HTTP.** From any language: the System One API ([Switch from Jev](#switch-from-jev)) for one state at a time, or Verdict's batch extension for many items in one request:
 
@@ -297,6 +303,12 @@ scripts/build.sh                             # build dist/Verdict.app only
 
 A source build needs full Xcode, its Metal Toolchain (`xcodebuild -downloadComponent MetalToolchain`) and the Command Line Tools Swift; the installer checks each and prints the command that fixes a missing one. The app is a Swift menu-bar process that supervises `verdict-helper`, the MLX service that runs the models; both, the `verdict` command and VerdictKit are built from `Sources/`.
 
+## Contributing
+
+Bug reports, model proposals and pull requests are welcome: [CONTRIBUTING.md](CONTRIBUTING.md) covers building, testing and the evidence a change needs. Questions go to [Discussions](https://github.com/TobyNoSkillSon/Verdict/discussions), vulnerabilities to [SECURITY.md](SECURITY.md).
+
 ## License
 
-[Apache-2.0](LICENSE). Keep the [NOTICE](NOTICE) when you redistribute. Verdict ships no model weights. Laya is by Convai Innovations (Apache-2.0); Verdict downloads community MLX conversions from [aac6fef on Hugging Face](https://huggingface.co/aac6fef/laya-mlx), and its Laya code is a Swift port of [laya-mlx](https://github.com/mizorewww/laya-mlx) (Apache-2.0). Von is by Victor Hugo Panisa (wfzyx; Apache-2.0), downloaded from [huggingface.co/wfzyx/von](https://huggingface.co/wfzyx/von) at pinned revisions, and its Von code is a Swift port of von-sdk (Apache-2.0). The app bundles MLX, swift-transformers and their dependencies; [THIRD_PARTY_NOTICES.txt](Resources/THIRD_PARTY_NOTICES.txt) has each licence, and Verdict.app carries it with LICENSE and NOTICE in `Contents/Resources` (`verdict licenses` prints them).
+[Apache-2.0](LICENSE), Copyright 2026 Toby NoSkillSon. Keep the [NOTICE](NOTICE) when you redistribute. Verdict ships no model weights. Laya is by Convai Innovations (Apache-2.0); Verdict downloads community MLX conversions from [aac6fef on Hugging Face](https://huggingface.co/aac6fef/laya-mlx), and its Laya code is a Swift port of [laya-mlx](https://github.com/mizorewww/laya-mlx) (Apache-2.0). Von is by Victor Hugo Panisa (wfzyx; Apache-2.0), downloaded from [huggingface.co/wfzyx/von](https://huggingface.co/wfzyx/von) at pinned revisions, and its Von code is a Swift port of von-sdk (Apache-2.0). The app bundles MLX, swift-transformers and their dependencies; [THIRD_PARTY_NOTICES.txt](Resources/THIRD_PARTY_NOTICES.txt) has each licence, and Verdict.app carries it with LICENSE and NOTICE in `Contents/Resources` (`verdict licenses` prints them).
+
+"Verdict" and its icon are this project's name and mark. The licence grants no rights to them (Apache-2.0 section 6), so a fork you distribute should use another name and icon.

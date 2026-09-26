@@ -1,6 +1,8 @@
 import Foundation
 import Darwin
+import Cmlx
 import MLX
+import VerdictCore
 import VerdictEngine
 
 /// A request's explicit bits differ from the precision the model runs at for every client (HTTP 409).
@@ -60,7 +62,7 @@ final class Service {
         allowSwap = env["VERDICT_ALLOW_SWAP"] == "1"
         probe = MemoryProbe(environment: env)
         minuteSeconds = Double(env["VERDICT_TEST_MINUTE_SECONDS"] ?? "") ?? 60
-        state = ["api": Self.apiVersion, "version": Self.appVersion ?? NSNull(), "models": [:], "calls": 0, "items": 0, "last_ms": NSNull(), "started": now, "port": NSNull(), "pid": Int(getpid()), "loading": NSNull(), "error": NSNull(), "last_used": now, "gpu": Self.gpu, "evictions": [], "refused": NSNull()]
+        state = ["api": Self.apiVersion, "version": Self.appVersion ?? NSNull(), "mlx": Self.mlxVersion, "models": [:], "calls": 0, "items": 0, "last_ms": NSNull(), "started": now, "port": NSNull(), "pid": Int(getpid()), "loading": NSNull(), "error": NSNull(), "last_used": now, "gpu": Self.gpu, "evictions": [], "refused": NSNull()]
         Memory.cacheLimit = cacheLimit * 1024 * 1024
         publishSettings()
     }
@@ -645,6 +647,14 @@ final class Service {
         if let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String { return v }
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         return NSDictionary(contentsOf: root.appendingPathComponent("Resources/Info.plist"))?["CFBundleShortVersionString"] as? String
+    }()
+    /// The MLX runtime, reported in /v1/status as "mlx": MLX core's own version string and the pinned mlx-swift
+    /// revision (Package.swift), e.g. "0.32.0 (mlx-swift 9019419)". `verdict diagnose` prints it.
+    static let mlxVersion: String = {
+        var text = mlx_string_new()
+        defer { mlx_string_free(text) }
+        let core = mlx_version(&text) == 0 ? String(cString: mlx_string_data(text)) : "unknown"
+        return "\(core) (mlx-swift \(BuildInfo.mlxSwiftRevision.prefix(7)))"
     }()
     /// Public API version, reported in /v1/status as "api". Bumped only for incompatible changes to /v1.
     static let apiVersion = 1

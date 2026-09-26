@@ -4,6 +4,7 @@
 
 ### Added
 
+- `verdict diagnose [--load] [--json]`: a report for bug reports (chip, macOS, Verdict and MLX versions, each loaded model's engine, fallbacks, self-test, precision and timing on 20 built-in items) with a link that opens a prefilled GitHub bug report. `/v1/status` reports `mlx` (MLX core version and mlx-swift revision) and each model's `kernel` (attention path and self-test).
 - `POST /v1/systemone` and `GET /v1/models`, compatible with the System One API (TypeSafe Jev); Verdict works with the TypeSafe SDK. Concurrent requests for the same model share GPU passes. See [docs/API.md](docs/API.md#system-one-api).
 - `"merge": false` on `/v1/systemone` runs that request in a GPU pass of its own, so its answers are exactly the ones it gets sent alone. A merged answer can differ from that by up to about 0.03 in a probability (Laya English at 16-bit; see [Concurrent requests](docs/API.md#concurrent-requests)).
 - An `x-verdict-bits` header on `/v1/systemone` replies says which precision answered.

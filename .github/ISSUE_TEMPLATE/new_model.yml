@@ -1,0 +1,50 @@
+name: New model request
+description: Propose a System One (decision) model for the catalog.
+title: "[Model]: "
+labels: ["model request"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A catalog model needs open weights, a typed-question interface with a probability per answer, and an architecture that can run on mlx-swift. CONTRIBUTING.md explains what an implementation must show (parity with the reference and measured numbers).
+  - type: input
+    id: model
+    attributes:
+      label: Model
+      description: Name and Hugging Face (or other) link to the weights.
+    validations:
+      required: true
+  - type: input
+    id: licence
+    attributes:
+      label: Weights licence
+    validations:
+      required: true
+  - type: input
+    id: reference
+    attributes:
+      label: Reference implementation
+      description: The code that defines its correct outputs (a Python SDK or repository), with a version or commit.
+    validations:
+      required: true
+  - type: textarea
+    id: interface
+    attributes:
+      label: Question types and architecture
+      description: Which of yes/no, choice and score it answers, how it reports probabilities, its architecture and context length.
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why it belongs in the catalog
+      description: Languages, tasks or accuracy it adds over the current models; published benchmark numbers if any.
+  - type: dropdown
+    id: contribute
+    attributes:
+      label: Will you implement it?
+      options:
+        - "No, requesting only"
+        - "Yes, I plan to open a pull request"
+    validations:
+      required: true

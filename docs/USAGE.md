@@ -31,6 +31,7 @@ verdict load ID [--bits N] [--manual] | verdict unload ID   # load: on demand; -
 verdict judge --questions q.json [--model ID] [--bits N] [--field KEY] [--sort NAME] [--min X] [--top N] [--json] < items.jsonl
 verdict url                        # the base URL for TypeSafe SDKs and HTTP clients (starts the app if needed)
 verdict skill [--install DIR]      # the agent skill
+verdict diagnose [--load] [--json] # report for a bug report: chip, versions, engines, fallbacks, timing (see Troubleshooting)
 ```
 
 `judge` reads JSONL: `--field` picks one key of each object as the item; without it the whole line is the item. It prints one line per item, `#index  name=value …  | first 60 characters` (a choice as `label(confidence)`); `--json` prints `{"index", "item", "answers", "model", "ms"}` per line with every probability. `--sort` orders by that question's score or probability, highest first; `--min` drops rows below a value; `--top` keeps the first N.
@@ -63,6 +64,7 @@ Swift code uses VerdictKit, a library product of this package: `let client = Sys
 
 ## Troubleshooting
 
+- **A model shows "MLX", is slow, or its answers look wrong** — run `verdict diagnose`. It checks the running app with no data of yours: chip, memory, macOS, the Verdict and MLX versions, the GPU facts from `/v1/status`, and for each loaded model its engine label, the active optimizations (tokenizer, attention, matmul), every fallback with its reason, the windowed-attention self-test result and the precision. It then times each loaded model on 20 built-in items (18 short, 2 over 1,000 tokens): single-item median, long-item median and batched items per second, and checks the answers are valid probabilities and that the obvious yes/no answers come out as expected. It only uses models that are already loaded; `--load` first loads Laya English (downloading it on first use). It never starts the app: if Verdict is not running it reports this Mac's facts and says so. The last line is a link that opens GitHub's bug-report form with the report, chip, macOS and version filled in (cut at a line boundary if the link would be too long); add what you saw and submit. `--json` prints the report as JSON, with the link as `issue_url`.
 - **Worker exited / orange header** — open the log from the header. Reinstall with `git pull && scripts/install.sh` if the helper is missing or damaged.
 - **First load is slow** — that is the download (0.6–1.6 GB per model). Later loads take a few seconds.
 - **`verdict` says not running and the app is installed elsewhere** — set `VERDICT_APP=/path/to/Verdict.app`.

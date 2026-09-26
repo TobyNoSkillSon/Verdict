@@ -603,3 +603,9 @@ public func hardwareNote(thisChip: String?, measuredOn: String?) -> (text: Strin
     return ("Benchmarks measured on \(measured)",
             "Speed, energy and memory were measured on \(measured); they differ on this Mac (\(this)). Accuracy is the same.")
 }
+
+/// Build facts reported by the helper (/v1/status "mlx") and `verdict diagnose`.
+public enum BuildInfo {
+    /// The mlx-swift revision pinned in Package.swift (a test keeps the two equal).
+    public static let mlxSwiftRevision = "901941965d82e4a216d4d117231d847d194c563d"
+}

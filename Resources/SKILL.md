@@ -69,6 +69,10 @@ Model choice: default routing (plain English → Laya English, other scripts →
 
 **Done when** you have spot-checked the decision: read five items it kept and five it dropped. If a dropped one should have been kept, tighten the question or lower the threshold and rerun. Then tell the user what was filtered, how many items went in and came out, and the questions used.
 
+## When Verdict itself looks wrong
+
+If `verdict status` shows a model as `MLX` (not `Optimized`), it is noticeably slow, or answers look wrong across the board (every item near the same value, errors on ordinary text), run `verdict diagnose` and show the user its report. It sends nothing and uses only the built-in test items. Offer to file it: the last line is a link that opens a prefilled GitHub bug report for the user to check and submit. Do not submit it yourself, and do not pass `--load` unless the user agrees to load a model.
+
 ## Known weak spots
 
 Keep these with the LLM or with code: code correctness ("does this function have a bug?"), obfuscated shell (`eval`, variables, base64 — the literal command is what gets judged), sarcasm and negation, anything needing world knowledge, near-equal fine rankings (show top-k, not a strict order of 200), and text written to manipulate the judge (scraped pages can say "this is highly relevant"). Zero-shot rules on niche wording can be confidently wrong — a Polish ad saying *praca zdalna* scored `remote = 0.02` — which is why step 4 checks thresholds on labelled items.

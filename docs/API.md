@@ -280,7 +280,7 @@ The helper's live state (the same object it writes to `status.json`, plus `catal
 
 ```json
 {
-  "api": 1, "version": "0.3.0", "port": 58245, "pid": 88420, "started": 1790372212.99,
+  "api": 1, "version": "0.3.0", "mlx": "0.32.0 (mlx-swift 9019419)", "port": 58245, "pid": 88420, "started": 1790372212.99,
   "calls": 1, "items": 2, "last_ms": 14.0, "last_used": 1790372223.96,
   "loading": null, "downloading": false, "error": null, "refused": null, "evictions": [],
   "manual_idle_minutes": 0, "on_demand_idle_minutes": 5, "allow_swap": false,
@@ -289,14 +289,15 @@ The helper's live state (the same object it writes to `status.json`, plus `catal
   "installed": {"laya-english": {"bytes": 842611261}, "laya-multilingual": {"bytes": 643837515}},
   "models": {
     "laya-english": {"bits": 0, "context": 8192, "device": "mlx", "engine": "optimized", "engine_reason": null,
+                     "kernel": "windowed-attention (L>=768, self-test max diff 1.2e-06)",
                      "load_s": 0.1, "memory_estimate_mb": 1271.0, "residency": "on_demand", "last_used": 1790372223.96,
                      "optimizations": {"attention": "windowed", "matmul": "neural accelerators", "optimized": true, "tokenizer": "fast"}}
   }
 }
 ```
 
-- `version`: the app version (`null` for a helper run outside the app and a checkout).
-- `models`: loaded models. `bits` as loaded (`0` = native). `residency`: `manual` (loaded from the menu or with `"manual": true`; loaded again at the next launch) or `on_demand` (a request needed it). `engine`: `optimized` (Verdict's fast tokenizer and windowed attention, self-tested at load on this Mac) or `mlx` with `engine_reason`.
+- `version`: the app version (`null` for a helper run outside the app and a checkout). `mlx`: the MLX core version and the pinned mlx-swift revision.
+- `models`: loaded models. `bits` as loaded (`0` = native). `residency`: `manual` (loaded from the menu or with `"manual": true`; loaded again at the next launch) or `on_demand` (a request needed it). `engine`: `optimized` (Verdict's fast tokenizer and windowed attention, self-tested at load on this Mac) or `mlx` with `engine_reason`. `kernel`: the attention path and its load-time self-test result.
 - `loading` / `downloading`: the model being loaded and whether its weights are downloading. `error`: the last load failure.
 - `memory.available_mb`: what the Memory check counts as free now. `refused`: the last memory refusal (`model`, `message`, `at`); `evictions`: the last 20 models unloaded by the helper (`model`, `residency`, `reason`, `at`).
 - `manual_idle_minutes`, `on_demand_idle_minutes` (0 = never unload for idleness), `allow_swap`: see [settings](#post-v1settings).
